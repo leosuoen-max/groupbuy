@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 开发期宽松规则：上线前务必按 docs/06 收紧，并改为「仅本人可写自己的店铺」等。
+    match /{document=**} {
+      allow read, write: if request.time < timestamp.date(2027, 1, 1);
+    }
+  }
+}
