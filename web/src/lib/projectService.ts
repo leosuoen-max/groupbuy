@@ -89,6 +89,7 @@ export async function updateProjectDoc(
     textContent?: string;
     products?: ProjectProduct[];
     publishedAt?: Timestamp | null;
+    deliveryPointIds?: string[];
   }
 ) {
   const db = getDb();

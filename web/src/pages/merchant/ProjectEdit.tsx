@@ -8,7 +8,11 @@ import {
   getProject,
   updateProjectDoc,
 } from '../../lib/projectService';
-import { getShopBySlug } from '../../lib/shopService';
+import {
+  listDeliveryPointsByShopId,
+  type DeliveryPointRow,
+} from '../../lib/deliveryPointService';
+import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import type { ProjectProduct } from '../../types/firestore';
 
 function toDatetimeLocalValue(d: Date) {
@@ -54,6 +58,12 @@ export default function ProjectEdit() {
   const [publishing, setPublishing] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const [shopRow, setShopRow] = useState<ShopRow | null>(null);
+  const [deliveryLibrary, setDeliveryLibrary] = useState<DeliveryPointRow[]>(
+    []
+  );
+  const [selectedDpIds, setSelectedDpIds] = useState<string[]>([]);
+
   const resolvedPid = isNew ? '' : pid;
 
   const refreshFromServer = useCallback(async () => {
@@ -73,7 +83,21 @@ export default function ProjectEdit() {
       ? row.data.products
       : [newProduct(0)];
     setProducts(ps.map((p, i) => ({ ...p, sortOrder: i })));
+    setSelectedDpIds(row.data.deliveryPointIds ?? []);
   }, [resolvedPid]);
+
+  useEffect(() => {
+    if (!shopRow?.id) return;
+    let cancelled = false;
+    void listDeliveryPointsByShopId(shopRow.id, { includeInactive: true }).then(
+      (rows) => {
+        if (!cancelled) setDeliveryLibrary(rows);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [shopRow?.id]);
 
   /** 解析店铺 + 权限；新建项目时创建草稿并替换路由 */
   useEffect(() => {
@@ -87,13 +111,20 @@ export default function ProjectEdit() {
       try {
         const shop = await getShopBySlug(slug);
         if (!shop) {
-          if (!cancelled) setBootErr('店铺不存在');
+          if (!cancelled) {
+            setBootErr('店铺不存在');
+            setShopRow(null);
+          }
           return;
         }
         if (shop.data.ownerId !== user.uid) {
-          if (!cancelled) setBootErr('无权限');
+          if (!cancelled) {
+            setBootErr('无权限');
+            setShopRow(null);
+          }
           return;
         }
+        if (!cancelled) setShopRow(shop);
         if (isNew) {
           const id = await createDraftProject(shop.id);
           if (!cancelled) {
@@ -119,6 +150,14 @@ export default function ProjectEdit() {
     };
   }, [authLoading, user, slug, isNew, navigate, projectId, refreshFromServer]);
 
+  const activeDeliveryIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of deliveryLibrary) {
+      if (r.data.isActive !== false) set.add(r.id);
+    }
+    return set;
+  }, [deliveryLibrary]);
+
   const normalizedProducts = useMemo(() => {
     return products
       .map((p, i) => ({
@@ -128,6 +167,17 @@ export default function ProjectEdit() {
       }))
       .filter((p) => p.name.length > 0);
   }, [products]);
+
+  const sanitizedDeliveryPointIds = useMemo(
+    () => selectedDpIds.filter((id) => activeDeliveryIds.has(id)),
+    [selectedDpIds, activeDeliveryIds]
+  );
+
+  const toggleDeliveryPoint = (id: string) => {
+    setSelectedDpIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
 
   const handleSaveDraft = async () => {
     if (!resolvedPid) return;
@@ -140,6 +190,7 @@ export default function ProjectEdit() {
         closesAt: Timestamp.fromDate(d),
         textContent,
         products: normalizedProducts.length ? normalizedProducts : [],
+        deliveryPointIds: sanitizedDeliveryPointIds,
         status: 'draft',
         publishedAt: null,
       });
@@ -172,6 +223,7 @@ export default function ProjectEdit() {
         closesAt: Timestamp.fromDate(d),
         textContent,
         products: normalizedProducts,
+        deliveryPointIds: sanitizedDeliveryPointIds,
         status: 'published',
         publishedAt: Timestamp.now(),
       });
@@ -352,6 +404,78 @@ export default function ProjectEdit() {
               </div>
             ))}
           </div>
+        </div>
+
+        <div className="rounded-xl border border-gray-100 bg-white p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-gray-900">
+              本次启用配送点
+            </span>
+            <Link
+              to={`${base}/delivery-points`}
+              className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
+            >
+              管理配送点库
+            </Link>
+          </div>
+          <p className="mb-3 text-xs text-gray-500">
+            不勾选任何项时，顾客下单页将显示本店<strong>全部启用中</strong>
+            的配送点；勾选后仅显示所选。
+          </p>
+          {deliveryLibrary.filter((r) => activeDeliveryIds.has(r.id)).length ===
+          0 ? (
+            <p className="text-sm text-amber-800">
+              尚无启用中的配送点，请先到「配送点库」新增；顾客仍可选用「其他」。
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {deliveryLibrary
+                .filter((r) => activeDeliveryIds.has(r.id))
+                .map((r) => (
+                  <label
+                    key={r.id}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-100 px-3 py-2"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4"
+                      checked={selectedDpIds.includes(r.id)}
+                      onChange={() => toggleDeliveryPoint(r.id)}
+                    />
+                    <span className="text-sm text-gray-900">
+                      <span className="font-medium">{r.data.name}</span>
+                      {r.data.detailAddress ? (
+                        <span className="mt-0.5 block text-xs text-gray-600">
+                          {r.data.detailAddress}
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                ))}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  className="text-xs font-medium text-indigo-600"
+                  onClick={() =>
+                    setSelectedDpIds(
+                      deliveryLibrary
+                        .filter((r) => activeDeliveryIds.has(r.id))
+                        .map((r) => r.id)
+                    )
+                  }
+                >
+                  全选启用项
+                </button>
+                <button
+                  type="button"
+                  className="text-xs font-medium text-gray-600"
+                  onClick={() => setSelectedDpIds([])}
+                >
+                  清空（顾客端用全部启用项）
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 pt-2">
