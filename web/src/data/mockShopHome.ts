@@ -22,6 +22,8 @@ export type MockImageBlock = {
 
 export type MockShopHome = {
   shopName: string;
+  /** 项目标题，用于订单展示 */
+  projectTitle: string;
   bannerUrl?: string;
   themeColor: string;
   status: ProjectStatus;
@@ -42,6 +44,7 @@ export function getMockShopHome(
   const soon = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
   return {
     shopName: '辉姐家常小厨',
+    projectTitle: '5/4 晚餐',
     bannerUrl: undefined,
     themeColor: '#E63946',
     status: 'open',

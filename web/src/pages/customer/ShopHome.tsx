@@ -76,7 +76,9 @@ export default function ShopHome() {
         };
       })
       .filter(Boolean);
-    navigate(`${basePath}/order`, { state: { lines } });
+    navigate(`${basePath}/order`, {
+      state: { lines, projectTitle: data.projectTitle },
+    });
   };
 
   return (
