@@ -6,30 +6,19 @@ type PageShellProps = {
   children?: React.ReactNode;
 };
 
+const link = 'text-indigo-600 underline-offset-2 hover:underline';
+
 export function PageShell({ title, subtitle, children }: PageShellProps) {
   return (
-    <main
-      style={{
-        padding: '1.25rem',
-        maxWidth: 720,
-        margin: '0 auto',
-        minHeight: '60vh',
-      }}
-    >
-      <p style={{ margin: '0 0 12px' }}>
-        <Link to="/">← 首页</Link>
+    <main className="mx-auto min-h-[60vh] max-w-xl px-5 py-5">
+      <p className="mb-3">
+        <Link to="/" className={link}>
+          ← 首页
+        </Link>
       </p>
-      <h1
-        style={{
-          fontSize: '1.35rem',
-          color: 'var(--text-h)',
-          margin: '0 0 8px',
-        }}
-      >
-        {title}
-      </h1>
+      <h1 className="mb-2 text-xl font-semibold text-gray-900">{title}</h1>
       {subtitle ? (
-        <p style={{ margin: '0 0 16px', opacity: 0.88 }}>{subtitle}</p>
+        <p className="mb-4 text-sm text-gray-600">{subtitle}</p>
       ) : null}
       {children}
     </main>

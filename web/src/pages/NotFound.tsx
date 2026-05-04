@@ -2,10 +2,15 @@ import { Link } from 'react-router-dom';
 
 export default function NotFound() {
   return (
-    <main style={{ padding: '1.25rem', maxWidth: 720, margin: '0 auto' }}>
-      <h1 style={{ color: 'var(--text-h)' }}>页面不存在</h1>
+    <main className="mx-auto max-w-xl px-5 py-5">
+      <h1 className="mb-3 text-xl font-semibold text-gray-900">页面不存在</h1>
       <p>
-        <Link to="/">返回首页</Link>
+        <Link
+          className="text-indigo-600 underline-offset-2 hover:underline"
+          to="/"
+        >
+          返回首页
+        </Link>
       </p>
     </main>
   );
