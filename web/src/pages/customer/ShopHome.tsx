@@ -14,6 +14,11 @@ import {
   shopHomeErrorMessage,
 } from '../../lib/shopHomeService';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
+import { useAuthUser } from '../../hooks/useAuthUser';
+import { listOrdersByCustomer } from '../../lib/orderService';
+import { getProjectPermissionForUser } from '../../lib/permissionService';
+import { getShopBySlug } from '../../lib/shopService';
+import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
@@ -29,6 +34,7 @@ export default function ShopHome() {
     shopSlug: string;
     projectId: string;
   }>();
+  const { user, loading: authLoading } = useAuthUser();
   const [searchParams] = useSearchParams();
   const useMock = searchParams.get('mock') === '1';
   const navigate = useNavigate();
@@ -44,6 +50,31 @@ export default function ShopHome() {
     error?: string;
     data?: MockShopHome;
   }>(() => ({ loading: !useMock }));
+
+  const [moreMenu, setMoreMenu] = useState<{
+    showMyOrdersPrimary: boolean;
+    showMyOrdersInMore: boolean;
+    isShopOwner: boolean;
+    invitedRole: 'normal_admin' | 'high_admin' | null;
+  }>({
+    showMyOrdersPrimary: true,
+    showMyOrdersInMore: false,
+    isShopOwner: false,
+    invitedRole: null,
+  });
+
+  const bottomBarMenu = useMemo(
+    () =>
+      useMock
+        ? {
+            showMyOrdersPrimary: true,
+            showMyOrdersInMore: false,
+            isShopOwner: false,
+            invitedRole: null,
+          }
+        : moreMenu,
+    [moreMenu, useMock]
+  );
 
   useEffect(() => {
     if (useMock) return;
@@ -67,6 +98,84 @@ export default function ShopHome() {
       cancelled = true;
     };
   }, [useMock, shopSlug, projectId, now]);
+
+  useEffect(() => {
+    if (useMock) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      void (async () => {
+        if (authLoading) return;
+        const slug = decodeURIComponent(shopSlug);
+        const pid = decodeURIComponent(projectId);
+
+        if (!user) {
+          try {
+            const customerKey = getOrCreateCustomerKey();
+            const hasOrders =
+              customerKey &&
+              (await listOrdersByCustomer(pid, customerKey)).some(
+                (row) => row.data.shopSlug === slug
+              );
+            if (!cancelled) {
+              setMoreMenu({
+                showMyOrdersPrimary: false,
+                showMyOrdersInMore: Boolean(hasOrders),
+                isShopOwner: false,
+                invitedRole: null,
+              });
+            }
+          } catch {
+            if (!cancelled) {
+              setMoreMenu({
+                showMyOrdersPrimary: false,
+                showMyOrdersInMore: false,
+                isShopOwner: false,
+                invitedRole: null,
+              });
+            }
+          }
+          return;
+        }
+
+        try {
+          const shop = await getShopBySlug(slug);
+          const owner = shop?.data.ownerId === user.uid;
+          const perm = await getProjectPermissionForUser(user.uid, pid);
+          const invited =
+            perm?.data.projectId === pid
+              ? perm.data.role === 'high_admin'
+                ? 'high_admin'
+                : perm.data.role === 'normal_admin'
+                  ? 'normal_admin'
+                  : null
+              : null;
+
+          if (!cancelled) {
+            setMoreMenu({
+              showMyOrdersPrimary: true,
+              showMyOrdersInMore: false,
+              isShopOwner: owner,
+              invitedRole: invited,
+            });
+          }
+        } catch {
+          if (!cancelled) {
+            setMoreMenu({
+              showMyOrdersPrimary: false,
+              showMyOrdersInMore: false,
+              isShopOwner: false,
+              invitedRole: null,
+            });
+          }
+        }
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, projectId, shopSlug, useMock, user]);
 
   const data: MockShopHome | null = useMock ? mockData : remote.data ?? null;
   const loading = !useMock && remote.loading;
@@ -199,6 +308,10 @@ export default function ShopHome() {
         totalQty={totalQty}
         totalAmount={totalAmount}
         onSubmit={handleSubmit}
+        showMyOrdersPrimary={bottomBarMenu.showMyOrdersPrimary}
+        showMyOrdersInMore={bottomBarMenu.showMyOrdersInMore}
+        isShopOwner={bottomBarMenu.isShopOwner}
+        invitedRole={bottomBarMenu.invitedRole}
       />
     </div>
   );

@@ -1,17 +1,27 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
-import {
-  OTHER_DELIVERY_ID,
-  getMockDeliveryPoints,
-} from '../../data/mockDeliveryPoints';
+import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
+import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
+import { listDeliveryPointsByShopId } from '../../lib/deliveryPointService';
 import { createOrder, CreateOrderError } from '../../lib/orderService';
-import type { CartLocationState, OrderLine } from '../../types/orderDraft';
+import { getProject } from '../../lib/projectService';
+import { getShopBySlug } from '../../lib/shopService';
+import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
+import type { ProjectDoc } from '../../types/firestore';
 
 type Step = 1 | 2 | 3;
+
+function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
+  if (project.status === 'draft') return false;
+  if (project.status === 'closed') return false;
+  const closes = project.closesAt?.toDate?.();
+  if (closes && closes.getTime() <= Date.now()) return false;
+  return true;
+}
 
 export default function OrderForm() {
   const { shopSlug = '', projectId = '' } = useParams<{
@@ -22,7 +32,7 @@ export default function OrderForm() {
   const navigate = useNavigate();
   const incoming = (location.state ?? {}) as CartLocationState;
   const lines = (incoming.lines ?? []).filter(Boolean);
-  const projectTitle = incoming.projectTitle ?? '当前项目';
+  const projectTitleState = incoming.projectTitle ?? '当前项目';
 
   const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
 
@@ -37,7 +47,68 @@ export default function OrderForm() {
   const [submitHint, setSubmitHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const points = useMemo(() => getMockDeliveryPoints(), []);
+  const [booting, setBooting] = useState(true);
+  const [bootErr, setBootErr] = useState<string | null>(null);
+  const [project, setProject] = useState<ProjectDoc | null>(null);
+  const [points, setPoints] = useState<MockDeliveryPoint[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      void (async () => {
+        setBooting(true);
+        setBootErr(null);
+        try {
+          const shopRow = await getShopBySlug(decodeURIComponent(shopSlug));
+          if (!shopRow) {
+            if (!cancelled) setBootErr('店铺不存在或链接有误。');
+            return;
+          }
+          const projectRow = await getProject(decodeURIComponent(projectId));
+          if (!projectRow) {
+            if (!cancelled) setBootErr('项目不存在或已删除。');
+            return;
+          }
+          if (projectRow.data.shopId !== shopRow.id) {
+            if (!cancelled) setBootErr('项目与店铺不匹配。');
+            return;
+          }
+
+          const allPoints = await listDeliveryPointsByShopId(shopRow.id);
+          const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
+          const filtered =
+            allowed.size > 0
+              ? allPoints.filter((p) => allowed.has(p.id))
+              : allPoints;
+
+          const uiPoints: MockDeliveryPoint[] = filtered.map((p) => ({
+            id: p.id,
+            name: p.data.name,
+            detailAddress: p.data.detailAddress,
+            deliveryTime: p.data.deliveryTime,
+            imageUrl: p.data.imageUrl,
+          }));
+
+          if (!cancelled) {
+            setProject(projectRow.data);
+            setPoints(uiPoints);
+          }
+        } catch (err: unknown) {
+          if (!cancelled) {
+            setBootErr(toLoadErrorMessage(err, '加载失败，请重试。'));
+          }
+        } finally {
+          if (!cancelled) setBooting(false);
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, shopSlug]);
+
+  const resolvedProjectTitle = project?.title?.trim() || projectTitleState;
+  const canPlaceOrder = project ? projectAllowsCustomerOrder(project) : false;
 
   const totalAmount = useMemo(
     () => lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0),
@@ -50,17 +121,28 @@ export default function OrderForm() {
     return points.find((p) => p.id === deliveryId)?.name ?? '';
   }, [deliveryId, points]);
 
+  const deliverySnapshot = useMemo(() => {
+    if (!deliveryId || deliveryId === OTHER_DELIVERY_ID) return { name: '', detail: undefined as string | undefined };
+    const p = points.find((x) => x.id === deliveryId);
+    const detailParts = [p?.detailAddress, p?.deliveryTime].filter(Boolean);
+    return {
+      name: p?.name ?? '',
+      detail: detailParts.length ? detailParts.join(' · ') : undefined,
+    };
+  }, [deliveryId, points]);
+
   const canGoStep2 =
+    canPlaceOrder &&
     name.trim().length > 0 &&
     phone.trim().length > 0 &&
     address.trim().length > 0;
 
-  const canGoStep3 = deliveryId.length > 0;
+  const canGoStep3 = canPlaceOrder && deliveryId.length > 0;
 
   const handleSubmit = async () => {
     setSubmitError(null);
     setSubmitHint(null);
-    if (!canGoStep3 || submitting) return;
+    if (!canPlaceOrder || !canGoStep3 || submitting) return;
     const isManualMatch = deliveryId === OTHER_DELIVERY_ID;
     const customerKey = getOrCreateCustomerKey();
     try {
@@ -77,6 +159,10 @@ export default function OrderForm() {
         deliveryPointLabel: isManualMatch
           ? `其他（将按地址手动匹配）：${address.trim()}`
           : deliveryLabel,
+        deliverySnapshot:
+          isManualMatch || !deliverySnapshot.name
+            ? undefined
+            : { name: deliverySnapshot.name, detail: deliverySnapshot.detail },
         isManualMatch,
         lines,
       });
@@ -120,24 +206,56 @@ export default function OrderForm() {
     );
   }
 
+  if (booting) {
+    return (
+      <PageShell title="填写订单" subtitle="加载中">
+        <p className="text-sm text-gray-600">正在加载项目与配送点…</p>
+      </PageShell>
+    );
+  }
+
+  if (bootErr || !project) {
+    return (
+      <PageShell title="填写订单" subtitle="无法下单">
+        <p className="text-sm text-red-600">{bootErr ?? '加载失败'}</p>
+        <Link
+          className="mt-4 inline-flex text-sm text-indigo-600 underline-offset-2 hover:underline"
+          to={base}
+        >
+          返回项目首页
+        </Link>
+      </PageShell>
+    );
+  }
+
   const inputCls =
     'mt-1 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-[16px] text-gray-900 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2';
+
+  const blockedHint = !canPlaceOrder ? (
+    <p className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      当前项目不可下单（草稿 / 已截止 / 已过截止时间）。你仍可查看页面与订单记录。
+    </p>
+  ) : null;
+
+  const activeStep: Step = canPlaceOrder ? step : 1;
 
   return (
     <PageShell
       title="填写订单"
-      subtitle={`步骤 ${step} / 3 · ${projectTitle}`}
+      subtitle={`步骤 ${activeStep} / 3 · ${resolvedProjectTitle}`}
     >
+      {blockedHint}
+
       <div className="mb-4 flex gap-2 text-xs text-gray-500">
-        <span className={step >= 1 ? 'font-semibold text-gray-900' : ''}>
+        <span className={activeStep >= 1 ? 'font-semibold text-gray-900' : ''}>
           ① 信息
         </span>
         <span>→</span>
-        <span className={step >= 2 ? 'font-semibold text-gray-900' : ''}>
+        <span className={activeStep >= 2 ? 'font-semibold text-gray-900' : ''}>
           ② 配送点
         </span>
         <span>→</span>
-        <span className={step >= 3 ? 'font-semibold text-gray-900' : ''}>
+        <span className={activeStep >= 3 ? 'font-semibold text-gray-900' : ''}>
           ③ 确认
         </span>
       </div>
@@ -165,7 +283,7 @@ export default function OrderForm() {
         </div>
       </div>
 
-      {step === 1 ? (
+      {activeStep === 1 ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">填写信息</h2>
           <label className="block text-sm text-gray-700">
@@ -227,10 +345,15 @@ export default function OrderForm() {
         </div>
       ) : null}
 
-      {step === 2 ? (
+      {activeStep === 2 ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">选择配送点</h2>
           <p className="text-sm text-gray-600">请选择本次取餐/送达位置。</p>
+          {points.length === 0 ? (
+            <p className="text-sm text-amber-800">
+              商户尚未配置可用配送点；你可选择「其他」由商户手动匹配。
+            </p>
+          ) : null}
           <div className="space-y-2">
             {points.map((p) => (
               <div key={p.id} className="rounded-xl border border-gray-100 p-3">
@@ -311,7 +434,7 @@ export default function OrderForm() {
         </div>
       ) : null}
 
-      {step === 3 ? (
+      {activeStep === 3 ? (
         <div className="space-y-4">
           <h2 className="text-base font-semibold text-gray-900">确认并提交</h2>
           <div className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm text-gray-800">
@@ -335,7 +458,7 @@ export default function OrderForm() {
               type="button"
               className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-800"
               onClick={() => setStep(2)}
-              disabled={submitting}
+              disabled={submitting || !canPlaceOrder}
             >
               上一步
             </button>
@@ -343,7 +466,7 @@ export default function OrderForm() {
               type="button"
               className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || !canPlaceOrder}
             >
               {submitting ? '提交中…' : '提交订单'}
             </button>

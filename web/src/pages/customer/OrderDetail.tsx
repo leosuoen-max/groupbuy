@@ -103,6 +103,9 @@ export default function OrderDetail() {
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
           <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
+          {order.deliveryPointSnapshot?.detail ? (
+            <p className="text-xs text-gray-600">{order.deliveryPointSnapshot.detail}</p>
+          ) : null}
           <p>
             状态：
             <span className="font-medium text-red-700">

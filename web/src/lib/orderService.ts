@@ -24,6 +24,8 @@ export type CreateOrderInput = {
   customerNote?: string;
   deliveryPointId?: string;
   deliveryPointLabel: string;
+  /** 非「其他」时常用于写入结构化快照（名称 + 详情） */
+  deliverySnapshot?: { name: string; detail?: string };
   isManualMatch: boolean;
   lines: OrderLine[];
 };
@@ -119,6 +121,11 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
     const orderNumber = `L${nextTotalOrders}`;
     const status: OrderStatus = 'unpaid';
 
+    const snapshotName =
+      input.deliverySnapshot?.name?.trim() ||
+      input.deliveryPointLabel.trim();
+    const snapshotDetail = input.deliverySnapshot?.detail?.trim();
+
     const orderPayload: Omit<OrderDoc, 'createdAt' | 'updatedAt'> = {
       orderNumber,
       shopId: project.shopId,
@@ -134,7 +141,8 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       paidAmount: 0,
       pendingAmount: totalAmount,
       deliveryPointSnapshot: {
-        name: input.deliveryPointLabel,
+        name: snapshotName,
+        ...(snapshotDetail ? { detail: snapshotDetail } : {}),
       },
       isManualMatch: input.isManualMatch,
       paymentScreenshots: [],

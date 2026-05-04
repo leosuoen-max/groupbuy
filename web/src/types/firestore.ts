@@ -67,6 +67,31 @@ export type ProjectDoc = {
   publishedAt?: Timestamp | null;
 };
 
+export type PermissionDoc = {
+  userId: string;
+  projectId: string;
+  scope: 'shop' | 'project';
+  scopeId: string;
+  role: 'owner' | 'high_admin' | 'normal_admin';
+  grantedBy: string;
+  grantedAt: Timestamp;
+  invitationId?: string;
+};
+
+export type DeliveryPointDoc = {
+  shopId: string;
+  number: number;
+  name: string;
+  detailAddress?: string;
+  deliveryTime?: string;
+  imageUrl?: string;
+  keywords?: string[];
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
 export type OrderStatus =
   | 'unpaid'
   | 'pending'

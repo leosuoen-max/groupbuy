@@ -11,6 +11,14 @@ type ShopBottomBarProps = {
   totalQty: number;
   totalAmount: number;
   onSubmit: () => void;
+  /** 左侧主按钮是否展示「我的订单」（已登录用户通常为 true） */
+  showMyOrdersPrimary?: boolean;
+  /** 是否在「更多」里展示「我的订单」（游客有过订单时仅在「更多」展示，避免占满底栏） */
+  showMyOrdersInMore?: boolean;
+  /** 是否是店铺创建人（shops.ownerId） */
+  isShopOwner?: boolean;
+  /** permissions 表角色（被邀请管理员）；未登录则无 */
+  invitedRole?: 'normal_admin' | 'high_admin' | null;
 };
 
 export function ShopBottomBar({
@@ -21,8 +29,14 @@ export function ShopBottomBar({
   totalQty,
   totalAmount,
   onSubmit,
+  showMyOrdersPrimary = true,
+  showMyOrdersInMore = false,
+  isShopOwner = false,
+  invitedRole = null,
 }: ShopBottomBarProps) {
   const base = '/shop/' + encodeURIComponent(shopSlug) + '/' + encodeURIComponent(projectId);
+  const dashboardBase =
+    '/dashboard/' + encodeURIComponent(shopSlug);
   const closed = projectStatus === 'closed' || projectStatus === 'full';
   const canSubmit = !closed && totalQty > 0;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -44,17 +58,28 @@ export function ShopBottomBar({
     }
   };
 
+  const showAdminSection = Boolean(isShopOwner || invitedRole);
+  const canEditProject = Boolean(isShopOwner || invitedRole === 'high_admin');
+  const canShopSettings = Boolean(isShopOwner || invitedRole === 'high_admin');
+
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
       <div className="pointer-events-auto w-full max-w-lg px-3">
         <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur">
           <div className="flex gap-2">
-            <Link
-              to={`${base}/my-orders`}
-              className="flex h-12 flex-[1.05] items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 active:bg-gray-100"
-            >
-              我的订单
-            </Link>
+            {showMyOrdersPrimary ? (
+              <Link
+                to={`${base}/my-orders`}
+                className="flex h-12 flex-[1.05] items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 active:bg-gray-100"
+              >
+                我的订单
+              </Link>
+            ) : (
+              <div
+                className="flex h-12 flex-[1.05] rounded-xl border border-transparent bg-transparent"
+                aria-hidden
+              />
+            )}
             <button
               type="button"
               className="flex h-12 min-w-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-800 active:bg-gray-50"
@@ -102,13 +127,15 @@ export function ShopBottomBar({
               >
                 🏠 商户首页
               </Link>
-              <Link
-                to={`${base}/my-orders`}
-                onClick={() => setMenuOpen(false)}
-                className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-              >
-                📋 我的订单
-              </Link>
+              {showMyOrdersInMore ? (
+                <Link
+                  to={`${base}/my-orders`}
+                  onClick={() => setMenuOpen(false)}
+                  className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                >
+                  📋 我的订单
+                </Link>
+              ) : null}
               <button
                 type="button"
                 onClick={handleCopy}
@@ -123,6 +150,73 @@ export function ShopBottomBar({
                 💬 意见反馈
               </a>
             </div>
+            {showAdminSection ? (
+              <>
+                <div className="my-2 border-t border-gray-100" />
+                <div className="mb-1 px-1 text-xs font-semibold text-gray-500">
+                  管理
+                </div>
+                <div className="space-y-1 text-sm">
+                  <Link
+                    to={dashboardBase}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                  >
+                    📊 实时数据
+                  </Link>
+                  <Link
+                    to={`${dashboardBase}/orders`}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                  >
+                    📋 订单管理
+                  </Link>
+                  {canEditProject ? (
+                    <Link
+                      to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                    >
+                      ✏️ 编辑菜单
+                    </Link>
+                  ) : null}
+                  {canEditProject ? (
+                    <Link
+                      to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                    >
+                      ⚙️ 项目设置
+                    </Link>
+                  ) : null}
+                  {isShopOwner && canShopSettings ? (
+                    <Link
+                      to={`${dashboardBase}/settings`}
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                    >
+                      ⚙️ 店铺设置
+                    </Link>
+                  ) : null}
+                  {isShopOwner ? (
+                    <Link
+                      to={`${dashboardBase}/admins`}
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                    >
+                      👥 管理员管理
+                    </Link>
+                  ) : null}
+                  <Link
+                    to={dashboardBase}
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+                  >
+                    🔄 切换到商户后台
+                  </Link>
+                </div>
+              </>
+            ) : null}
             <div className="my-2 border-t border-gray-100" />
             <Link
               to="/register"
