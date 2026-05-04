@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { FirebaseError } from 'firebase/app';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import {
@@ -6,14 +7,11 @@ import {
   getMockDeliveryPoints,
 } from '../../data/mockDeliveryPoints';
 import { formatMYR } from '../../lib/formatMYR';
-import { saveMockOrder } from '../../lib/mockOrderStorage';
-import type { CartLocationState, OrderLine, StoredMockOrder } from '../../types/orderDraft';
+import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
+import { createOrder, CreateOrderError } from '../../lib/orderService';
+import type { CartLocationState, OrderLine } from '../../types/orderDraft';
 
 type Step = 1 | 2 | 3;
-
-function nextOrderNumber(): string {
-  return `L${Math.floor(100 + Math.random() * 899)}`;
-}
 
 export default function OrderForm() {
   const { shopSlug = '', projectId = '' } = useParams<{
@@ -36,6 +34,8 @@ export default function OrderForm() {
   const [deliveryId, setDeliveryId] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitHint, setSubmitHint] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const points = useMemo(() => getMockDeliveryPoints(), []);
 
@@ -57,39 +57,51 @@ export default function OrderForm() {
 
   const canGoStep3 = deliveryId.length > 0;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     setSubmitError(null);
-    if (!canGoStep3) return;
-    const orderNumber = nextOrderNumber();
+    setSubmitHint(null);
+    if (!canGoStep3 || submitting) return;
     const isManualMatch = deliveryId === OTHER_DELIVERY_ID;
-    const order: StoredMockOrder = {
-      orderNumber,
-      projectId,
-      shopSlug,
-      projectTitle,
-      createdAt: new Date().toISOString(),
-      status: 'unpaid',
-      lines,
-      customerName: name.trim(),
-      customerPhone: phone.trim(),
-      customerAddress: address.trim(),
-      customerNote: note.trim() || undefined,
-      deliveryPointId: isManualMatch ? '' : deliveryId,
-      deliveryPointLabel: isManualMatch
-        ? `其他（将按地址手动匹配）：${address.trim()}`
-        : deliveryLabel,
-      isManualMatch,
-      totalAmount,
-    };
+    const customerKey = getOrCreateCustomerKey();
     try {
-      saveMockOrder(order);
-    } catch {
-      setSubmitError('保存失败，请检查浏览器是否禁用 sessionStorage。');
-      return;
+      setSubmitting(true);
+      const { orderNumber } = await createOrder({
+        shopSlug,
+        projectId,
+        customerKey,
+        customerName: name.trim(),
+        customerPhone: phone.trim(),
+        customerAddress: address.trim(),
+        customerNote: note.trim() || undefined,
+        deliveryPointId: isManualMatch ? undefined : deliveryId,
+        deliveryPointLabel: isManualMatch
+          ? `其他（将按地址手动匹配）：${address.trim()}`
+          : deliveryLabel,
+        isManualMatch,
+        lines,
+      });
+      setSubmitHint('提交成功，正在跳转订单详情…');
+      await new Promise((resolve) => window.setTimeout(resolve, 280));
+      navigate(`${base}/orders/${encodeURIComponent(orderNumber)}`, {
+        replace: true,
+      });
+    } catch (error) {
+      if (error instanceof CreateOrderError) {
+        setSubmitError(error.message);
+      } else if (error instanceof FirebaseError) {
+        if (error.code === 'permission-denied') {
+          setSubmitError('没有写入权限，请检查 Firestore 规则。');
+        } else if (error.code === 'unavailable') {
+          setSubmitError('网络不可用，请稍后重试。');
+        } else {
+          setSubmitError(`提交失败（${error.code}），请重试。`);
+        }
+      } else {
+        setSubmitError('提交失败，请检查网络后重试。');
+      }
+    } finally {
+      setSubmitting(false);
     }
-    navigate(`${base}/orders/${encodeURIComponent(orderNumber)}`, {
-      replace: true,
-    });
   };
 
   if (lines.length === 0) {
@@ -311,26 +323,29 @@ export default function OrderForm() {
             <div className="mt-3 font-medium text-gray-900">配送</div>
             <p className="mt-1">{deliveryLabel}</p>
           </div>
-          <p className="text-xs text-gray-500">
-            mock：不校验库存；提交后写入本机 sessionStorage，便于「我的订单」查看。
-          </p>
+          <p className="text-xs text-gray-500">提交后会写入数据库，并进行库存校验。</p>
           {submitError ? (
             <p className="text-sm text-red-600">{submitError}</p>
+          ) : null}
+          {submitHint ? (
+            <p className="text-sm text-emerald-700">{submitHint}</p>
           ) : null}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
               className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-800"
               onClick={() => setStep(2)}
+              disabled={submitting}
             >
               上一步
             </button>
             <button
               type="button"
-              className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white"
+              className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
               onClick={handleSubmit}
+              disabled={submitting}
             >
-              提交订单
+              {submitting ? '提交中…' : '提交订单'}
             </button>
           </div>
         </div>

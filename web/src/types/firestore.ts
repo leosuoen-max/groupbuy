@@ -66,3 +66,53 @@ export type ProjectDoc = {
   updatedAt: Timestamp;
   publishedAt?: Timestamp | null;
 };
+
+export type OrderStatus =
+  | 'unpaid'
+  | 'pending'
+  | 'confirmed'
+  | 'partial_paid'
+  | 'cancelled';
+
+export type OrderLineDoc = {
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  isDiscount: boolean;
+  subtotal: number;
+};
+
+export type OrderDoc = {
+  orderNumber: string;
+  shopId: string;
+  shopSlug: string;
+  projectId: string;
+  projectTitle: string;
+  customerKey: string;
+  customerName: string;
+  customerPhone: string;
+  customerAddress: string;
+  customerNote?: string;
+  lines: OrderLineDoc[];
+  totalAmount: number;
+  paidAmount: number;
+  pendingAmount: number;
+  deliveryPointId?: string;
+  deliveryPointSnapshot: {
+    name: string;
+    detail?: string;
+  };
+  isManualMatch: boolean;
+  paymentScreenshots: unknown[];
+  status: OrderStatus;
+  internalNotes: unknown[];
+  statusHistory: {
+    action: string;
+    timestamp: Timestamp;
+    userId?: string;
+    note?: string;
+  }[];
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};

@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
-import { findMockOrder } from '../../lib/mockOrderStorage';
+import { getOrderByNumber } from '../../lib/orderService';
+import type { OrderDoc } from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
@@ -18,13 +21,59 @@ export default function OrderDetail() {
     orderId: string;
   }>();
   const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
-  const order = findMockOrder(shopSlug, projectId, decodeURIComponent(orderId));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [order, setOrder] = useState<OrderDoc | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      setLoading(true);
+      setError(null);
+      void getOrderByNumber(projectId, decodeURIComponent(orderId))
+        .then((row) => {
+          if (cancelled) return;
+          if (!row || row.data.shopSlug !== shopSlug) {
+            setOrder(null);
+            return;
+          }
+          setOrder(row.data);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setError(toLoadErrorMessage(err, '加载订单详情失败，请重试。'));
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setLoading(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId, projectId, shopSlug]);
+
+  if (loading) {
+    return (
+      <PageShell title="订单详情" subtitle="加载中">
+        <p className="text-sm text-gray-600">正在读取订单详情…</p>
+      </PageShell>
+    );
+  }
+
+  if (error) {
+    return (
+      <PageShell title="订单详情" subtitle="加载失败">
+        <p className="text-sm text-red-600">{error}</p>
+      </PageShell>
+    );
+  }
 
   if (!order) {
     return (
       <PageShell title="订单详情" subtitle="未找到订单">
         <p className="text-sm text-gray-600">
-          可能尚未提交、订单号不对，或浏览器清除了 sessionStorage。
+          可能尚未提交，或订单号不匹配。
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link
@@ -44,7 +93,7 @@ export default function OrderDetail() {
     );
   }
 
-  const created = new Date(order.createdAt);
+  const created = order.createdAt?.toDate?.() ?? new Date();
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
 
   return (
@@ -53,7 +102,7 @@ export default function OrderDetail() {
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
-          <p>配送点：{order.deliveryPointLabel}</p>
+          <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
           <p>
             状态：
             <span className="font-medium text-red-700">
