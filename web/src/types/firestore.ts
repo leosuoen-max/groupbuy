@@ -5,6 +5,8 @@ export type ShopDoc = {
   name: string;
   ownerId: string;
   themeColor: string;
+  /** 顾客端抬头横幅，见 docs/06 */
+  bannerImage?: string;
   paymentMethods: { id: string; name: string; qrCodeUrl: string }[];
   settings: { language: 'zh' | 'en' | 'ms'; currency: string };
   createdAt: Timestamp;

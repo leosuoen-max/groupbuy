@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShopHeader } from '../../components/customer/ShopHeader';
 import { ShopContentBlocks } from '../../components/customer/ShopContentBlocks';
 import { ProductCard } from '../../components/customer/ProductCard';
 import { ShopBottomBar } from '../../components/customer/ShopBottomBar';
-import { getMockShopHome } from '../../data/mockShopHome';
+import {
+  getMockShopHome,
+  type MockShopHome,
+} from '../../data/mockShopHome';
 import { getEffectivePrice } from '../../lib/productPrice';
+import {
+  loadShopHomeFromFirestore,
+  shopHomeErrorMessage,
+} from '../../lib/shopHomeService';
+import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
@@ -21,19 +29,54 @@ export default function ShopHome() {
     shopSlug: string;
     projectId: string;
   }>();
+  const [searchParams] = useSearchParams();
+  const useMock = searchParams.get('mock') === '1';
   const navigate = useNavigate();
   const now = useTick(30_000);
 
-  const data = useMemo(
-    () => getMockShopHome(shopSlug, projectId),
-    [shopSlug, projectId]
+  const mockData = useMemo(
+    () => (useMock ? getMockShopHome(shopSlug, projectId) : null),
+    [useMock, shopSlug, projectId]
   );
+
+  const [remote, setRemote] = useState<{
+    loading: boolean;
+    error?: string;
+    data?: MockShopHome;
+  }>(() => ({ loading: !useMock }));
+
+  useEffect(() => {
+    if (useMock) return;
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      setRemote((s) => ({ ...s, loading: true, error: undefined }));
+      void loadShopHomeFromFirestore(shopSlug, projectId, now)
+        .then((r) => {
+          if (cancelled) return;
+          if (r.ok) setRemote({ loading: false, data: r.data });
+          else setRemote({ loading: false, error: shopHomeErrorMessage(r.code) });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setRemote({ loading: false, error: toLoadErrorMessage(err, '加载失败，请重试。') });
+        });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [useMock, shopSlug, projectId, now]);
+
+  const data: MockShopHome | null = useMock ? mockData : remote.data ?? null;
+  const loading = !useMock && remote.loading;
+  const errorText = !useMock ? remote.error : undefined;
 
   const [cart, setCart] = useState<Record<string, number>>({});
 
   const activeProducts = useMemo(
-    () => data.products.filter((p) => p.isActive),
-    [data.products]
+    () => (data ? data.products.filter((p) => p.isActive) : []),
+    [data]
   );
 
   const setQty = useCallback((productId: string, next: number) => {
@@ -61,7 +104,7 @@ export default function ShopHome() {
   const basePath = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
 
   const handleSubmit = () => {
-    if (data.status !== 'open' || totalQty <= 0) return;
+    if (!data || data.status !== 'open' || totalQty <= 0) return;
     const lines = activeProducts
       .map((p) => {
         const q = cart[p.id] ?? 0;
@@ -81,6 +124,37 @@ export default function ShopHome() {
     });
   };
 
+  if (loading) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-white px-6 text-center text-sm text-gray-600">
+        加载店铺与项目…
+      </div>
+    );
+  }
+
+  if (errorText) {
+    return (
+      <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-white px-6 text-center">
+        <p className="text-sm text-gray-800">{errorText}</p>
+        <button
+          type="button"
+          className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-900 active:bg-gray-100"
+          onClick={() => window.location.reload()}
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-white px-6 text-center text-sm text-gray-600">
+        暂无数据
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-svh bg-white pb-36">
       <ShopHeader data={data} now={now} />
@@ -89,7 +163,11 @@ export default function ShopHome() {
 
       <section className="px-4 pb-2">
         <h2 className="mb-1 text-sm font-semibold text-gray-900">商品清单</h2>
-        <p className="mb-3 text-xs text-gray-500">以下为 mock 数据，后续接 Firestore。</p>
+        <p className="mb-3 text-xs text-gray-500">
+          {useMock
+            ? '当前为演示数据（?mock=1）。'
+            : '数据来自已发布项目；截单与库存以页面状态为准。'}
+        </p>
         <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 px-3">
           {activeProducts.map((p) => (
             <ProductCard
