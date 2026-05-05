@@ -5,13 +5,18 @@ import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   customerDeletePaymentScreenshot,
+  customerUpdateOrderContact,
   customerUploadPaymentScreenshot,
   getOrderByNumber,
   type OrderRow,
 } from '../../lib/orderService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
-import type { OrderDoc } from '../../types/firestore';
+import { getProject } from '../../lib/projectService';
+import {
+  orderHasPaymentScreenshots,
+  parseScreenshotEntries,
+} from '../../lib/paymentScreenshotHelpers';
+import type { OrderDoc, ProjectDoc } from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
@@ -30,6 +35,14 @@ function flagLabel(flag: 'green' | 'yellow' | 'red' | null): string {
   return '';
 }
 
+function projectAllowsCustomerEdit(p: ProjectDoc | null): boolean {
+  if (!p) return false;
+  if (p.status === 'draft' || p.status === 'closed') return false;
+  const c = p.closesAt?.toDate?.();
+  if (c && c.getTime() <= Date.now()) return false;
+  return true;
+}
+
 export default function OrderDetail() {
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
     shopSlug: string;
@@ -41,9 +54,18 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orderRow, setOrderRow] = useState<OrderRow | null>(null);
+  const [projectOpen, setProjectOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
+
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [note, setNote] = useState('');
+  const [editingContact, setEditingContact] = useState(false);
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactMsg, setContactMsg] = useState<string | null>(null);
 
   const applyOrderRow = useCallback(
     (row: OrderRow | null) => {
@@ -80,9 +102,74 @@ export default function OrderDetail() {
     };
   }, [orderId, projectId, shopSlug, applyOrderRow]);
 
+  useEffect(() => {
+    if (!orderRow?.data.projectId) {
+      queueMicrotask(() => setProjectOpen(false));
+      return;
+    }
+    let cancelled = false;
+    void getProject(orderRow.data.projectId).then((row) => {
+      if (cancelled) return;
+      if (!row) {
+        setProjectOpen(false);
+        return;
+      }
+      setProjectOpen(projectAllowsCustomerEdit(row.data));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orderRow?.data.projectId, orderRow?.id]);
+
   const order: OrderDoc | null = orderRow?.data ?? null;
+
   const canUpload =
     order && uploadAllowedStatuses.has(order.status);
+
+  const canEditContact =
+    !!order &&
+    projectOpen &&
+    order.status !== 'cancelled' &&
+    ['unpaid', 'pending', 'confirmed', 'partial_paid'].includes(order.status);
+
+  const canAddItems =
+    !!order &&
+    projectOpen &&
+    order.status !== 'cancelled' &&
+    ['unpaid', 'pending', 'confirmed', 'partial_paid'].includes(order.status);
+
+  const saveContact = () => {
+    if (!orderRow || !order || !canEditContact) return;
+    setContactSaving(true);
+    setContactMsg(null);
+    void customerUpdateOrderContact({
+      orderFirestoreId: orderRow.id,
+      projectId,
+      orderNumber: order.orderNumber,
+      customerKey: getOrCreateCustomerKey(),
+      customerName: name,
+      customerPhone: phone,
+      customerAddress: address,
+      customerNote: note,
+    })
+      .then(() =>
+        getOrderByNumber(projectId, decodeURIComponent(orderId)).then(
+          applyOrderRow
+        )
+      )
+      .then(() => {
+        setEditingContact(false);
+        setContactMsg('已保存');
+      })
+      .catch((err: unknown) => {
+        setContactMsg(
+          err instanceof Error ? err.message : '保存失败'
+        );
+      })
+      .finally(() => {
+        setContactSaving(false);
+      });
+  };
 
   const onPickFile = () => {
     setUploadError(null);
@@ -200,10 +287,35 @@ export default function OrderDetail() {
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
 
   const shots = parseScreenshotEntries(order.paymentScreenshots);
+  const hasShots = orderHasPaymentScreenshots(order.paymentScreenshots);
+  const paid = Number(order.paidAmount) || 0;
+  const pending = Number(order.pendingAmount) || 0;
+
+  const uploadHintTop =
+    order.status === 'partial_paid'
+      ? '请按「待付」金额补款，并上传对应截图；可与之前转账分多笔，只要累计金额与应付一致。商户核对后会确认补款。'
+      : order.status === 'pending'
+        ? '可继续追加截图。上传同一浏览器。'
+        : order.status === 'unpaid' && !hasShots
+          ? '请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与订单金额一致即可；上传至少一张截图供商户核对。'
+          : order.status === 'unpaid' && hasShots
+            ? '尚未核实前仍可追加或更换截图（先删后传）。分笔付款时总额需与应付一致。'
+            : '上传后订单进入「待核实」。请使用本机下单时的同一浏览器。';
+
+  const uploadButtonLabel =
+    order.status === 'partial_paid'
+      ? '上传补款截图'
+      : '选择图片上传';
 
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
       <div className="space-y-4 text-sm text-gray-800">
+        {!projectOpen ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            项目已截单或已关闭：不可修改信息或加菜；付款截图规则以当前状态为准。
+          </p>
+        ) : null}
+
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
@@ -217,7 +329,27 @@ export default function OrderDetail() {
               {statusLabel[order.status] ?? order.status}
             </span>
           </p>
+          {(paid > 0 || pending > 0) && order.status !== 'cancelled' ? (
+            <p className="mt-2 text-xs text-emerald-950">
+              已付（商户已确认部分）：{formatMYR(paid)} · 待付：{' '}
+              <strong>{formatMYR(pending)}</strong>
+            </p>
+          ) : null}
         </div>
+
+        {canAddItems ? (
+          <div>
+            <Link
+              to={`${base}/orders/${encodeURIComponent(order.orderNumber)}/add-items`}
+              className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-dashed border-emerald-400 bg-emerald-50/80 text-sm font-semibold text-emerald-900"
+            >
+              ＋ 加菜 / 补购商品
+            </Link>
+            <p className="mt-1 text-xs text-gray-500">
+              加菜后应付会增加；若原单已确认收款，需补付差额并上传截图。
+            </p>
+          </div>
+        ) : null}
 
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">已选商品</h2>
@@ -237,27 +369,106 @@ export default function OrderDetail() {
             ))}
           </ul>
           <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-            <span>总计</span>
+            <span>应付合计</span>
             <span>{formatMYR(order.totalAmount)}</span>
           </div>
         </div>
 
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">顾客信息</h2>
-          <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-gray-800">
-            <p>姓名：{order.customerName}</p>
-            <p>电话：{order.customerPhone}</p>
-            <p>地址：{order.customerAddress}</p>
-            <p>备注：{order.customerNote ?? '（无）'}</p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-gray-900">顾客信息</h2>
+            {canEditContact ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setContactMsg(null);
+                  if (!editingContact && order) {
+                    setName(order.customerName);
+                    setPhone(order.customerPhone);
+                    setAddress(order.customerAddress);
+                    setNote(order.customerNote ?? '');
+                  }
+                  setEditingContact((e) => !e);
+                }}
+                className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
+              >
+                {editingContact ? '取消' : '修改'}
+              </button>
+            ) : null}
           </div>
+          {editingContact && canEditContact ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 bg-white px-3 py-3">
+              <label className="block text-xs text-gray-600">
+                姓名
+                <input
+                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              <label className="block text-xs text-gray-600">
+                电话
+                <input
+                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+              </label>
+              <label className="block text-xs text-gray-600">
+                地址
+                <textarea
+                  className="mt-1 min-h-[3rem] w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                />
+              </label>
+              <label className="block text-xs text-gray-600">
+                备注
+                <textarea
+                  className="mt-1 min-h-[2.5rem] w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+              </label>
+              {contactMsg ? (
+                <p
+                  className={
+                    contactMsg === '已保存'
+                      ? 'text-xs text-emerald-700'
+                      : 'text-xs text-red-600'
+                  }
+                >
+                  {contactMsg}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                disabled={contactSaving}
+                onClick={() => void saveContact()}
+                className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white disabled:bg-gray-400"
+              >
+                {contactSaving ? '保存中…' : '保存修改'}
+              </button>
+              <p className="text-[11px] text-gray-500">
+                已确认订单修改联系信息后，配送仍以商户核对为准。
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-gray-800">
+              <p>姓名：{order.customerName}</p>
+              <p>电话：{order.customerPhone}</p>
+              <p>地址：{order.customerAddress}</p>
+              <p>备注：{order.customerNote ?? '（无）'}</p>
+            </div>
+          )}
         </div>
 
         <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
           <h2 className="mb-2 text-sm font-semibold text-gray-900">
             付款截图
           </h2>
-          <p className="mb-3 text-xs text-gray-600">
-            上传后订单将进入「待核实」，商户核对无误后会确认收款。请使用本机下单时的同一浏览器上传。
+          <p className="mb-3 text-xs leading-relaxed text-gray-600">
+            {uploadHintTop}
           </p>
 
           <input
@@ -275,14 +486,14 @@ export default function OrderDetail() {
               onClick={onPickFile}
               className="mb-3 inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {uploading ? '上传中…' : '选择图片上传'}
+              {uploading ? '上传中…' : uploadButtonLabel}
             </button>
           ) : (
             <p className="mb-3 text-xs text-amber-800">
               {order.status === 'cancelled'
                 ? '订单已取消，无法上传。'
                 : order.status === 'confirmed'
-                  ? '订单已确认付款，无需再上传。'
+                  ? '订单已全部确认收款，无需再上传。若刚加菜变为待补款，请刷新页面。'
                   : '当前状态不可上传。'}
             </p>
           )}

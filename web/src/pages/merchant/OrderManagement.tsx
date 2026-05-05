@@ -24,9 +24,14 @@ function statusLabel(s: OrderStatus): string {
 
 function tabMatches(tab: TabId, status: OrderStatus): boolean {
   if (tab === 'all') return true;
-  if (tab === 'open') return status === 'unpaid' || status === 'pending';
-  if (tab === 'done')
-    return status === 'confirmed' || status === 'partial_paid';
+  if (tab === 'open') {
+    return (
+      status === 'unpaid' ||
+      status === 'pending' ||
+      status === 'partial_paid'
+    );
+  }
+  if (tab === 'done') return status === 'confirmed';
   if (tab === 'cancelled') return status === 'cancelled';
   return true;
 }

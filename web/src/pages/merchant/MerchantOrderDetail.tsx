@@ -147,7 +147,9 @@ export default function MerchantOrderDetail() {
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
 
   const canConfirm =
-    order.status === 'unpaid' || order.status === 'pending';
+    order.status === 'unpaid' ||
+    order.status === 'pending' ||
+    order.status === 'partial_paid';
 
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
@@ -216,14 +218,18 @@ export default function MerchantOrderDetail() {
           <p className="mb-3 text-xs text-gray-600">
             请对照上方<strong>凭证</strong>与<strong>商品金额、下单时间</strong>一致后再确认。
           </p>
-          {canConfirm ? (
+            {canConfirm ? (
             <button
               type="button"
               disabled={busy !== null}
               className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300"
               onClick={() => void handleConfirm()}
             >
-              {busy === 'confirm' ? '处理中…' : '确认收款'}
+              {busy === 'confirm'
+                ? '处理中…'
+                : order.status === 'partial_paid'
+                  ? '确认补款到账'
+                  : '确认收款'}
             </button>
           ) : (
             <p className="text-xs text-gray-600">

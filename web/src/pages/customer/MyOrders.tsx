@@ -183,6 +183,14 @@ export default function MyOrders() {
                       <p className="mt-1 text-sm font-medium text-gray-900">
                         总计 {formatMYR(o.totalAmount)}
                       </p>
+                      {(Number(o.paidAmount) > 0 ||
+                        Number(o.pendingAmount) > 0) &&
+                      o.status !== 'cancelled' ? (
+                        <p className="mt-0.5 text-[11px] text-gray-600">
+                          已付 {formatMYR(Number(o.paidAmount) || 0)} · 待付{' '}
+                          {formatMYR(Number(o.pendingAmount) || 0)}
+                        </p>
+                      ) : null}
                     </div>
                     <Link
                       to={`${base}/orders/${encodeURIComponent(o.orderNumber)}`}

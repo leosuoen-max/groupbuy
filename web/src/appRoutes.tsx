@@ -7,6 +7,7 @@ import NotFound from './pages/NotFound';
 import ShopHome from './pages/customer/ShopHome';
 import OrderForm from './pages/customer/OrderForm';
 import MyOrders from './pages/customer/MyOrders';
+import OrderAppend from './pages/customer/OrderAppend';
 import OrderDetail from './pages/customer/OrderDetail';
 import ShopList from './pages/merchant/ShopList';
 import MerchantDashboard from './pages/merchant/Dashboard';
@@ -73,6 +74,10 @@ export function AppRoutes() {
       <Route
         path="/shop/:shopSlug/:projectId/my-orders"
         element={<MyOrders />}
+      />
+      <Route
+        path="/shop/:shopSlug/:projectId/orders/:orderId/add-items"
+        element={<OrderAppend />}
       />
       <Route
         path="/shop/:shopSlug/:projectId/orders/:orderId"
