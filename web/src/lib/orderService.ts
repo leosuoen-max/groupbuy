@@ -1,14 +1,19 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   limit,
   query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import { getProjectPermissionForUser } from './permissionService';
+import { getShopById } from './shopService';
 import type { OrderLine } from '../types/orderDraft';
 import type { OrderDoc, OrderLineDoc, OrderStatus, ProjectDoc } from '../types/firestore';
 
@@ -221,4 +226,126 @@ export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
       const tb = b.data.createdAt?.toMillis?.() ?? 0;
       return tb - ta;
     });
+}
+
+async function assertMerchantCanManageOrder(
+  actorUserId: string,
+  order: OrderDoc
+): Promise<void> {
+  const shop = await getShopById(order.shopId);
+  if (!shop) throw new Error('店铺不存在');
+  if (shop.data.ownerId === actorUserId) return;
+  const perm = await getProjectPermissionForUser(actorUserId, order.projectId);
+  if (
+    perm &&
+    perm.data.projectId === order.projectId &&
+    (perm.data.role === 'normal_admin' || perm.data.role === 'high_admin')
+  ) {
+    return;
+  }
+  throw new Error('无权限操作该订单');
+}
+
+/** 商户确认收款：订单改为已确认，并更新项目统计（与下单时的 unpaid 计数对齐） */
+export async function merchantConfirmPayment(
+  orderFirestoreId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+
+  if (pre.status === 'confirmed') throw new Error('订单已是已确认状态');
+  if (pre.status === 'cancelled') throw new Error('订单已取消');
+  if (pre.status !== 'unpaid' && pre.status !== 'pending') {
+    throw new Error('当前状态不可确认收款');
+  }
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status === 'confirmed') throw new Error('订单状态已变更，请刷新后重试');
+
+    const projectRef = doc(db, 'projects', o.projectId);
+    const pSnap = await tx.get(projectRef);
+    if (!pSnap.exists()) throw new Error('项目不存在');
+    const project = pSnap.data() as ProjectDoc;
+    if (project.shopId !== o.shopId) throw new Error('数据不一致');
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'confirm_payment',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+    });
+
+    tx.update(orderRef, {
+      status: 'confirmed',
+      paidAmount: o.totalAmount,
+      pendingAmount: 0,
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+    });
+
+    tx.update(projectRef, {
+      stats: {
+        ...prevStats,
+        confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1,
+        unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
+        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + o.totalAmount,
+      },
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+export type MerchantInternalNote = {
+  body: string;
+  userId: string;
+  createdAt: Timestamp;
+};
+
+/** 商户内部备注（顾客不可见） */
+export async function merchantAppendInternalNote(
+  orderFirestoreId: string,
+  actorUserId: string,
+  body: string
+): Promise<void> {
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error('备注不能为空');
+
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const snap = await getDoc(orderRef);
+  if (!snap.exists()) throw new Error('订单不存在');
+  const order = snap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, order);
+
+  const prev = Array.isArray(order.internalNotes)
+    ? [...order.internalNotes]
+    : [];
+  const entry: MerchantInternalNote = {
+    body: trimmed,
+    userId: actorUserId,
+    createdAt: Timestamp.now(),
+  };
+  prev.push(entry);
+
+  await updateDoc(orderRef, {
+    internalNotes: prev,
+    updatedAt: serverTimestamp(),
+  });
 }

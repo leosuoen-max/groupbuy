@@ -204,6 +204,7 @@ export default function OrderManagement() {
           {filtered.map((row) => {
             const d = row.data;
             const pathSlug = shopRow?.slug ?? slug;
+            const merchantDetailUrl = `/dashboard/${encodeURIComponent(pathSlug)}/order/${encodeURIComponent(d.projectId)}/${encodeURIComponent(d.orderNumber)}`;
             const customerUrl = `/shop/${encodeURIComponent(pathSlug)}/${encodeURIComponent(d.projectId)}/orders/${encodeURIComponent(d.orderNumber)}`;
             return (
               <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm">
@@ -223,10 +224,16 @@ export default function OrderManagement() {
                     {formatMYR(d.totalAmount)}
                   </span>
                   <Link
-                    to={customerUrl}
+                    to={merchantDetailUrl}
                     className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
                   >
-                    查看详情
+                    商户处理
+                  </Link>
+                  <Link
+                    to={customerUrl}
+                    className="text-xs font-medium text-gray-500 underline-offset-2 hover:underline"
+                  >
+                    顾客视图
                   </Link>
                 </div>
               </li>

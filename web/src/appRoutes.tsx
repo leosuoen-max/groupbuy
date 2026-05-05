@@ -13,6 +13,7 @@ import MerchantDashboard from './pages/merchant/Dashboard';
 import ProjectList from './pages/merchant/ProjectList';
 import ProjectEdit from './pages/merchant/ProjectEdit';
 import OrderManagement from './pages/merchant/OrderManagement';
+import MerchantOrderDetail from './pages/merchant/MerchantOrderDetail';
 import DeliveryPoints from './pages/merchant/DeliveryPoints';
 import AdminManagement from './pages/merchant/AdminManagement';
 import ShopSettings from './pages/merchant/ShopSettings';
@@ -38,6 +39,10 @@ export function AppRoutes() {
       <Route
         path="/dashboard/:shopSlug/projects/:projectId"
         element={<ProjectEdit />}
+      />
+      <Route
+        path="/dashboard/:shopSlug/order/:projectId/:orderNumber"
+        element={<MerchantOrderDetail />}
       />
       <Route
         path="/dashboard/:shopSlug/orders"
