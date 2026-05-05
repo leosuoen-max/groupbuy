@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
+import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
@@ -14,14 +16,6 @@ import type { OrderAppendBatchDoc, OrderDoc, OrderStatus } from '../../types/fir
 
 type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
 
-function statusPillClass(s: OrderStatus): string {
-  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
-  if (s === 'pending') return 'bg-sky-100 text-sky-900';
-  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
-  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
-  return 'bg-gray-100 text-gray-700';
-}
-
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
   if (s === 'pending') return '待确认';
@@ -29,6 +23,13 @@ function statusLabel(s: OrderStatus): string {
   if (s === 'partial_paid') return '待付款';
   if (s === 'cancelled') return '已取消';
   return s;
+}
+
+function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cancelled' {
+  if (s === 'confirmed') return 'confirmed';
+  if (s === 'pending') return 'pending';
+  if (s === 'unpaid' || s === 'partial_paid') return 'unpaid';
+  return 'cancelled';
 }
 
 function pendingUnconfirmedBatches(order: OrderDoc): OrderAppendBatchDoc[] {
@@ -297,10 +298,7 @@ export default function OrderManagement() {
       </div>
 
       {sortedFiltered.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
-          <p className="text-sm font-medium text-gray-700">暂无订单</p>
-          <p className="mt-1 text-xs text-gray-500">可切换其他标签或调整项目筛选。</p>
-        </div>
+        <EmptyStateCard title="暂无订单" hint="可切换其他标签或调整项目筛选。" />
       ) : (
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
           {sortedFiltered.map((row) => {
@@ -334,13 +332,7 @@ export default function OrderManagement() {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                       <span className="truncate">{d.projectTitle}</span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 font-medium ${statusPillClass(
-                          d.status
-                        )}`}
-                      >
-                        {statusLabel(d.status)}
-                      </span>
+                      <StatusChip tone={toChipTone(d.status)} label={statusLabel(d.status)} />
                       {hasShot ? (
                         <span className="font-medium text-emerald-700">已传凭证</span>
                       ) : (

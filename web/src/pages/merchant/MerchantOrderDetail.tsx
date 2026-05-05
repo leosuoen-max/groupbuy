@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { PaymentScreenshotsPanel } from '../../components/merchant/PaymentScreenshotsPanel';
+import { ActionButton } from '../../components/ui/ActionButton';
+import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
+import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
@@ -27,12 +30,14 @@ const statusLabel: Record<string, string> = {
   cancelled: '已取消',
 };
 
-function statusPillClass(s: string): string {
-  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
-  if (s === 'pending') return 'bg-sky-100 text-sky-950';
-  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
-  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
-  return 'bg-gray-100 text-gray-700';
+function toChipTone(
+  s: string
+): 'confirmed' | 'pending' | 'unpaid' | 'cancelled' | 'neutral' {
+  if (s === 'confirmed') return 'confirmed';
+  if (s === 'pending') return 'pending';
+  if (s === 'unpaid' || s === 'partial_paid') return 'unpaid';
+  if (s === 'cancelled') return 'cancelled';
+  return 'neutral';
 }
 
 function isNoteEntry(
@@ -418,32 +423,35 @@ export default function MerchantOrderDetail() {
                   !canConfirm &&
                   order.status !== 'cancelled' &&
                   order.status !== 'confirmed' ? (
-                    <button
+                    <ActionButton
                       type="button"
+                      variant="secondary"
+                      size="sm"
                       disabled={busy !== null}
                       onClick={() => void handleWaiveAppendProof(batch.id)}
-                      className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 disabled:cursor-not-allowed disabled:bg-gray-100"
                     >
                       {busy === 'waive_append_proof'
                         ? '处理中…'
                         : '免提交付款凭证'}
-                    </button>
+                    </ActionButton>
                   ) : null
                 }
               />
             </div>
             {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
               <>
-                <button
+                <ActionButton
                   type="button"
+                  variant="primary"
+                  fullWidth
                   disabled={busy !== null || !canConfirm}
-                  className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+                  className="mt-3 h-11"
                   onClick={() => void handleConfirmAppendBatch(batch.id)}
                 >
                   {busy === 'confirm_append_single'
                     ? '处理中…'
                     : `确认本组补款（${formatMYR(batch.deltaAmount)}）`}
-                </button>
+                </ActionButton>
                 {!canConfirm ? (
                   <p className="mt-2 text-xs text-amber-950">
                     顾客尚未上传该组有效补款截图，请先让顾客在订单页上传。
@@ -473,13 +481,10 @@ export default function MerchantOrderDetail() {
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-lg font-bold">#{order.orderNumber}</div>
-            <span
-              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusPillClass(
-                order.status
-              )}`}
-            >
-              {statusLabel[order.status] ?? order.status}
-            </span>
+            <StatusChip
+              tone={toChipTone(order.status)}
+              label={statusLabel[order.status] ?? order.status}
+            />
           </div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
           <p className="mt-1">
@@ -558,30 +563,33 @@ export default function MerchantOrderDetail() {
                 !firstGroupHasProof &&
                 order.status !== 'cancelled' &&
                 order.status !== 'confirmed' ? (
-                  <button
+                  <ActionButton
                     type="button"
+                    variant="secondary"
+                    size="sm"
                     disabled={busy !== null}
                     onClick={() => void handleWaiveInitialProof()}
-                    className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 disabled:cursor-not-allowed disabled:bg-gray-100"
                   >
                     {busy === 'waive_initial_proof' ? '处理中…' : '免提交付款凭证'}
-                  </button>
+                  </ActionButton>
                 ) : null
               }
             />
           </div>
           {canConfirmWhole ? (
             <>
-              <button
+              <ActionButton
                 type="button"
+                variant="primary"
+                fullWidth
                 disabled={busy !== null}
-                className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300"
+                className="mt-3 h-11"
                 onClick={() => void handleConfirm()}
               >
                 {busy === 'confirm'
                   ? '处理中…'
                   : `确认本组收款（${formatMYR(initialTotal)}）`}
-              </button>
+              </ActionButton>
               <p className="mt-2 text-xs text-gray-600">
                 本组对应顾客首笔付款提交（可多张凭证）。确认后若仍有未确认加购，会自动保留待收部分到后续组。
               </p>
@@ -605,9 +613,7 @@ export default function MerchantOrderDetail() {
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-xs text-gray-500">
-            暂无已确认的加购记录。
-          </div>
+          <EmptyStateCard title="暂无已确认的加购记录" className="py-4" />
         )}
 
         <div>
@@ -691,14 +697,14 @@ export default function MerchantOrderDetail() {
             value={noteDraft}
             onChange={(e) => setNoteDraft(e.target.value)}
           />
-          <button
+          <ActionButton
             type="button"
+            variant="primary"
             disabled={busy !== null || !noteDraft.trim()}
-            className="inline-flex h-10 items-center justify-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
             onClick={() => void handleNote()}
           >
             {busy === 'note' ? '保存中…' : '保存备注'}
-          </button>
+          </ActionButton>
         </div>
 
         <div className="flex flex-wrap gap-2 pt-2">

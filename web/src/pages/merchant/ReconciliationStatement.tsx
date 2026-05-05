@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { ActionButton } from '../../components/ui/ActionButton';
+import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
+import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
@@ -29,20 +32,19 @@ function statusLabel(s: OrderStatus): string {
   return s;
 }
 
-function statusPillClass(s: OrderStatus): string {
-  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
-  if (s === 'pending') return 'bg-sky-100 text-sky-900';
-  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
-  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
-  return 'bg-gray-100 text-gray-700';
-}
-
 function orderLinesSummary(lines: OrderRow['data']['lines']): string {
   if (!lines?.length) return '—';
   const first = lines[0];
   return lines.length > 1
     ? `${first.name}×${first.quantity} 等${lines.length}项`
     : `${first.name}×${first.quantity}`;
+}
+
+function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cancelled' {
+  if (s === 'confirmed') return 'confirmed';
+  if (s === 'pending') return 'pending';
+  if (s === 'unpaid' || s === 'partial_paid') return 'unpaid';
+  return 'cancelled';
 }
 
 export default function ReconciliationStatement() {
@@ -400,37 +402,29 @@ export default function ReconciliationStatement() {
       ) : null}
 
       <div className="mb-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="inline-flex h-10 items-center justify-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white"
-          onClick={() => void handleCopy()}
-        >
+        <ActionButton type="button" variant="primary" onClick={() => void handleCopy()}>
           {copyOk ? '已复制' : '复制对账清单'}
-        </button>
-        <button
-          type="button"
-          className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium text-gray-900"
-          onClick={handleExportCsv}
-        >
+        </ActionButton>
+        <ActionButton type="button" variant="secondary" onClick={handleExportCsv}>
           导出 CSV
-        </button>
-        <button
+        </ActionButton>
+        <ActionButton
           type="button"
+          variant="primary"
           disabled={bulkBusy || pendingScopedOrders.length === 0}
-          className="inline-flex h-10 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
           onClick={() => void handleBulkConfirmPending()}
         >
           {bulkBusy
             ? '批量确认中…'
             : `一键确认待确认（${pendingScopedOrders.length}）`}
-        </button>
+        </ActionButton>
       </div>
 
       {sortedRows.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
-          <p className="text-sm font-medium text-gray-700">当前筛选范围暂无订单</p>
-          <p className="mt-1 text-xs text-gray-500">可放宽时间窗口或切换项目查看。</p>
-        </div>
+        <EmptyStateCard
+          title="当前筛选范围暂无订单"
+          hint="可放宽时间窗口或切换项目查看。"
+        />
       ) : (
       <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
         <table className="min-w-full text-left text-sm">
@@ -468,13 +462,10 @@ export default function ReconciliationStatement() {
                     {formatMYR(o.totalAmount)}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusPillClass(
-                        o.status
-                      )}`}
-                    >
-                      {statusLabel(o.status)}
-                    </span>
+                    <StatusChip
+                      tone={toChipTone(o.status)}
+                      label={statusLabel(o.status)}
+                    />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs">
                     {hasShot ? (
