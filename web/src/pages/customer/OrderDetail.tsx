@@ -4,6 +4,7 @@ import { PageShell } from '../../components/PageShell';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import {
+  customerDeletePaymentScreenshot,
   customerUploadPaymentScreenshot,
   getOrderByNumber,
   type OrderRow,
@@ -42,6 +43,7 @@ export default function OrderDetail() {
   const [orderRow, setOrderRow] = useState<OrderRow | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const applyOrderRow = useCallback(
     (row: OrderRow | null) => {
@@ -114,6 +116,43 @@ export default function OrderDetail() {
       })
       .finally(() => {
         setUploading(false);
+      });
+  };
+
+  const onDeleteShot = (shot: {
+    id: string | null;
+    url: string | null;
+  }) => {
+    if (!shot.url || !orderRow || !order) return;
+    if (
+      !window.confirm('确定删除这张付款截图？删除后可重新上传。')
+    ) {
+      return;
+    }
+    const key = shot.id ?? shot.url;
+    setDeletingKey(key);
+    setUploadError(null);
+    void customerDeletePaymentScreenshot({
+      orderFirestoreId: orderRow.id,
+      projectId,
+      orderNumber: order.orderNumber,
+      customerKey: getOrCreateCustomerKey(),
+      ...(shot.id
+        ? { screenshotId: shot.id }
+        : { screenshotUrl: shot.url }),
+    })
+      .then(() =>
+        getOrderByNumber(projectId, decodeURIComponent(orderId)).then(
+          applyOrderRow
+        )
+      )
+      .catch((err: unknown) => {
+        setUploadError(
+          err instanceof Error ? err.message : '删除失败，请重试。'
+        );
+      })
+      .finally(() => {
+        setDeletingKey(null);
       });
   };
 
@@ -257,7 +296,7 @@ export default function OrderDetail() {
               {shots.map((s, i) =>
                 s.url ? (
                   <li
-                    key={`${s.url}-${i}`}
+                    key={`${s.id ?? s.url}-${i}`}
                     className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-2"
                   >
                     <a
@@ -273,25 +312,47 @@ export default function OrderDetail() {
                       />
                     </a>
                     <div className="min-w-0 flex-1 text-xs">
-                      <p className="font-medium text-gray-900">
-                        {flagLabel(s.flag)}
-                      </p>
-                      {s.flagReason ? (
-                        <p className="mt-0.5 text-gray-600">{s.flagReason}</p>
-                      ) : null}
-                      {s.uploadedAt ? (
-                        <p className="mt-1 text-gray-500">
-                          {s.uploadedAt.toDate().toLocaleString()}
-                        </p>
-                      ) : null}
-                      <a
-                        href={s.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1 inline-block text-indigo-600 underline-offset-2 hover:underline"
-                      >
-                        查看原图
-                      </a>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900">
+                            {flagLabel(s.flag)}
+                          </p>
+                          {s.flagReason ? (
+                            <p className="mt-0.5 text-gray-600">
+                              {s.flagReason}
+                            </p>
+                          ) : null}
+                          {s.uploadedAt ? (
+                            <p className="mt-1 text-gray-500">
+                              {s.uploadedAt.toDate().toLocaleString()}
+                            </p>
+                          ) : null}
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <a
+                              href={s.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-block text-indigo-600 underline-offset-2 hover:underline"
+                            >
+                              查看原图
+                            </a>
+                            {canUpload ? (
+                              <button
+                                type="button"
+                                disabled={
+                                  deletingKey === (s.id ?? s.url) || uploading
+                                }
+                                onClick={() => onDeleteShot(s)}
+                                className="text-red-600 underline-offset-2 hover:underline disabled:opacity-50"
+                              >
+                                {deletingKey === (s.id ?? s.url)
+                                  ? '删除中…'
+                                  : '删除'}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </li>
                 ) : null

@@ -1,4 +1,4 @@
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import CryptoJS from 'crypto-js';
 import { getStorageClient } from './firebase';
 
@@ -34,4 +34,12 @@ export async function uploadOrderPaymentImage(params: {
     file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
   await uploadBytes(storageRef, file, { contentType });
   return getDownloadURL(storageRef);
+}
+
+/** 按下载 URL 删除 Storage 对象（尽力而为，规则不允许时可忽略上层错误） */
+export async function deleteFileByDownloadUrl(downloadUrl: string): Promise<void> {
+  const trimmed = downloadUrl.trim();
+  if (!trimmed) return;
+  const storageRef = ref(getStorageClient(), trimmed);
+  await deleteObject(storageRef);
 }

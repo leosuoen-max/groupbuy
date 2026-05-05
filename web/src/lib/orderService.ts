@@ -12,8 +12,10 @@ import {
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import { orderHasPaymentScreenshots } from './paymentScreenshotHelpers';
 import {
   computeImageFileMd5Hex,
+  deleteFileByDownloadUrl,
   uploadOrderPaymentImage,
 } from './paymentImageUpload';
 import { getProjectPermissionForUser } from './permissionService';
@@ -311,6 +313,93 @@ export async function customerUploadPaymentScreenshot(input: {
     statusHistory: hist,
     updatedAt: serverTimestamp(),
     ...(order.status === 'unpaid' ? { status: 'pending' as const } : {}),
+  });
+}
+
+/** 顾客删除一张付款截图（传错可删）；删光且原为待核实则回到待付款 */
+export async function customerDeletePaymentScreenshot(input: {
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  customerKey: string;
+  /** 新数据有条目 id 时优先使用 */
+  screenshotId?: string;
+  /** 旧数据无 id 时可按 url 匹配第一条 */
+  screenshotUrl?: string;
+}): Promise<void> {
+  const idTrim = input.screenshotId?.trim();
+  const urlTrim = input.screenshotUrl?.trim();
+  if (!idTrim && !urlTrim) throw new Error('缺少要删除的截图');
+
+  const allow: OrderStatus[] = ['unpaid', 'pending', 'partial_paid'];
+
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const snap = await getDoc(orderRef);
+  if (!snap.exists()) throw new Error('订单不存在');
+  const order = snap.data() as OrderDoc;
+
+  if (
+    order.projectId !== input.projectId ||
+    order.orderNumber !== input.orderNumber
+  ) {
+    throw new Error('订单信息不匹配');
+  }
+  if (order.customerKey !== input.customerKey) {
+    throw new Error('仅下单本人可操作（请使用同一浏览器）');
+  }
+  if (!allow.includes(order.status)) {
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+    if (order.status === 'confirmed') throw new Error('订单已确认，无法删除凭证');
+    throw new Error('当前状态不可删除付款截图');
+  }
+
+  const prev = Array.isArray(order.paymentScreenshots)
+    ? [...order.paymentScreenshots]
+    : [];
+
+  let idx = -1;
+  if (idTrim) {
+    idx = prev.findIndex((s) => {
+      if (!s || typeof s !== 'object') return false;
+      return (s as Record<string, unknown>).id === idTrim;
+    });
+  }
+  if (idx < 0 && urlTrim) {
+    idx = prev.findIndex((s) => {
+      if (!s || typeof s !== 'object') return false;
+      const u = (s as Record<string, unknown>).url;
+      return typeof u === 'string' && u.trim() === urlTrim;
+    });
+  }
+  if (idx < 0) throw new Error('找不到该截图');
+
+  const removed = prev[idx] as Record<string, unknown>;
+  const fileUrl = typeof removed.url === 'string' ? removed.url.trim() : '';
+  const next = prev.filter((_, i) => i !== idx);
+
+  if (fileUrl) {
+    try {
+      await deleteFileByDownloadUrl(fileUrl);
+    } catch {
+      // 仍更新 Firestore，避免用户无法纠正错误记录
+    }
+  }
+
+  const stillHas = orderHasPaymentScreenshots(next);
+  const hist = [...(order.statusHistory ?? [])];
+  hist.push({
+    action: 'screenshot_deleted',
+    timestamp: Timestamp.now(),
+  });
+
+  await updateDoc(orderRef, {
+    paymentScreenshots: next,
+    statusHistory: hist,
+    updatedAt: serverTimestamp(),
+    ...(order.status === 'pending' && !stillHas
+      ? { status: 'unpaid' as const }
+      : {}),
   });
 }
 
