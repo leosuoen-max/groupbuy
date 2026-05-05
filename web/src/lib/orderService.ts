@@ -208,3 +208,17 @@ export async function getOrderByNumber(projectId: string, orderNumber: string): 
   const d = snap.docs[0];
   return { id: d.id, data: d.data() as OrderDoc };
 }
+
+/** 商户端：按店铺拉取订单（客户端按时间倒序，避免复合索引） */
+export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
+  const db = getDb();
+  const q = query(collection(db, 'orders'), where('shopId', '==', shopId));
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((d) => ({ id: d.id, data: d.data() as OrderDoc }))
+    .sort((a, b) => {
+      const ta = a.data.createdAt?.toMillis?.() ?? 0;
+      const tb = b.data.createdAt?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+}
