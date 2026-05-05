@@ -121,6 +121,16 @@ export type OrderLineDoc = {
   subtotal: number;
 };
 
+/** 顾客每次「加菜」产生一档记录，便于商户分笔核对补款 */
+export type OrderAppendBatchDoc = {
+  id: string;
+  appendedAt: Timestamp;
+  lines: OrderLineDoc[];
+  deltaAmount: number;
+  confirmedAt?: Timestamp;
+  confirmedByUserId?: string;
+};
+
 export type OrderDoc = {
   orderNumber: string;
   shopId: string;
@@ -133,6 +143,13 @@ export type OrderDoc = {
   customerAddress: string;
   customerNote?: string;
   lines: OrderLineDoc[];
+  /** 首单明细快照（与 lines 在首次下单时一致；加菜后 lines 为合并结果） */
+  initialLines?: OrderLineDoc[];
+  initialTotalAmount?: number;
+  /** 每次加购一档；首单不含在内 */
+  appendBatches?: OrderAppendBatchDoc[];
+  /** 首笔全款由商户确认的时间（用于界面区分「首单已付」） */
+  initialPaymentConfirmedAt?: Timestamp;
   totalAmount: number;
   paidAmount: number;
   pendingAmount: number;

@@ -4,14 +4,15 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
+  appendBatchHasCustomerUpload,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
 } from '../../lib/paymentScreenshotHelpers';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
 import { getShopBySlug } from '../../lib/shopService';
-import type { OrderStatus } from '../../types/firestore';
+import type { OrderAppendBatchDoc, OrderDoc, OrderStatus } from '../../types/firestore';
 
-type TabId = 'all' | 'open' | 'done' | 'cancelled';
+type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
 
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
@@ -22,18 +23,43 @@ function statusLabel(s: OrderStatus): string {
   return s;
 }
 
-function tabMatches(tab: TabId, status: OrderStatus): boolean {
-  if (tab === 'all') return true;
-  if (tab === 'open') {
-    return (
-      status === 'unpaid' ||
-      status === 'pending' ||
-      status === 'partial_paid'
-    );
-  }
-  if (tab === 'done') return status === 'confirmed';
-  if (tab === 'cancelled') return status === 'cancelled';
-  return true;
+function pendingUnconfirmedBatches(order: OrderDoc): OrderAppendBatchDoc[] {
+  return (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
+}
+
+/**
+ * 存在未确认的加购档，且顾客尚未为该档上传有效凭证。
+ * 含：`partial_paid`，以及「首单仍待核实(pending)时又加购」——此时仍为 pending，但同样要在「待付款」里盯住加购应收。
+ */
+function orderNeedsAppendPaymentUpload(order: OrderDoc): boolean {
+  const batches = pendingUnconfirmedBatches(order);
+  if (batches.length === 0) return false;
+  const ids = batches.map((b) => b.id);
+  return batches.some(
+    (b) =>
+      !appendBatchHasCustomerUpload(
+        order.paymentScreenshots,
+        b.id,
+        b.appendedAt,
+        ids
+      )
+  );
+}
+
+/** partial_paid：存在未确认的加购档，且已有凭证待商户核实/确认补款 */
+function orderHasAppendAwaitingMerchant(order: OrderDoc): boolean {
+  if (order.status !== 'partial_paid') return false;
+  const batches = pendingUnconfirmedBatches(order);
+  if (batches.length === 0) return false;
+  const ids = batches.map((b) => b.id);
+  return batches.some((b) =>
+    appendBatchHasCustomerUpload(
+      order.paymentScreenshots,
+      b.id,
+      b.appendedAt,
+      ids
+    )
+  );
 }
 
 export default function OrderManagement() {
@@ -92,23 +118,67 @@ export default function OrderManagement() {
   }, [authLoading, user, refresh]);
 
   const filtered = useMemo(() => {
-    let rows = orders;
+    const derived = orders.map((r) => {
+      const d = r.data;
+      return {
+        row: r,
+        isUnpaid: d.status === 'unpaid' || orderNeedsAppendPaymentUpload(d),
+        isOpen:
+          d.status === 'pending' ||
+          (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
+        isDone: d.status === 'confirmed' || d.status === 'partial_paid',
+        isCancelled: d.status === 'cancelled',
+      };
+    });
+
+    let rows = derived;
     if (projectFilter.trim()) {
-      rows = rows.filter((r) => r.data.projectId === projectFilter.trim());
+      rows = rows.filter((r) => r.row.data.projectId === projectFilter.trim());
     }
-    return rows.filter((r) => tabMatches(tab, r.data.status));
+    if (tab === 'all') return rows.map((r) => r.row);
+    if (tab === 'unpaid') return rows.filter((r) => r.isUnpaid).map((r) => r.row);
+    if (tab === 'open') return rows.filter((r) => r.isOpen).map((r) => r.row);
+    if (tab === 'done') return rows.filter((r) => r.isDone).map((r) => r.row);
+    if (tab === 'cancelled') {
+      return rows.filter((r) => r.isCancelled).map((r) => r.row);
+    }
+    return rows.map((r) => r.row);
   }, [orders, projectFilter, tab]);
 
+  const sortedFiltered = useMemo(() => {
+    const list = [...filtered];
+    list.sort((a, b) => {
+      const ta = a.data.createdAt?.toMillis?.() ?? 0;
+      const tb = b.data.createdAt?.toMillis?.() ?? 0;
+      if (ta !== tb) return tab === 'all' ? tb - ta : ta - tb;
+      return a.data.orderNumber.localeCompare(b.data.orderNumber);
+    });
+    return list;
+  }, [filtered, tab]);
+
   const counts = useMemo(() => {
-    let base = orders;
+    const derived = orders.map((r) => {
+      const d = r.data;
+      return {
+        row: r,
+        isUnpaid: d.status === 'unpaid' || orderNeedsAppendPaymentUpload(d),
+        isOpen:
+          d.status === 'pending' ||
+          (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
+        isDone: d.status === 'confirmed' || d.status === 'partial_paid',
+        isCancelled: d.status === 'cancelled',
+      };
+    });
+    let base = derived;
     if (projectFilter.trim()) {
-      base = base.filter((r) => r.data.projectId === projectFilter.trim());
+      base = base.filter((r) => r.row.data.projectId === projectFilter.trim());
     }
     return {
       all: base.length,
-      open: base.filter((r) => tabMatches('open', r.data.status)).length,
-      done: base.filter((r) => tabMatches('done', r.data.status)).length,
-      cancelled: base.filter((r) => tabMatches('cancelled', r.data.status)).length,
+      unpaid: base.filter((r) => r.isUnpaid).length,
+      open: base.filter((r) => r.isOpen).length,
+      done: base.filter((r) => r.isDone).length,
+      cancelled: base.filter((r) => r.isCancelled).length,
     };
   }, [orders, projectFilter]);
 
@@ -158,6 +228,7 @@ export default function OrderManagement() {
 
   const tabs: { id: TabId; label: string; count: number }[] = [
     { id: 'all', label: '全部', count: counts.all },
+    { id: 'unpaid', label: '待付款', count: counts.unpaid },
     { id: 'open', label: '待处理', count: counts.open },
     { id: 'done', label: '已确认', count: counts.done },
     { id: 'cancelled', label: '已取消', count: counts.cancelled },
@@ -188,6 +259,10 @@ export default function OrderManagement() {
         </label>
       </div>
 
+      <p className="mb-3 text-xs text-gray-500">
+        同一订单可同时出现在多个标签：例如首单待核实(pending)时又加购未付→会在「待处理」与「待付款」各出现一笔（同一订单号）。
+      </p>
+
       <div className="mb-4 flex flex-wrap gap-1 border-b border-gray-100 pb-2">
         {tabs.map((t) => (
           <button
@@ -206,11 +281,11 @@ export default function OrderManagement() {
         ))}
       </div>
 
-      {filtered.length === 0 ? (
+      {sortedFiltered.length === 0 ? (
         <p className="text-sm text-gray-600">暂无订单。</p>
       ) : (
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-          {filtered.map((row) => {
+          {sortedFiltered.map((row) => {
             const d = row.data;
             const pathSlug = shopRow?.slug ?? slug;
             const merchantDetailUrl = `/dashboard/${encodeURIComponent(pathSlug)}/order/${encodeURIComponent(d.projectId)}/${encodeURIComponent(d.orderNumber)}`;

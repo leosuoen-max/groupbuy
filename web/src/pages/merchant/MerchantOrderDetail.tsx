@@ -5,12 +5,17 @@ import { PaymentScreenshotsPanel } from '../../components/merchant/PaymentScreen
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
+  canMerchantConfirmAppendBatchByScreenshots,
+  hasPaymentScreenshotForAppendBatch,
+} from '../../lib/paymentScreenshotHelpers';
+import {
   getOrderByNumber,
   merchantAppendInternalNote,
+  merchantConfirmAppendBatch,
   merchantConfirmPayment,
   type OrderRow,
 } from '../../lib/orderService';
-import type { OrderDoc } from '../../types/firestore';
+import type { OrderAppendBatchDoc, OrderDoc, OrderLineDoc } from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
@@ -33,6 +38,65 @@ function isNoteEntry(
   );
 }
 
+function batchTimeStr(b: OrderAppendBatchDoc): string {
+  const d = b.appendedAt?.toDate?.();
+  if (!d) return '';
+  return d.toLocaleString();
+}
+
+/** 已入账的历史加购（商户曾逐笔确认过的批次） */
+function ConfirmedAppendBatchCard({
+  batch,
+  paymentScreenshots,
+}: {
+  batch: OrderAppendBatchDoc;
+  paymentScreenshots: unknown;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-gray-900">加购（已核实）</h3>
+        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
+          补款已入账
+        </span>
+      </div>
+      <p className="mb-2 text-xs text-gray-600">时间：{batchTimeStr(batch)}</p>
+      {batch.confirmedAt ? (
+        <p className="mb-2 text-xs text-emerald-800">
+          商户已于 {batch.confirmedAt.toDate().toLocaleString()} 确认收款
+        </p>
+      ) : null}
+      <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
+        {batch.lines.map((l, idx) => (
+          <li
+            key={`${batch.id}-${l.productId}-${idx}`}
+            className="flex justify-between gap-2 px-3 py-2 text-sm"
+          >
+            <span>
+              {l.name} ×{l.quantity}
+            </span>
+            <span className="tabular-nums font-medium">
+              {formatMYR(l.subtotal)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
+        <span>本笔小计</span>
+        <span>{formatMYR(batch.deltaAmount)}</span>
+      </div>
+      <div className="mt-3">
+        <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
+        <PaymentScreenshotsPanel
+          paymentScreenshots={paymentScreenshots}
+          appendBatchIdFilter={batch.id}
+          emptyHint="暂无该笔截图记录。"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function MerchantOrderDetail() {
   const { shopSlug = '', projectId = '', orderNumber = '' } = useParams<{
     shopSlug: string;
@@ -48,7 +112,9 @@ export default function MerchantOrderDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [row, setRow] = useState<OrderRow | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
-  const [busy, setBusy] = useState<'confirm' | 'note' | null>(null);
+  const [busy, setBusy] = useState<
+    'confirm' | 'note' | 'confirm_append_single' | null
+  >(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -82,7 +148,22 @@ export default function MerchantOrderDetail() {
     setMsg(null);
     try {
       await merchantConfirmPayment(row.id, user.uid);
-      setMsg('已确认收款');
+      setMsg('已确认首单收款');
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleConfirmAppendBatch = async (appendBatchId: string) => {
+    if (!user || !row) return;
+    setBusy('confirm_append_single');
+    setMsg(null);
+    try {
+      await merchantConfirmAppendBatch(row.id, appendBatchId, user.uid);
+      setMsg('已确认该组加购补款');
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '操作失败');
@@ -146,10 +227,166 @@ export default function MerchantOrderDetail() {
   const created = order.createdAt?.toDate?.() ?? new Date();
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
 
-  const canConfirm =
-    order.status === 'unpaid' ||
-    order.status === 'pending' ||
-    order.status === 'partial_paid';
+  const appendBatches = order.appendBatches ?? [];
+  const legacyNoSplit =
+    appendBatches.length > 0 && !(order.initialLines?.length ?? 0);
+
+  const initialLines: OrderLineDoc[] = legacyNoSplit
+    ? order.lines
+    : order.initialLines?.length
+      ? order.initialLines
+      : order.lines;
+  const initialTotal =
+    order.initialTotalAmount ??
+    initialLines.reduce((s, l) => s + l.subtotal, 0);
+
+  const firstPaymentAcknowledged =
+    !!order.initialPaymentConfirmedAt ||
+    (initialTotal > 0 &&
+      Number(order.paidAmount) + 0.001 >= initialTotal &&
+      (order.status === 'confirmed' || order.status === 'partial_paid'));
+
+  const confirmedBatches = appendBatches
+    .filter((b) => b.confirmedAt)
+    .sort(
+      (a, b) =>
+        (a.appendedAt?.toMillis?.() ?? 0) -
+        (b.appendedAt?.toMillis?.() ?? 0)
+    );
+  const pendingBatches = appendBatches.filter((b) => !b.confirmedAt);
+  const pendingIds = pendingBatches.map((b) => b.id);
+  const canConfirmWhole =
+    !firstPaymentAcknowledged &&
+    (order.status === 'unpaid' ||
+      order.status === 'pending' ||
+      order.status === 'partial_paid');
+  /** 分组优先级：待确认(0) > 待付款(1) > 已确认(2) */
+  const firstGroupPriority = firstPaymentAcknowledged
+    ? 2
+    : order.status === 'pending'
+      ? 0
+      : 1;
+  const pendingBatchGroups = pendingBatches
+    .map((b) => {
+      const hasTagged = hasPaymentScreenshotForAppendBatch(
+        order.paymentScreenshots,
+        b.id
+      );
+      const canConfirm = canMerchantConfirmAppendBatchByScreenshots(
+        order.paymentScreenshots,
+        b.id,
+        pendingIds,
+        b.appendedAt
+      );
+      const includeUntagged = pendingIds.length === 1 && !hasTagged;
+      const groupPriority = canConfirm ? 0 : 1;
+      return { batch: b, canConfirm, includeUntagged, groupPriority };
+    })
+    .sort((a, b) => {
+      if (a.groupPriority !== b.groupPriority) {
+        return a.groupPriority - b.groupPriority;
+      }
+      return (
+        (a.batch.appendedAt?.toMillis?.() ?? 0) -
+        (b.batch.appendedAt?.toMillis?.() ?? 0)
+      );
+    });
+
+  const pendingGroupPriority = pendingBatchGroups.length > 0
+    ? pendingBatchGroups[0]!.groupPriority
+    : null;
+  const pendingHasUnpaidGroup = pendingBatchGroups.some((g) => !g.canConfirm);
+  const firstGroupTimeMs = order.createdAt?.toMillis?.() ?? 0;
+  const pendingGroupTimeMs =
+    pendingBatchGroups[0]?.batch.appendedAt?.toMillis?.() ??
+    Number.MAX_SAFE_INTEGER;
+  const showPendingBeforeFirst =
+    pendingGroupPriority !== null &&
+    (pendingGroupPriority < firstGroupPriority ||
+      (pendingGroupPriority === firstGroupPriority &&
+        pendingGroupTimeMs < firstGroupTimeMs));
+
+  const pendingSection = pendingBatchGroups.length > 0 ? (
+    <div className="space-y-3">
+      <h2 className="text-sm font-semibold text-amber-950">
+        待核实加购（按提交凭证行为分组；每组独立确认）
+      </h2>
+      <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+        {pendingBatchGroups.map(({ batch, canConfirm, includeUntagged }) => (
+          <div
+            key={batch.id}
+            className="rounded-xl border border-amber-100 bg-white px-3 py-3"
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-gray-900">加购组</h3>
+              {canConfirm ? (
+                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-950">
+                  已传图 · 请核对
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+                  待付款（未传图）
+                </span>
+              )}
+            </div>
+            <p className="mb-2 text-xs text-gray-600">时间：{batchTimeStr(batch)}</p>
+            <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
+              {batch.lines.map((l, idx) => (
+                <li
+                  key={`${batch.id}-${l.productId}-${idx}`}
+                  className="flex justify-between gap-2 px-3 py-2 text-sm"
+                >
+                  <span>
+                    {l.name} ×{l.quantity}
+                  </span>
+                  <span className="tabular-nums font-medium">
+                    {formatMYR(l.subtotal)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
+              <span>加购小计</span>
+              <span>{formatMYR(batch.deltaAmount)}</span>
+            </div>
+            <div className="mt-3">
+              <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
+              <PaymentScreenshotsPanel
+                paymentScreenshots={order.paymentScreenshots}
+                appendBatchIdFilter={batch.id}
+                includeUntagged={includeUntagged}
+                untaggedNotBeforeMillis={batch.appendedAt.toMillis()}
+                emptyHint="该组尚未上传对应补款截图。"
+              />
+            </div>
+            {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
+              <>
+                <button
+                  type="button"
+                  disabled={busy !== null || !canConfirm}
+                  className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+                  onClick={() => void handleConfirmAppendBatch(batch.id)}
+                >
+                  {busy === 'confirm_append_single'
+                    ? '处理中…'
+                    : `确认本组补款（${formatMYR(batch.deltaAmount)}）`}
+                </button>
+                {!canConfirm ? (
+                  <p className="mt-2 text-xs text-amber-950">
+                    顾客尚未上传该组有效补款截图，请先让顾客在订单页上传。
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-gray-600">
+                当前状态不可确认该组补款。
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
@@ -171,22 +408,119 @@ export default function MerchantOrderDetail() {
           </p>
           <p className="mt-1">
             应付：<strong>{formatMYR(order.totalAmount)}</strong>
-            {order.status === 'confirmed' ? (
+            {order.status === 'confirmed' || order.status === 'partial_paid' ? (
               <span className="ml-2 text-emerald-800">
-                （已确认 {formatMYR(order.paidAmount)}）
+                （已收 {formatMYR(order.paidAmount)} · 待收{' '}
+                {formatMYR(order.pendingAmount)}）
               </span>
             ) : null}
           </p>
+          {order.status === 'partial_paid' &&
+          pendingIds.length > 0 &&
+          pendingHasUnpaidGroup ? (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-xs text-amber-950">
+              当前加购补款尚未收到有效付款截图，视同 <strong>待付款</strong>
+              ：请先让顾客在手机端上传补款截图后再确认。
+            </p>
+          ) : null}
         </div>
 
-        <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">
-            商品明细 · 金额核对
-          </h2>
-          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-            {order.lines.map((l) => (
+        {legacyNoSplit ? (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+            此单为历史数据，首单与加购未拆分快照；下方「加购」仍以批次为准核对补款。
+          </p>
+        ) : null}
+
+        {showPendingBeforeFirst ? pendingSection : null}
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-gray-900">首单（下单时的金额）</h2>
+            {firstPaymentAcknowledged ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
+                已确认收款
+              </span>
+            ) : order.status === 'pending' ? (
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-950">
+                已传图 · 待确认
+              </span>
+            ) : (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+                待付款（未传图）
+              </span>
+            )}
+          </div>
+          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
+            {initialLines.map((l, idx) => (
               <li
-                key={`${l.productId}-${l.name}`}
+                key={`${l.productId}-${idx}`}
+                className="flex justify-between gap-2 px-3 py-2"
+              >
+                <span>
+                  {l.name} ×{l.quantity}
+                </span>
+                <span className="tabular-nums font-medium">
+                  {formatMYR(l.subtotal)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
+            <span>首单小计</span>
+            <span>{formatMYR(initialTotal)}</span>
+          </div>
+          <div className="mt-3">
+            <h3 className="mb-1 text-xs font-semibold text-gray-700">
+              首单相关截图（未挂加购批次的图）
+            </h3>
+            <PaymentScreenshotsPanel
+              paymentScreenshots={order.paymentScreenshots}
+              appendBatchIdFilter={null}
+              emptyHint="暂无首单截图；顾客可能在「待补款」阶段才上传，请查看对应加购分区。"
+            />
+          </div>
+          {canConfirmWhole ? (
+            <>
+              <button
+                type="button"
+                disabled={busy !== null}
+                className="mt-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300"
+                onClick={() => void handleConfirm()}
+              >
+                {busy === 'confirm'
+                  ? '处理中…'
+                  : `确认本组收款（${formatMYR(initialTotal)}）`}
+              </button>
+              <p className="mt-2 text-xs text-gray-600">
+                本组对应顾客首笔付款提交（可多张凭证）。确认后若仍有未确认加购，会自动保留待收部分到后续组。
+              </p>
+            </>
+          ) : order.status === 'confirmed' ? (
+            <p className="mt-2 text-xs text-gray-600">本组已完成确认。</p>
+          ) : null}
+        </div>
+
+        {!showPendingBeforeFirst ? pendingSection : null}
+
+        {confirmedBatches.length > 0 ? (
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-900">已核实加购（补款已入账）</h2>
+            {confirmedBatches.map((b) => (
+              <ConfirmedAppendBatchCard
+                key={b.id}
+                batch={b}
+                paymentScreenshots={order.paymentScreenshots}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">订单当前合计</h2>
+          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
+            {order.lines.map((l, idx) => (
+              <li
+                key={`${l.productId}-all-${idx}`}
                 className="flex justify-between gap-2 px-3 py-2"
               >
                 <span>
@@ -202,42 +536,6 @@ export default function MerchantOrderDetail() {
             <span>应付合计</span>
             <span>{formatMYR(order.totalAmount)}</span>
           </div>
-        </div>
-
-        <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">
-            付款凭证（打款截图）
-          </h2>
-          <PaymentScreenshotsPanel paymentScreenshots={order.paymentScreenshots} />
-        </div>
-
-        <div className="rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-3">
-          <div className="mb-2 text-sm font-semibold text-gray-900">
-            核对后确认收款
-          </div>
-          <p className="mb-3 text-xs text-gray-600">
-            请对照上方<strong>凭证</strong>与<strong>商品金额、下单时间</strong>一致后再确认。
-          </p>
-            {canConfirm ? (
-            <button
-              type="button"
-              disabled={busy !== null}
-              className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300"
-              onClick={() => void handleConfirm()}
-            >
-              {busy === 'confirm'
-                ? '处理中…'
-                : order.status === 'partial_paid'
-                  ? '确认补款到账'
-                  : '确认收款'}
-            </button>
-          ) : (
-            <p className="text-xs text-gray-600">
-              {order.status === 'confirmed'
-                ? '该订单已确认收款。'
-                : '当前状态不支持在此确认收款。'}
-            </p>
-          )}
         </div>
 
         <div>

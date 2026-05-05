@@ -13,17 +13,29 @@ import {
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
-import { orderHasPaymentScreenshots } from './paymentScreenshotHelpers';
+import {
+  appendBatchHasCustomerUpload,
+  canMerchantConfirmAppendBatchByScreenshots,
+  canMerchantConfirmPendingAppendLump,
+  orderHasPaymentScreenshots,
+} from './paymentScreenshotHelpers';
 import {
   computeImageFileMd5Hex,
   deleteFileByDownloadUrl,
   uploadOrderPaymentImage,
 } from './paymentImageUpload';
+import { listDeliveryPointsByShopId } from './deliveryPointService';
 import { getProject } from './projectService';
 import { getProjectPermissionForUser } from './permissionService';
 import { getShopById } from './shopService';
 import type { OrderLine } from '../types/orderDraft';
-import type { OrderDoc, OrderLineDoc, OrderStatus, ProjectDoc } from '../types/firestore';
+import type {
+  OrderAppendBatchDoc,
+  OrderDoc,
+  OrderLineDoc,
+  OrderStatus,
+  ProjectDoc,
+} from '../types/firestore';
 
 export type OrderRow = { id: string; data: OrderDoc };
 
@@ -160,6 +172,9 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       customerPhone: input.customerPhone,
       customerAddress: input.customerAddress,
       lines,
+      initialLines: lines,
+      initialTotalAmount: totalAmount,
+      appendBatches: [],
       totalAmount,
       paidAmount: 0,
       pendingAmount: totalAmount,
@@ -237,6 +252,38 @@ async function md5DuplicateInShopOtherOrders(
   return false;
 }
 
+/**
+ * 多笔待付加购并存时，新截图应挂到「按时间最早、且尚未视为已有凭证」的那一档，
+ * 而不是固定 appendBatches 数组的第一项（否则多笔都会挤在同一档，后续加购永远缺图）。
+ */
+function pickPendingAppendBatchIdForNewScreenshot(order: OrderDoc): string | undefined {
+  const pendingBatches = (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
+  if (pendingBatches.length === 0) return undefined;
+  /**
+   * 规则：若当前只有一个待确认组，则连续提交/编辑凭证（中间无新加购）都归这一组。
+   * 这样顾客补传或改图不会意外“切组”。
+   */
+  if (pendingBatches.length === 1) return pendingBatches[0]!.id;
+  const pendingIds = pendingBatches.map((b) => b.id);
+  const sorted = [...pendingBatches].sort(
+    (a, b) =>
+      (a.appendedAt?.toMillis?.() ?? 0) - (b.appendedAt?.toMillis?.() ?? 0)
+  );
+  for (const b of sorted) {
+    if (
+      !appendBatchHasCustomerUpload(
+        order.paymentScreenshots,
+        b.id,
+        b.appendedAt,
+        pendingIds
+      )
+    ) {
+      return b.id;
+    }
+  }
+  return sorted[sorted.length - 1]!.id;
+}
+
 /** 顾客上传付款截图：校验本人；写入 Storage URL + MD5 标记；待付款则改为待核实 */
 export async function customerUploadPaymentScreenshot(input: {
   orderFirestoreId: string;
@@ -308,6 +355,10 @@ export async function customerUploadPaymentScreenshot(input: {
     flag,
   };
   if (flagReason) entry.flagReason = flagReason;
+
+  /** 规则：一旦存在待确认加购档，新的凭证提交即作为该轮（最早未配图）加购组的分界线。 */
+  const batchId = pickPendingAppendBatchIdForNewScreenshot(order);
+  if (batchId) entry.appendBatchId = batchId;
 
   const prev = Array.isArray(order.paymentScreenshots)
     ? [...order.paymentScreenshots]
@@ -387,6 +438,39 @@ export async function customerDeletePaymentScreenshot(input: {
   if (idx < 0) throw new Error('找不到该截图');
 
   const removed = prev[idx] as Record<string, unknown>;
+  const removedBatchId =
+    typeof removed.appendBatchId === 'string' && removed.appendBatchId.trim()
+      ? removed.appendBatchId.trim()
+      : '';
+  const removedUploadedAt =
+    removed.uploadedAt &&
+    typeof (removed.uploadedAt as { toMillis?: () => number }).toMillis ===
+      'function'
+      ? (removed.uploadedAt as { toMillis: () => number }).toMillis()
+      : null;
+  const appendBatches = order.appendBatches ?? [];
+  const pendingBatches = appendBatches.filter((b) => !b.confirmedAt);
+
+  // 商户已确认过的凭证对顾客只读，防止删除后账务与核实记录不一致。
+  if (removedBatchId) {
+    const batch = appendBatches.find((b) => b.id === removedBatchId);
+    if (batch?.confirmedAt) {
+      throw new Error('该凭证对应的补款已被商户确认，不能删除');
+    }
+  } else {
+    const minPendingMs =
+      pendingBatches.length > 0
+        ? Math.min(...pendingBatches.map((b) => b.appendedAt.toMillis()))
+        : Number.POSITIVE_INFINITY;
+    const likelyPendingAppendProof =
+      removedUploadedAt != null &&
+      pendingBatches.length > 0 &&
+      removedUploadedAt >= minPendingMs;
+    if (!likelyPendingAppendProof && order.initialPaymentConfirmedAt) {
+      throw new Error('首单付款已被商户确认，相关凭证不能删除');
+    }
+  }
+
   const fileUrl = typeof removed.url === 'string' ? removed.url.trim() : '';
   const next = prev.filter((_, i) => i !== idx);
 
@@ -439,6 +523,12 @@ export async function customerUpdateOrderContact(input: {
   customerPhone: string;
   customerAddress: string;
   customerNote?: string;
+  /** 一并更新配送方式（可选） */
+  delivery?: {
+    deliveryPointId?: string;
+    deliveryPointSnapshot: { name: string; detail?: string };
+    isManualMatch: boolean;
+  };
 }): Promise<void> {
   const projectRow = await getProject(input.projectId);
   if (!projectRow) throw new Error('项目不存在');
@@ -476,6 +566,27 @@ export async function customerUpdateOrderContact(input: {
   const ad = input.customerAddress.trim();
   if (!nm || !ph || !ad) throw new Error('姓名、电话、地址不能为空');
 
+  if (input.delivery) {
+    const { isManualMatch, deliveryPointId, deliveryPointSnapshot } =
+      input.delivery;
+    const nameOk = deliveryPointSnapshot?.name?.trim();
+    if (!nameOk) throw new Error('配送信息不完整');
+
+    if (!isManualMatch) {
+      const dpId = deliveryPointId?.trim();
+      if (!dpId) throw new Error('请选择配送点');
+
+      const rows = await listDeliveryPointsByShopId(order.shopId);
+      const okRow = rows.find((r) => r.id === dpId);
+      if (!okRow) throw new Error('配送点不存在或已停用');
+
+      const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
+      if (allowed.size > 0 && !allowed.has(dpId)) {
+        throw new Error('该配送点不属于当前团购项目');
+      }
+    }
+  }
+
   const hist = [...(order.statusHistory ?? [])];
   hist.push({
     action: 'customer_update_contact',
@@ -483,14 +594,29 @@ export async function customerUpdateOrderContact(input: {
   });
 
   const noteTrim = input.customerNote?.trim();
-  await updateDoc(orderRef, {
+
+  const patch: Record<string, unknown> = {
     customerName: nm,
     customerPhone: ph,
     customerAddress: ad,
     customerNote: noteTrim ? noteTrim : deleteField(),
     statusHistory: hist,
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  if (input.delivery) {
+    const { isManualMatch, deliveryPointId, deliveryPointSnapshot } =
+      input.delivery;
+    patch.isManualMatch = isManualMatch;
+    patch.deliveryPointSnapshot = deliveryPointSnapshot;
+    if (!isManualMatch && deliveryPointId?.trim()) {
+      patch.deliveryPointId = deliveryPointId.trim();
+    } else {
+      patch.deliveryPointId = deleteField();
+    }
+  }
+
+  await updateDoc(orderRef, patch);
 }
 
 /** 顾客加购（仅加数量、扣库存；已确认订单会变为待补付款） */
@@ -543,6 +669,63 @@ export async function customerAppendLinesToOrder(input: {
     const delta = computeTotal(newLineDocs);
     if (delta <= 0) throw new Error('加购金额无效');
 
+    let nextInitialLines = order.initialLines;
+    let nextInitialTotal = order.initialTotalAmount;
+    if (!nextInitialLines?.length) {
+      nextInitialLines = order.lines;
+      nextInitialTotal = order.totalAmount;
+    }
+
+    const prevBatches = [...(order.appendBatches ?? [])];
+    const pendingIds = prevBatches
+      .filter((b) => !b.confirmedAt)
+      .map((b) => b.id);
+
+    let lastOpenIdx = -1;
+    for (let i = prevBatches.length - 1; i >= 0; i--) {
+      if (!prevBatches[i]?.confirmedAt) {
+        lastOpenIdx = i;
+        break;
+      }
+    }
+
+    const openBatch =
+      lastOpenIdx >= 0 ? prevBatches[lastOpenIdx]! : null;
+    /** 仅当「最后一档待确认加购」尚未上传任何凭证时才合并；已上传则新开一档 */
+    const mergeIntoOpenBatch =
+      openBatch != null &&
+      !appendBatchHasCustomerUpload(
+        order.paymentScreenshots,
+        openBatch.id,
+        openBatch.appendedAt,
+        pendingIds
+      );
+
+    let appendBatches: OrderAppendBatchDoc[];
+    let batchIdForNote: string;
+
+    if (mergeIntoOpenBatch) {
+      const cur = openBatch!;
+      batchIdForNote = cur.id;
+      const mergedBatch: OrderAppendBatchDoc = {
+        ...cur,
+        lines: [...cur.lines, ...newLineDocs],
+        deltaAmount: cur.deltaAmount + delta,
+      };
+      appendBatches = [...prevBatches];
+      appendBatches[lastOpenIdx] = mergedBatch;
+    } else {
+      const batchId = globalThis.crypto.randomUUID();
+      batchIdForNote = batchId;
+      const newBatch: OrderAppendBatchDoc = {
+        id: batchId,
+        appendedAt: Timestamp.now(),
+        lines: newLineDocs,
+        deltaAmount: delta,
+      };
+      appendBatches = [...prevBatches, newBatch];
+    }
+
     const mergedLines = [...order.lines, ...newLineDocs];
     const newTotal = computeTotal(mergedLines);
     const paid = Number(order.paidAmount) || 0;
@@ -555,7 +738,7 @@ export async function customerAppendLinesToOrder(input: {
     hist.push({
       action: 'customer_append_lines',
       timestamp: Timestamp.now(),
-      note: `+${delta.toFixed(2)}`,
+      note: `+${delta.toFixed(2)} batch=${batchIdForNote}`,
     });
 
     const prevStats = project.stats ?? {
@@ -569,6 +752,9 @@ export async function customerAppendLinesToOrder(input: {
 
     tx.update(orderRef, {
       lines: mergedLines,
+      initialLines: nextInitialLines,
+      initialTotalAmount: nextInitialTotal,
+      appendBatches,
       totalAmount: newTotal,
       pendingAmount: newPending,
       status: nextStatus,
@@ -601,6 +787,34 @@ export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
     });
 }
 
+/**
+ * 首笔应收（一次确认只认这一档）：优先 initialTotalAmount / initialLines；
+ * 无快照时（历史数据）用「当前应付 − 未确认加购档合计」估算。
+ */
+function computeFirstTrancheAmount(o: OrderDoc): number {
+  const total = Number(o.totalAmount) || 0;
+  const pendingAppendSum = (o.appendBatches ?? [])
+    .filter((b) => !b.confirmedAt)
+    .reduce((s, b) => s + (Number(b.deltaAmount) || 0), 0);
+
+  if (typeof o.initialTotalAmount === 'number' && o.initialTotalAmount > 0.001) {
+    return o.initialTotalAmount;
+  }
+  const lines = o.initialLines;
+  if (lines?.length) {
+    const sum = lines.reduce((s, l) => s + (Number(l.subtotal) || 0), 0);
+    if (sum > 0.001) return sum;
+  }
+  if (pendingAppendSum > 0.001) {
+    return Math.max(0, total - pendingAppendSum);
+  }
+  return total;
+}
+
+function hasUnconfirmedAppendBatch(o: OrderDoc): boolean {
+  return (o.appendBatches ?? []).some((b) => !b.confirmedAt);
+}
+
 async function assertMerchantCanManageOrder(
   actorUserId: string,
   order: OrderDoc
@@ -619,7 +833,10 @@ async function assertMerchantCanManageOrder(
   throw new Error('无权限操作该订单');
 }
 
-/** 商户确认收款：订单改为已确认，并更新项目统计（与下单时的 unpaid 计数对齐） */
+/**
+ * 商户确认「首笔」收款（顾客一次提交、多张凭证仍算首笔）：只入账首单小计对应金额。
+ * 若仍有未确认的加购档，订单进入 partial_paid，加购须另行逐笔/按批确认，避免整单误确认。
+ */
 export async function merchantConfirmPayment(
   orderFirestoreId: string,
   actorUserId: string
@@ -633,11 +850,10 @@ export async function merchantConfirmPayment(
 
   if (pre.status === 'confirmed') throw new Error('订单已是已确认状态');
   if (pre.status === 'cancelled') throw new Error('订单已取消');
-  if (
-    pre.status !== 'unpaid' &&
-    pre.status !== 'pending' &&
-    pre.status !== 'partial_paid'
-  ) {
+  if (pre.status === 'partial_paid') {
+    throw new Error('请在下方的「加购补款」区块逐笔确认，勿使用整单确认');
+  }
+  if (pre.status !== 'unpaid' && pre.status !== 'pending') {
     throw new Error('当前状态不可确认收款');
   }
 
@@ -645,7 +861,9 @@ export async function merchantConfirmPayment(
     const oSnap = await tx.get(orderRef);
     if (!oSnap.exists()) throw new Error('订单不存在');
     const o = oSnap.data() as OrderDoc;
-    if (o.status === 'confirmed') throw new Error('订单状态已变更，请刷新后重试');
+    if (o.status !== 'unpaid' && o.status !== 'pending') {
+      throw new Error('订单状态已变更，请刷新后重试');
+    }
 
     const projectRef = doc(db, 'projects', o.projectId);
     const pSnap = await tx.get(projectRef);
@@ -662,23 +880,30 @@ export async function merchantConfirmPayment(
       confirmedRevenue: 0,
     };
 
-    const history = [...(o.statusHistory ?? [])];
-    history.push({
-      action: 'confirm_payment',
-      timestamp: Timestamp.now(),
-      userId: actorUserId,
-    });
+    const totalAmt = Number(o.totalAmount) || 0;
+    const openAppend = hasUnconfirmedAppendBatch(o);
+    const firstPay = computeFirstTrancheAmount(o);
+    if (firstPay <= 0) throw new Error('无法计算首单可确认金额');
+    if (firstPay > totalAmt + 0.02) {
+      throw new Error('首单金额与订单合计不一致，请刷新后重试');
+    }
 
-    if (o.status === 'partial_paid') {
-      const supplement = Number(o.pendingAmount) || 0;
-      if (supplement <= 0) {
-        throw new Error('当前无需确认补款');
-      }
+    const history = [...(o.statusHistory ?? [])];
+
+    /** 只要还有未入账的加购档，首笔确认永远不整单结清、不自动勾选加购批次 */
+    if (!openAppend) {
+      history.push({
+        action: 'confirm_payment',
+        timestamp: Timestamp.now(),
+        userId: actorUserId,
+      });
 
       tx.update(orderRef, {
         status: 'confirmed',
-        paidAmount: o.totalAmount,
+        paidAmount: totalAmt,
         pendingAmount: 0,
+        appendBatches: o.appendBatches ?? [],
+        initialPaymentConfirmedAt: o.initialPaymentConfirmedAt ?? Timestamp.now(),
         statusHistory: history,
         updatedAt: serverTimestamp(),
       });
@@ -686,17 +911,29 @@ export async function merchantConfirmPayment(
       tx.update(projectRef, {
         stats: {
           ...prevStats,
-          confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+          confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1,
+          unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
+          confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + totalAmt,
         },
         updatedAt: serverTimestamp(),
       });
       return;
     }
 
+    const nextPending = Math.max(0, totalAmt - firstPay);
+    history.push({
+      action: 'confirm_initial_payment',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+      note: `initial=${firstPay.toFixed(2)}`,
+    });
+
     tx.update(orderRef, {
-      status: 'confirmed',
-      paidAmount: o.totalAmount,
-      pendingAmount: 0,
+      status: 'partial_paid',
+      paidAmount: firstPay,
+      pendingAmount: nextPending,
+      appendBatches: o.appendBatches ?? [],
+      initialPaymentConfirmedAt: o.initialPaymentConfirmedAt ?? Timestamp.now(),
       statusHistory: history,
       updatedAt: serverTimestamp(),
     });
@@ -704,9 +941,312 @@ export async function merchantConfirmPayment(
     tx.update(projectRef, {
       stats: {
         ...prevStats,
-        confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1,
         unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
-        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + o.totalAmount,
+        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + firstPay,
+      },
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 商户确认某一档加购的补款（仅订单处于待补付款且该档未确认时） */
+export async function merchantConfirmAppendBatch(
+  orderFirestoreId: string,
+  appendBatchId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+
+  if (
+    pre.status !== 'unpaid' &&
+    pre.status !== 'pending' &&
+    pre.status !== 'partial_paid'
+  ) {
+    throw new Error('当前状态不可按笔确认加购补款');
+  }
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (
+      o.status !== 'unpaid' &&
+      o.status !== 'pending' &&
+      o.status !== 'partial_paid'
+    ) {
+      throw new Error('订单状态已变更，请刷新后重试');
+    }
+
+    const projectRef = doc(db, 'projects', o.projectId);
+    const pSnap = await tx.get(projectRef);
+    if (!pSnap.exists()) throw new Error('项目不存在');
+    const project = pSnap.data() as ProjectDoc;
+    if (project.shopId !== o.shopId) throw new Error('数据不一致');
+
+    const batches = [...(o.appendBatches ?? [])];
+    const idx = batches.findIndex((b) => b.id === appendBatchId);
+    if (idx < 0) throw new Error('找不到该加购记录');
+    const batch = batches[idx]!;
+    if (batch.confirmedAt) throw new Error('该笔加购已确认');
+
+    const pendingIds = batches.filter((b) => !b.confirmedAt).map((b) => b.id);
+    if (
+      !canMerchantConfirmAppendBatchByScreenshots(
+        o.paymentScreenshots,
+        appendBatchId,
+        pendingIds,
+        batch.appendedAt
+      )
+    ) {
+      throw new Error('该笔加购尚未上传对应付款截图，请待顾客提交后再确认');
+    }
+
+    const supplement = Number(batch.deltaAmount) || 0;
+    if (supplement <= 0) throw new Error('该笔加购金额无效');
+
+    const paidBefore = Number(o.paidAmount) || 0;
+    const newPaid = paidBefore + supplement;
+    const newPending = Math.max(0, (Number(o.totalAmount) || 0) - newPaid);
+    const nextStatus: OrderStatus =
+      newPending <= 0.001 ? 'confirmed' : 'partial_paid';
+
+    batches[idx] = {
+      ...batch,
+      confirmedAt: Timestamp.now(),
+      confirmedByUserId: actorUserId,
+    };
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'confirm_append_batch',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+      note: appendBatchId,
+    });
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+
+    tx.update(orderRef, {
+      appendBatches: batches,
+      paidAmount: newPaid,
+      pendingAmount: newPending,
+      status: nextStatus,
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+    });
+
+    tx.update(projectRef, {
+      stats: {
+        ...prevStats,
+        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+        ...(nextStatus === 'confirmed'
+          ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
+          : {}),
+      },
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 一次性确认当前所有「待核实」加购补款（多档待确认时一并入账） */
+export async function merchantConfirmPendingAppendBatches(
+  orderFirestoreId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+
+  if (pre.status !== 'partial_paid') {
+    throw new Error('当前没有待确认的加购补款');
+  }
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status !== 'partial_paid') {
+      throw new Error('订单状态已变更，请刷新后重试');
+    }
+
+    const projectRef = doc(db, 'projects', o.projectId);
+    const pSnap = await tx.get(projectRef);
+    if (!pSnap.exists()) throw new Error('项目不存在');
+    const project = pSnap.data() as ProjectDoc;
+    if (project.shopId !== o.shopId) throw new Error('数据不一致');
+
+    const batches = [...(o.appendBatches ?? [])];
+    const pending = batches.filter((b) => !b.confirmedAt);
+    if (pending.length === 0) {
+      throw new Error('没有待确认的加购补款');
+    }
+    const pendingIds = pending.map((b) => b.id);
+
+    if (
+      !canMerchantConfirmPendingAppendLump(
+        o.paymentScreenshots,
+        pending.map((b) => ({ id: b.id, appendedAt: b.appendedAt }))
+      )
+    ) {
+      throw new Error('加购补款尚未上传对应付款截图，请待顾客提交后再确认');
+    }
+
+    const supplement = pending.reduce(
+      (s, b) => s + (Number(b.deltaAmount) || 0),
+      0
+    );
+    if (supplement <= 0) throw new Error('加购金额无效');
+
+    const now = Timestamp.now();
+    const newBatches = batches.map((b) => {
+      if (!b.confirmedAt && pendingIds.includes(b.id)) {
+        return {
+          ...b,
+          confirmedAt: now,
+          confirmedByUserId: actorUserId,
+        };
+      }
+      return b;
+    });
+
+    const paidBefore = Number(o.paidAmount) || 0;
+    const newPaid = paidBefore + supplement;
+    const newPending = Math.max(0, (Number(o.totalAmount) || 0) - newPaid);
+    const nextStatus: OrderStatus =
+      newPending <= 0.001 ? 'confirmed' : 'partial_paid';
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'confirm_pending_append_batches',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+      note: pendingIds.join(','),
+    });
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+
+    tx.update(orderRef, {
+      appendBatches: newBatches,
+      paidAmount: newPaid,
+      pendingAmount: newPending,
+      status: nextStatus,
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+    });
+
+    tx.update(projectRef, {
+      stats: {
+        ...prevStats,
+        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+        ...(nextStatus === 'confirmed'
+          ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
+          : {}),
+      },
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 商户/管理员免核验：强制确认订单里所有待确认组（用于异常兜底入账） */
+export async function merchantForceConfirmAllPendingGroups(
+  orderFirestoreId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+
+  if (pre.status === 'cancelled') throw new Error('订单已取消');
+  if (pre.status === 'confirmed') throw new Error('订单已全部确认，无需免核验');
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status === 'cancelled') throw new Error('订单已取消');
+    if (o.status === 'confirmed') throw new Error('订单已全部确认，无需免核验');
+
+    const projectRef = doc(db, 'projects', o.projectId);
+    const pSnap = await tx.get(projectRef);
+    if (!pSnap.exists()) throw new Error('项目不存在');
+    const project = pSnap.data() as ProjectDoc;
+    if (project.shopId !== o.shopId) throw new Error('数据不一致');
+
+    const now = Timestamp.now();
+    const appendBatches = (o.appendBatches ?? []).map((b) =>
+      b.confirmedAt
+        ? b
+        : {
+            ...b,
+            confirmedAt: now,
+            confirmedByUserId: actorUserId,
+          }
+    );
+
+    const totalAmt = Number(o.totalAmount) || 0;
+    const paidBefore = Number(o.paidAmount) || 0;
+    const deltaConfirmedRevenue = Math.max(0, totalAmt - paidBefore);
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'force_confirm_all_pending_groups',
+      timestamp: now,
+      userId: actorUserId,
+    });
+
+    tx.update(orderRef, {
+      status: 'confirmed',
+      paidAmount: totalAmt,
+      pendingAmount: 0,
+      appendBatches,
+      initialPaymentConfirmedAt: o.initialPaymentConfirmedAt ?? now,
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+    });
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+
+    tx.update(projectRef, {
+      stats: {
+        ...prevStats,
+        ...(o.status === 'unpaid' || o.status === 'pending'
+          ? { unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1) }
+          : {}),
+        confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1,
+        confirmedRevenue:
+          (prevStats.confirmedRevenue ?? 0) + deltaConfirmedRevenue,
       },
       updatedAt: serverTimestamp(),
     });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
@@ -7,7 +7,8 @@ import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listDeliveryPointsByShopId } from '../../lib/deliveryPointService';
-import { createOrder, CreateOrderError } from '../../lib/orderService';
+import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
+import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
@@ -42,6 +43,10 @@ export default function OrderForm() {
   const [address, setAddress] = useState('');
   const [note, setNote] = useState('');
   const [deliveryId, setDeliveryId] = useState<string>('');
+  /** 用户对当前推测配送点点「否」后记录该配送点 id；推测变化时需重新确认 */
+  const [dismissedSuggestionId, setDismissedSuggestionId] = useState<
+    string | null
+  >(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitHint, setSubmitHint] = useState<string | null>(null);
@@ -51,6 +56,12 @@ export default function OrderForm() {
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectDoc | null>(null);
   const [points, setPoints] = useState<MockDeliveryPoint[]>([]);
+  const contactPrefilledRef = useRef(false);
+  const [didPrefillFromLastOrder, setDidPrefillFromLastOrder] = useState(false);
+
+  useEffect(() => {
+    contactPrefilledRef.current = false;
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +118,52 @@ export default function OrderForm() {
     };
   }, [projectId, shopSlug]);
 
+  /** 第二次及以后下单：姓名/电话；配送点与地址在第二步按上一笔订单预填（可改；备注不预填） */
+  useEffect(() => {
+    if (!project || booting || bootErr || contactPrefilledRef.current) return;
+    const pid = decodeURIComponent(projectId);
+    let cancelled = false;
+    void listOrdersByCustomer(pid, getOrCreateCustomerKey())
+      .then((rows) => {
+        if (cancelled || contactPrefilledRef.current) return;
+        const usable = rows
+          .filter((r) => r.data.status !== 'cancelled')
+          .sort(
+            (a, b) =>
+              (b.data.createdAt?.toMillis?.() ?? 0) -
+              (a.data.createdAt?.toMillis?.() ?? 0)
+          );
+        const prev = usable[0];
+        if (!prev) return;
+        contactPrefilledRef.current = true;
+        const d = prev.data;
+        setDidPrefillFromLastOrder(true);
+        setName((n) => (n.trim() !== '' ? n : d.customerName?.trim() ?? ''));
+        setPhone((p) => (p.trim() !== '' ? p : d.customerPhone?.trim() ?? ''));
+
+        const addr = d.customerAddress?.trim() ?? '';
+        const pointOk =
+          Boolean(d.deliveryPointId) &&
+          !d.isManualMatch &&
+          points.some((p) => p.id === d.deliveryPointId);
+
+        if (pointOk && d.deliveryPointId) {
+          setDeliveryId(d.deliveryPointId);
+          setAddress((a) => (a.trim() !== '' ? a : addr));
+        } else {
+          setDeliveryId(OTHER_DELIVERY_ID);
+          setAddress((a) => (a.trim() !== '' ? a : addr));
+        }
+        setDismissedSuggestionId(null);
+      })
+      .catch(() => {
+        /* 静默失败，仍可手动填写 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project, booting, bootErr, projectId, points]);
+
   const resolvedProjectTitle = project?.title?.trim() || projectTitleState;
   const canPlaceOrder = project ? projectAllowsCustomerOrder(project) : false;
 
@@ -131,19 +188,51 @@ export default function OrderForm() {
     };
   }, [deliveryId, points]);
 
-  const canGoStep2 =
-    canPlaceOrder &&
-    name.trim().length > 0 &&
-    phone.trim().length > 0 &&
-    address.trim().length > 0;
+  const suggestedPoint = useMemo(() => {
+    if (deliveryId !== OTHER_DELIVERY_ID) return null;
+    const line = address.trim();
+    if (line.length < 2) return null;
+    return suggestDeliveryPointFromAddress(line, points);
+  }, [deliveryId, address, points]);
 
-  const canGoStep3 = canPlaceOrder && deliveryId.length > 0;
+  const resolvedCustomerAddress = useMemo(() => {
+    const line = address.trim();
+    if (line) return line;
+    if (deliveryId && deliveryId !== OTHER_DELIVERY_ID) {
+      const p = points.find((x) => x.id === deliveryId);
+      if (p) {
+        const bits = [p.name, p.detailAddress].filter(Boolean);
+        return bits.length ? `配送点：${bits.join(' · ')}` : `配送点：${p.name}`;
+      }
+    }
+    return '';
+  }, [address, deliveryId, points]);
+
+  const canGoStep2 =
+    canPlaceOrder && name.trim().length > 0 && phone.trim().length > 0;
+
+  const otherNeedsResolve =
+    deliveryId === OTHER_DELIVERY_ID &&
+    suggestedPoint !== null &&
+    dismissedSuggestionId !== suggestedPoint.id;
+
+  const canGoStep3 =
+    canPlaceOrder &&
+    deliveryId.length > 0 &&
+    (deliveryId === OTHER_DELIVERY_ID
+      ? address.trim().length > 0 && !otherNeedsResolve
+      : true);
 
   const handleSubmit = async () => {
     setSubmitError(null);
     setSubmitHint(null);
     if (!canPlaceOrder || !canGoStep3 || submitting) return;
     const isManualMatch = deliveryId === OTHER_DELIVERY_ID;
+    const addrOut = resolvedCustomerAddress;
+    if (!addrOut.trim()) {
+      setSubmitError('请填写或确认配送地址信息。');
+      return;
+    }
     const customerKey = getOrCreateCustomerKey();
     try {
       setSubmitting(true);
@@ -153,11 +242,11 @@ export default function OrderForm() {
         customerKey,
         customerName: name.trim(),
         customerPhone: phone.trim(),
-        customerAddress: address.trim(),
+        customerAddress: addrOut,
         customerNote: note.trim() || undefined,
         deliveryPointId: isManualMatch ? undefined : deliveryId,
         deliveryPointLabel: isManualMatch
-          ? `其他（将按地址手动匹配）：${address.trim()}`
+          ? `其他（将按地址手动匹配）：${addrOut}`
           : deliveryLabel,
         deliverySnapshot:
           isManualMatch || !deliverySnapshot.name
@@ -252,7 +341,7 @@ export default function OrderForm() {
         </span>
         <span>→</span>
         <span className={activeStep >= 2 ? 'font-semibold text-gray-900' : ''}>
-          ② 配送点
+          ② 配送
         </span>
         <span>→</span>
         <span className={activeStep >= 3 ? 'font-semibold text-gray-900' : ''}>
@@ -286,6 +375,11 @@ export default function OrderForm() {
       {activeStep === 1 ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">填写信息</h2>
+          {didPrefillFromLastOrder ? (
+            <p className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-950">
+              已根据你在<strong>本项目上一笔订单</strong>自动填入姓名、电话，可直接修改。配送方式与地址在下一步填写或确认。
+            </p>
+          ) : null}
           <label className="block text-sm text-gray-700">
             姓名 <span className="text-red-600">*</span>
             <input
@@ -308,22 +402,12 @@ export default function OrderForm() {
             />
           </label>
           <label className="block text-sm text-gray-700">
-            地址 <span className="text-red-600">*</span>
-            <input
-              className={inputCls}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              autoComplete="street-address"
-              placeholder="楼栋门牌等"
-            />
-          </label>
-          <label className="block text-sm text-gray-700">
             备注 <span className="text-gray-400">（选填）</span>
             <input
               className={inputCls}
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="口味、忌口等"
+              placeholder="备注请按需填写"
             />
           </label>
           <div className="flex flex-wrap gap-2 pt-2">
@@ -339,7 +423,7 @@ export default function OrderForm() {
               disabled={!canGoStep2}
               onClick={() => setStep(2)}
             >
-              下一步：配送点
+              下一步：配送
             </button>
           </div>
         </div>
@@ -347,11 +431,18 @@ export default function OrderForm() {
 
       {activeStep === 2 ? (
         <div className="space-y-3">
-          <h2 className="text-base font-semibold text-gray-900">选择配送点</h2>
-          <p className="text-sm text-gray-600">请选择本次取餐/送达位置。</p>
+          <h2 className="text-base font-semibold text-gray-900">配送方式与地址</h2>
+          <p className="text-sm text-gray-600">
+            请先选择配送点；若没有合适的选项，再选择「以上都不对」并填写详细地址。
+          </p>
+          {didPrefillFromLastOrder ? (
+            <p className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-950">
+              已带入<strong>上一笔订单</strong>的配送点与地址（如有），请确认是否仍正确。
+            </p>
+          ) : null}
           {points.length === 0 ? (
             <p className="text-sm text-amber-800">
-              商户尚未配置可用配送点；你可选择「其他」由商户手动匹配。
+              商户尚未配置可用配送点；请填写详细地址，由商户手动匹配。
             </p>
           ) : null}
           <div className="space-y-2">
@@ -363,7 +454,10 @@ export default function OrderForm() {
                     name="delivery"
                     className="mt-1 h-4 w-4"
                     checked={deliveryId === p.id}
-                    onChange={() => setDeliveryId(p.id)}
+                    onChange={() => {
+                      setDeliveryId(p.id);
+                      setDismissedSuggestionId(null);
+                    }}
                   />
                   <span className="min-w-0 flex-1 text-sm text-gray-900">
                     {p.name}
@@ -403,16 +497,85 @@ export default function OrderForm() {
                 name="delivery"
                 className="mt-1 h-4 w-4"
                 checked={deliveryId === OTHER_DELIVERY_ID}
-                onChange={() => setDeliveryId(OTHER_DELIVERY_ID)}
+                onChange={() => {
+                  setDeliveryId(OTHER_DELIVERY_ID);
+                  setDismissedSuggestionId(null);
+                }}
               />
               <span className="min-w-0 flex-1 text-sm text-gray-900">
                 以上都不对（其他）
                 <span className="mt-1 block text-xs text-amber-900">
-                  将使用你填写的地址，由商户手动匹配配送点。
+                  填写你的详细地址；系统将尝试匹配配送点，也可选择按单独地址由商户配送。
                 </span>
               </span>
             </label>
           </div>
+
+          {deliveryId && deliveryId !== OTHER_DELIVERY_ID ? (
+            <label className="block text-sm text-gray-700">
+              补充地址 / 门牌（选填）
+              <textarea
+                className={`${inputCls} min-h-[88px] resize-y`}
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                autoComplete="street-address"
+                placeholder="如需送货上门请填写栋号、单元；若到配送点自取可留空。"
+              />
+            </label>
+          ) : null}
+
+          {deliveryId === OTHER_DELIVERY_ID ? (
+            <div className="space-y-3">
+              <label className="block text-sm text-gray-700">
+                详细地址 <span className="text-red-600">*</span>
+                <textarea
+                  className={`${inputCls} min-h-[100px] resize-y`}
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  autoComplete="street-address"
+                  placeholder="楼栋、门牌、片区等，便于商户或骑手送达。"
+                />
+              </label>
+              {suggestedPoint ? (
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/80 px-3 py-3 text-sm text-indigo-950">
+                  <p className="font-medium text-indigo-950">
+                    根据你填的地址，系统推测你可能属于配送点「{suggestedPoint.name}」，是否使用该配送点？
+                  </p>
+                  {suggestedPoint.detailAddress ? (
+                    <p className="mt-1 text-xs text-indigo-900/90">
+                      参考：{suggestedPoint.detailAddress}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="inline-flex h-10 flex-1 min-w-[8rem] items-center justify-center rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white"
+                      onClick={() => {
+                        setDeliveryId(suggestedPoint.id);
+                        setDismissedSuggestionId(null);
+                      }}
+                    >
+                      是，使用该配送点
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex h-10 flex-1 min-w-[8rem] items-center justify-center rounded-lg border border-indigo-200 bg-white px-3 text-sm font-medium text-indigo-900"
+                      onClick={() =>
+                        setDismissedSuggestionId(suggestedPoint.id)
+                      }
+                    >
+                      否，按单独地址配送
+                    </button>
+                  </div>
+                  {otherNeedsResolve ? (
+                    <p className="mt-2 text-xs text-indigo-800">
+                      请选择「是」或「否」后再进入下一步。
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap gap-2 pt-2">
             <button
@@ -441,10 +604,13 @@ export default function OrderForm() {
             <div className="font-medium text-gray-900">顾客信息</div>
             <p className="mt-1">姓名：{name.trim()}</p>
             <p>电话：{phone.trim()}</p>
-            <p>地址：{address.trim()}</p>
             {note.trim() ? <p>备注：{note.trim()}</p> : <p>备注：（无）</p>}
-            <div className="mt-3 font-medium text-gray-900">配送</div>
-            <p className="mt-1">{deliveryLabel}</p>
+            <div className="mt-3 font-medium text-gray-900">配送与地址</div>
+            <p className="mt-1">方式：{deliveryLabel}</p>
+            <p className="mt-1 break-words">
+              地址与说明：
+              {resolvedCustomerAddress || '（将根据所选配送点自动生成）'}
+            </p>
           </div>
           <p className="text-xs text-gray-500">提交后会写入数据库，并进行库存校验。</p>
           {submitError ? (

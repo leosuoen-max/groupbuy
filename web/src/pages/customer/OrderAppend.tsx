@@ -203,7 +203,7 @@ export default function OrderAppend() {
   return (
     <PageShell title="加菜补单" subtitle={`订单 #${o.orderNumber}`}>
       <p className="mb-3 text-xs leading-relaxed text-gray-600">
-        以下为<strong>本次加购</strong>；提交后会合并进原订单并更新应付金额。仅可增加数量，不能在线减菜（需减请取消整单重下或联系商户）。
+        以下为<strong>本次加购</strong>；提交后会更新原订单与应付。若当前待确认加购尚未上传付款截图，本次会与其合并为同一档；若已上传，则成为新一档待确认。仅可增加数量，不能在线减菜（需减请取消整单重下或联系商户）。
       </p>
 
       <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-700">
