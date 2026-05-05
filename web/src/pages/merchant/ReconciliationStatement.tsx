@@ -29,6 +29,14 @@ function statusLabel(s: OrderStatus): string {
   return s;
 }
 
+function statusPillClass(s: OrderStatus): string {
+  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (s === 'pending') return 'bg-sky-100 text-sky-900';
+  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
+  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
 function orderLinesSummary(lines: OrderRow['data']['lines']): string {
   if (!lines?.length) return '—';
   const first = lines[0];
@@ -263,14 +271,18 @@ export default function ReconciliationStatement() {
 
   return (
     <PageShell title="对账单" subtitle={`${shopName} · 与收款流水对账用`}>
-      {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
+      {err ? (
+        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {err}
+        </p>
+      ) : null}
 
       <p className="mb-4 text-xs text-gray-600">
         汇总口径与 docs/04 一致：已确认到账、待确认、待付款；可与 TNG / DuitNow /
         银行等收款明细逐笔核对。
       </p>
 
-      <div className="mb-4">
+      <div className="mb-4 rounded-xl border border-gray-100 bg-white p-3">
         <label className="block text-sm text-gray-800">
           筛选项目
           <select
@@ -329,7 +341,7 @@ export default function ReconciliationStatement() {
         </p>
       </div>
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
           <div className="text-xs font-medium text-emerald-800">已确认到账</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-emerald-900">
@@ -360,7 +372,7 @@ export default function ReconciliationStatement() {
         </div>
       </div>
 
-      <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800">
+      <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 shadow-sm">
         <div className="font-medium">全口径核对</div>
         <p className="mt-1 tabular-nums">
           已确认 + 待确认 + 待付款 = {formatMYR(fullCaliberAmount)}
@@ -414,7 +426,13 @@ export default function ReconciliationStatement() {
         </button>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-100">
+      {sortedRows.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
+          <p className="text-sm font-medium text-gray-700">当前筛选范围暂无订单</p>
+          <p className="mt-1 text-xs text-gray-500">可放宽时间窗口或切换项目查看。</p>
+        </div>
+      ) : (
+      <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
             <tr>
@@ -449,7 +467,15 @@ export default function ReconciliationStatement() {
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums font-medium">
                     {formatMYR(o.totalAmount)}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2">{statusLabel(o.status)}</td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusPillClass(
+                        o.status
+                      )}`}
+                    >
+                      {statusLabel(o.status)}
+                    </span>
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs">
                     {hasShot ? (
                       <span className="text-emerald-700">有</span>
@@ -463,6 +489,7 @@ export default function ReconciliationStatement() {
           </tbody>
         </table>
       </div>
+      )}
 
       <div className="mt-6 flex flex-wrap gap-2">
         <Link

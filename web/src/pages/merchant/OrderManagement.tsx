@@ -14,6 +14,14 @@ import type { OrderAppendBatchDoc, OrderDoc, OrderStatus } from '../../types/fir
 
 type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
 
+function statusPillClass(s: OrderStatus): string {
+  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (s === 'pending') return 'bg-sky-100 text-sky-900';
+  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
+  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
   if (s === 'pending') return '待确认';
@@ -236,9 +244,13 @@ export default function OrderManagement() {
 
   return (
     <PageShell title="订单管理" subtitle={shopRow?.name}>
-      {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
+      {err ? (
+        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {err}
+        </p>
+      ) : null}
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-3 rounded-xl border border-gray-100 bg-white p-3">
         <label className="block text-sm text-gray-700">
           筛选项目
           <select
@@ -246,7 +258,10 @@ export default function OrderManagement() {
             value={projectFilter}
             onChange={(e) => {
               const v = e.target.value;
-              setSearchParams(v ? { project: v } : {});
+              const next = new URLSearchParams(searchParams);
+              if (v) next.set('project', v);
+              else next.delete('project');
+              setSearchParams(next);
             }}
           >
             <option value="">全部项目</option>
@@ -263,14 +278,14 @@ export default function OrderManagement() {
         同一订单可同时出现在多个标签：例如首单待确认(pending)时又加购未付→会在「待确认」与「待付款」各出现一笔（同一订单号）。
       </p>
 
-      <div className="mb-4 flex flex-wrap gap-1 border-b border-gray-100 pb-2">
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-gray-100 bg-gray-50 p-1.5">
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
             className={`rounded-full px-3 py-1.5 text-sm font-medium ${
               tab === t.id
-                ? 'bg-gray-900 text-white'
+                ? 'bg-gray-900 text-white shadow-sm'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
             onClick={() => setTab(t.id)}
@@ -282,7 +297,10 @@ export default function OrderManagement() {
       </div>
 
       {sortedFiltered.length === 0 ? (
-        <p className="text-sm text-gray-600">暂无订单。</p>
+        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
+          <p className="text-sm font-medium text-gray-700">暂无订单</p>
+          <p className="mt-1 text-xs text-gray-500">可切换其他标签或调整项目筛选。</p>
+        </div>
       ) : (
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
           {sortedFiltered.map((row) => {
@@ -310,20 +328,25 @@ export default function OrderManagement() {
                     </div>
                   )}
                   <div className="min-w-0 flex-1">
-                  <div className="font-medium text-gray-900">
-                    #{d.orderNumber}{' '}
-                    <span className="font-normal text-gray-600">{d.customerName}</span>
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-gray-500">
-                    {d.projectTitle}
-                    {' · '}
-                    {statusLabel(d.status)}
-                    {hasShot ? (
-                      <span className="ml-1 font-medium text-emerald-700">· 已传凭证</span>
-                    ) : (
-                      <span className="ml-1 text-gray-400">· 未传图</span>
-                    )}
-                  </div>
+                    <div className="font-medium text-gray-900">
+                      #{d.orderNumber}{' '}
+                      <span className="font-normal text-gray-600">{d.customerName}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                      <span className="truncate">{d.projectTitle}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 font-medium ${statusPillClass(
+                          d.status
+                        )}`}
+                      >
+                        {statusLabel(d.status)}
+                      </span>
+                      {hasShot ? (
+                        <span className="font-medium text-emerald-700">已传凭证</span>
+                      ) : (
+                        <span className="text-gray-400">未传图</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
@@ -334,7 +357,7 @@ export default function OrderManagement() {
                     to={merchantDetailUrl}
                     className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
                   >
-                    商户处理
+                    查看并处理
                   </Link>
                   <Link
                     to={customerUrl}

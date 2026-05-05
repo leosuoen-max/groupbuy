@@ -27,6 +27,14 @@ const statusLabel: Record<string, string> = {
   cancelled: '已取消',
 };
 
+function statusPillClass(s: string): string {
+  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (s === 'pending') return 'bg-sky-100 text-sky-950';
+  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
+  if (s === 'cancelled') return 'bg-gray-200 text-gray-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
 function isNoteEntry(
   x: unknown
 ): x is { body: string; userId: string; createdAt: { toDate: () => Date } } {
@@ -456,21 +464,24 @@ export default function MerchantOrderDetail() {
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
       {msg ? (
-        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {msg}
         </p>
       ) : null}
 
       <div className="space-y-4 text-sm text-gray-800">
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
-          <div className="text-lg font-bold">#{order.orderNumber}</div>
-          <p className="mt-1 text-sm">下单时间：{timeStr}</p>
-          <p>
-            状态：
-            <span className="font-medium">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-lg font-bold">#{order.orderNumber}</div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusPillClass(
+                order.status
+              )}`}
+            >
               {statusLabel[order.status] ?? order.status}
             </span>
-          </p>
+          </div>
+          <p className="mt-1 text-sm">下单时间：{timeStr}</p>
           <p className="mt-1">
             应付：<strong>{formatMYR(order.totalAmount)}</strong>
             {order.status === 'confirmed' || order.status === 'partial_paid' ? (
@@ -593,7 +604,11 @@ export default function MerchantOrderDetail() {
               />
             ))}
           </div>
-        ) : null}
+        ) : (
+          <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-xs text-gray-500">
+            暂无已确认的加购记录。
+          </div>
+        )}
 
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">订单当前合计</h2>
@@ -679,7 +694,7 @@ export default function MerchantOrderDetail() {
           <button
             type="button"
             disabled={busy !== null || !noteDraft.trim()}
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-medium text-gray-900 disabled:bg-gray-100"
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
             onClick={() => void handleNote()}
           >
             {busy === 'note' ? '保存中…' : '保存备注'}
