@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { PaymentScreenshotsPanel } from '../../components/merchant/PaymentScreenshotsPanel';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
@@ -176,8 +177,45 @@ export default function MerchantOrderDetail() {
           </p>
         </div>
 
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">
+            商品明细 · 金额核对
+          </h2>
+          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
+            {order.lines.map((l) => (
+              <li
+                key={`${l.productId}-${l.name}`}
+                className="flex justify-between gap-2 px-3 py-2"
+              >
+                <span>
+                  {l.name} ×{l.quantity}
+                </span>
+                <span className="tabular-nums font-medium">
+                  {formatMYR(l.subtotal)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
+            <span>应付合计</span>
+            <span>{formatMYR(order.totalAmount)}</span>
+          </div>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">
+            付款凭证（打款截图）
+          </h2>
+          <PaymentScreenshotsPanel paymentScreenshots={order.paymentScreenshots} />
+        </div>
+
         <div className="rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-3">
-          <div className="mb-2 text-sm font-semibold text-gray-900">商户操作</div>
+          <div className="mb-2 text-sm font-semibold text-gray-900">
+            核对后确认收款
+          </div>
+          <p className="mb-3 text-xs text-gray-600">
+            请对照上方<strong>凭证</strong>与<strong>商品金额、下单时间</strong>一致后再确认。
+          </p>
           {canConfirm ? (
             <button
               type="button"
@@ -206,25 +244,6 @@ export default function MerchantOrderDetail() {
               {order.deliveryPointSnapshot.detail}
             </p>
           ) : null}
-        </div>
-
-        <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">商品</h2>
-          <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-            {order.lines.map((l) => (
-              <li
-                key={`${l.productId}-${l.name}`}
-                className="flex justify-between gap-2 px-3 py-2"
-              >
-                <span>
-                  {l.name} ×{l.quantity}
-                </span>
-                <span className="tabular-nums font-medium">
-                  {formatMYR(l.subtotal)}
-                </span>
-              </li>
-            ))}
-          </ul>
         </div>
 
         <div>

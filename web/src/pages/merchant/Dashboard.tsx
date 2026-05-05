@@ -93,6 +93,12 @@ export default function MerchantDashboard() {
           订单管理
         </Link>
         <Link
+          to={`${base}/reconciliation`}
+          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+        >
+          对账单
+        </Link>
+        <Link
           to={`${base}/settings`}
           className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
         >

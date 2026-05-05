@@ -14,6 +14,7 @@ import ProjectList from './pages/merchant/ProjectList';
 import ProjectEdit from './pages/merchant/ProjectEdit';
 import OrderManagement from './pages/merchant/OrderManagement';
 import MerchantOrderDetail from './pages/merchant/MerchantOrderDetail';
+import ReconciliationStatement from './pages/merchant/ReconciliationStatement';
 import DeliveryPoints from './pages/merchant/DeliveryPoints';
 import AdminManagement from './pages/merchant/AdminManagement';
 import ShopSettings from './pages/merchant/ShopSettings';
@@ -47,6 +48,10 @@ export function AppRoutes() {
       <Route
         path="/dashboard/:shopSlug/orders"
         element={<OrderManagement />}
+      />
+      <Route
+        path="/dashboard/:shopSlug/reconciliation"
+        element={<ReconciliationStatement />}
       />
       <Route
         path="/dashboard/:shopSlug/delivery-points"

@@ -3,6 +3,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
+import {
+  orderHasPaymentScreenshots,
+  parseScreenshotEntries,
+} from '../../lib/paymentScreenshotHelpers';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
 import { getShopBySlug } from '../../lib/shopService';
 import type { OrderStatus } from '../../types/firestore';
@@ -206,9 +210,26 @@ export default function OrderManagement() {
             const pathSlug = shopRow?.slug ?? slug;
             const merchantDetailUrl = `/dashboard/${encodeURIComponent(pathSlug)}/order/${encodeURIComponent(d.projectId)}/${encodeURIComponent(d.orderNumber)}`;
             const customerUrl = `/shop/${encodeURIComponent(pathSlug)}/${encodeURIComponent(d.projectId)}/orders/${encodeURIComponent(d.orderNumber)}`;
+            const shots = parseScreenshotEntries(d.paymentScreenshots);
+            const thumbUrl = shots.find((s) => s.url)?.url ?? null;
+            const hasShot = orderHasPaymentScreenshots(d.paymentScreenshots);
             return (
               <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm">
-                <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-1 gap-3">
+                  {thumbUrl ? (
+                    <img
+                      src={thumbUrl}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded-lg border border-gray-100 object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-[10px] leading-tight text-gray-400">
+                      无
+                      <br />
+                      凭证
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
                   <div className="font-medium text-gray-900">
                     #{d.orderNumber}{' '}
                     <span className="font-normal text-gray-600">{d.customerName}</span>
@@ -217,6 +238,12 @@ export default function OrderManagement() {
                     {d.projectTitle}
                     {' · '}
                     {statusLabel(d.status)}
+                    {hasShot ? (
+                      <span className="ml-1 font-medium text-emerald-700">· 已传凭证</span>
+                    ) : (
+                      <span className="ml-1 text-gray-400">· 未传图</span>
+                    )}
+                  </div>
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
@@ -242,7 +269,13 @@ export default function OrderManagement() {
         </ul>
       )}
 
-      <div className="mt-6">
+      <div className="mt-6 flex flex-wrap gap-2">
+        <Link
+          to={`${baseDash}/reconciliation`}
+          className="inline-flex h-10 items-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white"
+        >
+          对账单
+        </Link>
         <Link
           to={baseDash}
           className="inline-flex h-10 items-center rounded-xl border border-gray-200 px-4 text-sm font-medium text-gray-800"
