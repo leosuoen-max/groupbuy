@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
-import { getOrderByNumber } from '../../lib/orderService';
+import {
+  customerUploadPaymentScreenshot,
+  getOrderByNumber,
+  type OrderRow,
+} from '../../lib/orderService';
+import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
+import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
 import type { OrderDoc } from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
@@ -14,6 +20,15 @@ const statusLabel: Record<string, string> = {
   cancelled: '已取消',
 };
 
+const uploadAllowedStatuses = new Set(['unpaid', 'pending', 'partial_paid']);
+
+function flagLabel(flag: 'green' | 'yellow' | 'red' | null): string {
+  if (flag === 'red') return '需核对（重复风险）';
+  if (flag === 'yellow') return '需核对（时间异常）';
+  if (flag === 'green') return '已上传';
+  return '';
+}
+
 export default function OrderDetail() {
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
     shopSlug: string;
@@ -21,9 +36,23 @@ export default function OrderDetail() {
     orderId: string;
   }>();
   const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+  const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [order, setOrder] = useState<OrderDoc | null>(null);
+  const [orderRow, setOrderRow] = useState<OrderRow | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const applyOrderRow = useCallback(
+    (row: OrderRow | null) => {
+      if (!row || row.data.shopSlug !== shopSlug) {
+        setOrderRow(null);
+        return;
+      }
+      setOrderRow(row);
+    },
+    [shopSlug]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -33,11 +62,7 @@ export default function OrderDetail() {
       void getOrderByNumber(projectId, decodeURIComponent(orderId))
         .then((row) => {
           if (cancelled) return;
-          if (!row || row.data.shopSlug !== shopSlug) {
-            setOrder(null);
-            return;
-          }
-          setOrder(row.data);
+          applyOrderRow(row);
         })
         .catch((err: unknown) => {
           if (cancelled) return;
@@ -51,7 +76,46 @@ export default function OrderDetail() {
     return () => {
       cancelled = true;
     };
-  }, [orderId, projectId, shopSlug]);
+  }, [orderId, projectId, shopSlug, applyOrderRow]);
+
+  const order: OrderDoc | null = orderRow?.data ?? null;
+  const canUpload =
+    order && uploadAllowedStatuses.has(order.status);
+
+  const onPickFile = () => {
+    setUploadError(null);
+    fileRef.current?.click();
+  };
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !orderRow || !order) return;
+
+    setUploading(true);
+    setUploadError(null);
+    const customerKey = getOrCreateCustomerKey();
+    void customerUploadPaymentScreenshot({
+      orderFirestoreId: orderRow.id,
+      projectId,
+      orderNumber: order.orderNumber,
+      customerKey,
+      file,
+    })
+      .then(() =>
+        getOrderByNumber(projectId, decodeURIComponent(orderId)).then(
+          applyOrderRow
+        )
+      )
+      .catch((err: unknown) => {
+        setUploadError(
+          err instanceof Error ? err.message : '上传失败，请重试。'
+        );
+      })
+      .finally(() => {
+        setUploading(false);
+      });
+  };
 
   if (loading) {
     return (
@@ -69,7 +133,7 @@ export default function OrderDetail() {
     );
   }
 
-  if (!order) {
+  if (!order || !orderRow) {
     return (
       <PageShell title="订单详情" subtitle="未找到订单">
         <p className="text-sm text-gray-600">
@@ -96,6 +160,8 @@ export default function OrderDetail() {
   const created = order.createdAt?.toDate?.() ?? new Date();
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
 
+  const shots = parseScreenshotEntries(order.paymentScreenshots);
+
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
       <div className="space-y-4 text-sm text-gray-800">
@@ -117,9 +183,9 @@ export default function OrderDetail() {
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">已选商品</h2>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-            {order.lines.map((l) => (
+            {order.lines.map((l, idx) => (
               <li
-                key={l.productId}
+                key={`${l.productId}-${idx}`}
                 className="flex justify-between gap-2 px-3 py-2"
               >
                 <span>
@@ -147,8 +213,93 @@ export default function OrderDetail() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-600">
-          付款截图上传、加菜、改单等为后续功能（见 docs/03）。
+        <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">
+            付款截图
+          </h2>
+          <p className="mb-3 text-xs text-gray-600">
+            上传后订单将进入「待核实」，商户核对无误后会确认收款。请使用本机下单时的同一浏览器上传。
+          </p>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onFileChange}
+          />
+
+          {canUpload ? (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={onPickFile}
+              className="mb-3 inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {uploading ? '上传中…' : '选择图片上传'}
+            </button>
+          ) : (
+            <p className="mb-3 text-xs text-amber-800">
+              {order.status === 'cancelled'
+                ? '订单已取消，无法上传。'
+                : order.status === 'confirmed'
+                  ? '订单已确认付款，无需再上传。'
+                  : '当前状态不可上传。'}
+            </p>
+          )}
+
+          {uploadError ? (
+            <p className="mb-2 text-xs text-red-600">{uploadError}</p>
+          ) : null}
+
+          {shots.length > 0 ? (
+            <ul className="space-y-2">
+              {shots.map((s, i) =>
+                s.url ? (
+                  <li
+                    key={`${s.url}-${i}`}
+                    className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-2"
+                  >
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0"
+                    >
+                      <img
+                        src={s.url}
+                        alt=""
+                        className="h-16 w-16 rounded-md object-cover"
+                      />
+                    </a>
+                    <div className="min-w-0 flex-1 text-xs">
+                      <p className="font-medium text-gray-900">
+                        {flagLabel(s.flag)}
+                      </p>
+                      {s.flagReason ? (
+                        <p className="mt-0.5 text-gray-600">{s.flagReason}</p>
+                      ) : null}
+                      {s.uploadedAt ? (
+                        <p className="mt-1 text-gray-500">
+                          {s.uploadedAt.toDate().toLocaleString()}
+                        </p>
+                      ) : null}
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1 inline-block text-indigo-600 underline-offset-2 hover:underline"
+                      >
+                        查看原图
+                      </a>
+                    </div>
+                  </li>
+                ) : null
+              )}
+            </ul>
+          ) : (
+            <p className="text-xs text-gray-500">尚未上传付款截图。</p>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">

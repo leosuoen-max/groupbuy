@@ -12,6 +12,10 @@ import {
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import {
+  computeImageFileMd5Hex,
+  uploadOrderPaymentImage,
+} from './paymentImageUpload';
 import { getProjectPermissionForUser } from './permissionService';
 import { getShopById } from './shopService';
 import type { OrderLine } from '../types/orderDraft';
@@ -198,6 +202,116 @@ export async function listOrdersByCustomer(projectId: string, customerKey: strin
       const tb = b.data.createdAt?.toMillis?.() ?? 0;
       return tb - ta;
     });
+}
+
+async function md5DuplicateInShopOtherOrders(
+  shopId: string,
+  excludeOrderId: string,
+  md5: string
+): Promise<boolean> {
+  const rows = await listOrdersByShopId(shopId);
+  for (const row of rows) {
+    if (row.id === excludeOrderId) continue;
+    const shots = row.data.paymentScreenshots;
+    if (!Array.isArray(shots)) continue;
+    for (const s of shots) {
+      if (!s || typeof s !== 'object') continue;
+      const h = (s as Record<string, unknown>).md5Hash;
+      if (typeof h === 'string' && h === md5) return true;
+    }
+  }
+  return false;
+}
+
+/** 顾客上传付款截图：校验本人；写入 Storage URL + MD5 标记；待付款则改为待核实 */
+export async function customerUploadPaymentScreenshot(input: {
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  customerKey: string;
+  file: File;
+}): Promise<void> {
+  const maxBytes = 8 * 1024 * 1024;
+  if (input.file.size > maxBytes) throw new Error('图片请勿超过 8MB');
+  const mime = input.file.type || '';
+  if (!mime.startsWith('image/')) throw new Error('请上传图片文件');
+
+  const allowUpload: OrderStatus[] = ['unpaid', 'pending', 'partial_paid'];
+
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const snap = await getDoc(orderRef);
+  if (!snap.exists()) throw new Error('订单不存在');
+  const order = snap.data() as OrderDoc;
+
+  if (
+    order.projectId !== input.projectId ||
+    order.orderNumber !== input.orderNumber
+  ) {
+    throw new Error('订单信息不匹配');
+  }
+  if (order.customerKey !== input.customerKey) {
+    throw new Error('仅下单本人可上传付款截图（请使用同一浏览器）');
+  }
+  if (!allowUpload.includes(order.status)) {
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+    if (order.status === 'confirmed') throw new Error('订单已确认，无需再上传');
+    throw new Error('当前状态不可上传付款截图');
+  }
+
+  const md5 = await computeImageFileMd5Hex(input.file);
+  const dup = await md5DuplicateInShopOtherOrders(
+    order.shopId,
+    input.orderFirestoreId,
+    md5
+  );
+
+  const uploadedAt = Timestamp.now();
+  const uploadMs = uploadedAt.toMillis();
+  const createdMs = order.createdAt?.toMillis?.() ?? 0;
+
+  let flag: 'green' | 'yellow' | 'red' = 'green';
+  let flagReason: string | undefined;
+  if (dup) {
+    flag = 'red';
+    flagReason = 'MD5 与该商户其他订单截图重复';
+  } else if (uploadMs < createdMs) {
+    flag = 'yellow';
+    flagReason = '截图上传时间早于下单时间';
+  }
+
+  const url = await uploadOrderPaymentImage({
+    shopId: order.shopId,
+    orderId: input.orderFirestoreId,
+    file: input.file,
+  });
+
+  const entry: Record<string, unknown> = {
+    id: globalThis.crypto.randomUUID(),
+    url,
+    uploadedAt,
+    md5Hash: md5,
+    flag,
+  };
+  if (flagReason) entry.flagReason = flagReason;
+
+  const prev = Array.isArray(order.paymentScreenshots)
+    ? [...order.paymentScreenshots]
+    : [];
+  prev.push(entry);
+
+  const hist = [...(order.statusHistory ?? [])];
+  hist.push({
+    action: 'screenshot_uploaded',
+    timestamp: Timestamp.now(),
+  });
+
+  await updateDoc(orderRef, {
+    paymentScreenshots: prev,
+    statusHistory: hist,
+    updatedAt: serverTimestamp(),
+    ...(order.status === 'unpaid' ? { status: 'pending' as const } : {}),
+  });
 }
 
 export async function getOrderByNumber(projectId: string, orderNumber: string): Promise<OrderRow | null> {
