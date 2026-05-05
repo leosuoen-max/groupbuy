@@ -5,10 +5,75 @@ import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listOrdersByCustomer } from '../../lib/orderService';
-import type { OrderDoc } from '../../types/firestore';
+import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
+import type { OrderDoc, OrderStatus } from '../../types/firestore';
 
 function summarizeLines(o: OrderDoc): string {
   return o.lines.map((l) => `${l.name}×${l.quantity}`).join(' + ');
+}
+
+const statusLabel: Record<string, string> = {
+  unpaid: '待付款',
+  pending: '待核实',
+  confirmed: '已确认付款',
+  partial_paid: '待补付款',
+  cancelled: '已取消',
+};
+
+const statusCard: Record<
+  string,
+  { border: string; surface: string; pill: string }
+> = {
+  unpaid: {
+    border: 'border-l-amber-500',
+    surface: 'bg-amber-50/80',
+    pill: 'bg-amber-100 text-amber-900',
+  },
+  pending: {
+    border: 'border-l-indigo-500',
+    surface: 'bg-indigo-50/80',
+    pill: 'bg-indigo-100 text-indigo-900',
+  },
+  partial_paid: {
+    border: 'border-l-orange-500',
+    surface: 'bg-orange-50/80',
+    pill: 'bg-orange-100 text-orange-900',
+  },
+  confirmed: {
+    border: 'border-l-emerald-500',
+    surface: 'bg-emerald-50/80',
+    pill: 'bg-emerald-100 text-emerald-900',
+  },
+  cancelled: {
+    border: 'border-l-gray-400',
+    surface: 'bg-gray-50',
+    pill: 'bg-gray-200 text-gray-700',
+  },
+};
+
+function cardClasses(status: OrderStatus): string {
+  const s = statusCard[status] ?? {
+    border: 'border-l-gray-400',
+    surface: 'bg-white',
+    pill: 'bg-gray-100 text-gray-800',
+  };
+  return `rounded-xl border border-gray-100 border-l-4 ${s.border} ${s.surface} px-3 py-3 shadow-sm`;
+}
+
+function uploadHint(o: OrderDoc): { text: string; className: string } | null {
+  const hasShot = orderHasPaymentScreenshots(o.paymentScreenshots);
+  if (o.status === 'cancelled') return null;
+  if (hasShot) {
+    return { text: '已传付款截图', className: 'text-emerald-700' };
+  }
+  if (
+    o.status === 'unpaid' ||
+    o.status === 'pending' ||
+    o.status === 'partial_paid'
+  ) {
+    return { text: '未传付款截图', className: 'text-gray-500' };
+  }
+  return null;
 }
 
 export default function MyOrders() {
@@ -84,16 +149,33 @@ export default function MyOrders() {
             {orders.map((o) => {
               const t = o.createdAt?.toDate?.() ?? new Date();
               const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+              const st = o.status;
+              const styles = statusCard[st] ?? statusCard.unpaid;
+              const upload = uploadHint(o);
               return (
                 <li
                   key={`${o.orderNumber}-${t.getTime()}`}
-                  className="rounded-xl border border-gray-100 bg-white px-3 py-3 shadow-sm"
+                  className={cardClasses(st)}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-gray-900">
-                        订单 #{o.orderNumber}{' '}
-                        <span className="font-normal text-gray-500">{hm}</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-semibold text-gray-900">
+                          订单 #{o.orderNumber}{' '}
+                          <span className="font-normal text-gray-500">{hm}</span>
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.pill}`}
+                        >
+                          {statusLabel[st] ?? st}
+                        </span>
+                        {upload ? (
+                          <span
+                            className={`text-[11px] font-medium ${upload.className}`}
+                          >
+                            {upload.text}
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-gray-600">
                         {summarizeLines(o)}
