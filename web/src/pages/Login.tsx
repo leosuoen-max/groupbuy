@@ -1,11 +1,19 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { signInAnonymously } from 'firebase/auth';
 import { PageShell } from '../components/PageShell';
 import { getAuthClient } from '../lib/firebase';
 
+function safeReturnTo(raw: string | null): string {
+  if (!raw) return '/dashboard';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
+  return raw;
+}
+
 export default function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnTo = safeReturnTo(searchParams.get('returnTo'));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -14,7 +22,7 @@ export default function Login() {
     setMsg(null);
     try {
       await signInAnonymously(getAuthClient());
-      navigate('/dashboard', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch (e) {
       setMsg(
         e instanceof Error

@@ -78,6 +78,19 @@ export type PermissionDoc = {
   invitationId?: string;
 };
 
+export type InvitationDoc = {
+  code: string;
+  shopId?: string;
+  projectId?: string;
+  scope: 'shop' | 'project';
+  role: 'high_admin' | 'normal_admin';
+  invitedBy: string;
+  expiresAt: Timestamp;
+  usedAt?: Timestamp | null;
+  usedBy?: string | null;
+  createdAt: Timestamp;
+};
+
 export type DeliveryPointDoc = {
   shopId: string;
   number: number;

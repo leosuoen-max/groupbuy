@@ -1,6 +1,8 @@
 import {
   addDoc,
   collection,
+  doc,
+  getDoc,
   getDocs,
   limit,
   query,
@@ -30,6 +32,14 @@ export async function getShopBySlug(slug: string): Promise<ShopRow | null> {
   if (snap.empty) return null;
   const d = snap.docs[0];
   return { id: d.id, data: d.data() as ShopDoc };
+}
+
+export async function getShopById(shopId: string): Promise<ShopRow | null> {
+  const db = getDb();
+  const ref = doc(db, 'shops', shopId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return { id: snap.id, data: snap.data() as ShopDoc };
 }
 
 export async function isSlugTaken(slug: string): Promise<boolean> {
