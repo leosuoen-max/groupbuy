@@ -14,9 +14,9 @@ function summarizeLines(o: OrderDoc): string {
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
-  pending: '待核实',
+  pending: '待确认',
   confirmed: '已确认付款',
-  partial_paid: '待补付款',
+  partial_paid: '待付款',
   cancelled: '已取消',
 };
 

@@ -30,9 +30,9 @@ import type { OrderAppendBatchDoc, OrderDoc, ProjectDoc } from '../../types/fire
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
-  pending: '待核实',
+  pending: '待确认',
   confirmed: '已确认付款',
-  partial_paid: '待补付款',
+  partial_paid: '待付款',
   cancelled: '已取消',
 };
 
@@ -518,7 +518,7 @@ export default function OrderDetail() {
           ? '请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与订单金额一致即可；上传至少一张截图供商户核对。'
           : order.status === 'unpaid' && hasShots
             ? '尚未核实前仍可追加或更换截图（先删后传）。分笔付款时总额需与应付一致。'
-            : '上传后订单进入「待核实」。请使用本机下单时的同一浏览器。';
+            : '上传后订单进入「待确认」。请使用本机下单时的同一浏览器。';
 
   const uploadButtonLabel =
     order.status === 'partial_paid'
@@ -1007,7 +1007,7 @@ export default function OrderDetail() {
               {order.status === 'cancelled'
                 ? '订单已取消，无法上传。'
                 : order.status === 'confirmed'
-                  ? '订单已全部确认收款，无需再上传。若刚加菜变为待补款，请刷新页面。'
+                  ? '订单已全部确认收款，无需再上传。若刚加菜变为待付款，请刷新页面。'
                   : '当前状态不可上传。'}
             </p>
           )}

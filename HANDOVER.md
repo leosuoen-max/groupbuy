@@ -68,7 +68,7 @@
 
 **详细路由表、数据源与「docs/08 清单 vs 代码」逐项对照**：请读 **`docs/11-需求与实现对照.md`**（里程碑后记得同步更新该文档）。
 
-**一句话**：`groupbuy/web` + Firebase（`web/.env.local`）；顾客端 **`ShopHome` 默认 Firestore**（`?mock=1` 演示）、订单 **`orders`** + 付款截图 **Storage**；商户端 **`Login` 匿名开发**、项目 **`projects`**、订单管理/对账/凭证已接库、**Dashboard 今日三格统计**；**`ShopSettings`、`Register`、分享卡、PWA** 等仍多为占位——以 **`docs/11`** 第三节为准。
+**一句话**：`groupbuy/web` + Firebase（`web/.env.local`）；顾客端 **`ShopHome` 默认 Firestore**（`?mock=1` 演示）、订单 **`orders`** + 付款截图 **Storage**；商户端 **`Login` 匿名开发**、项目 **`projects`**、订单管理/对账/凭证已接库、**Dashboard 今日三格统计**；近期已落地：订单页返回选菜保留草稿、商户“免提交付款凭证”（首单/加购）、对账单按凭证时间（分钟粒度）筛选并支持“按当前筛选一键确认待确认”、商户侧术语统一为“待确认/待付款”——以 **`docs/11`** 第三节为准。
 
 ### 需用户在本机 / Firebase 控制台完成的事项
 
