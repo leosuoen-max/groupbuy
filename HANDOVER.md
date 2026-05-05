@@ -68,7 +68,7 @@
 
 **详细路由表、数据源与「docs/08 清单 vs 代码」逐项对照**：请读 **`docs/11-需求与实现对照.md`**（里程碑后记得同步更新该文档）。
 
-**一句话**：`groupbuy/web` + Firebase（`web/.env.local`）；顾客端 **`ShopHome` 默认 Firestore**（`?mock=1` 演示）、订单 **`orders`** + 付款截图 **Storage**；商户端 **`Login` 匿名开发**、项目 **`projects`**、订单管理/对账/凭证已接库；**`ShopSettings`、`Register`、Dashboard 今日统计、分享卡、PWA** 等多为占位或未实现——以 **`docs/11`** 第三节为准。
+**一句话**：`groupbuy/web` + Firebase（`web/.env.local`）；顾客端 **`ShopHome` 默认 Firestore**（`?mock=1` 演示）、订单 **`orders`** + 付款截图 **Storage**；商户端 **`Login` 匿名开发**、项目 **`projects`**、订单管理/对账/凭证已接库、**Dashboard 今日三格统计**；**`ShopSettings`、`Register`、分享卡、PWA** 等仍多为占位——以 **`docs/11`** 第三节为准。
 
 ### 需用户在本机 / Firebase 控制台完成的事项
 
@@ -83,8 +83,8 @@
 按 **上线与真实使用** 优先，其次才是新功能。
 
 1. **安全与上线**：收紧 **Firestore / Storage** 规则；按 **`docs/08`**「上线判断标准」在微信/WhatsApp、商户 PWA 场景跑通全流程。
-2. **商户 Dashboard**：若要对齐需求文档，把「今日数据、订单概览」从占位改为 Firestore 聚合（可按店铺当日项目筛选订单）。
-3. **文案与权限**：商户 **`Dashboard`** 上「仅创建人」等提示若已接入多级管理员（`permissionService`），可核对是否仍写「mock」字样并改正。
+2. **权限升级**：Dashboard / 订单列表等仍主要为「创建人」校验；若要让高级管理员进入，统一走 **`permissionService`** 与店铺级判定。
+3. **占位模块**：`ShopSettings`、`Register`、分享卡、PWA 等与 **`docs/11`** 对齐 roadmap。
 4. **文档同步**：功能大改后更新 **`docs/11`**（首选）、必要时改 **`HANDOVER` 第二节**；**不要**仅改 `docs/08` 的 `[x]` 来代表实现状态。
 
 更细的「第二版」功能见 **`docs/08`** 文末「后续迭代方向」。
