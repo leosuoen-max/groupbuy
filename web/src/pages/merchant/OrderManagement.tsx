@@ -16,9 +16,9 @@ type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
 
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
-  if (s === 'pending') return '待核实';
+  if (s === 'pending') return '待确认';
   if (s === 'confirmed') return '已确认';
-  if (s === 'partial_paid') return '部分付款';
+  if (s === 'partial_paid') return '待付款';
   if (s === 'cancelled') return '已取消';
   return s;
 }
@@ -29,7 +29,7 @@ function pendingUnconfirmedBatches(order: OrderDoc): OrderAppendBatchDoc[] {
 
 /**
  * 存在未确认的加购档，且顾客尚未为该档上传有效凭证。
- * 含：`partial_paid`，以及「首单仍待核实(pending)时又加购」——此时仍为 pending，但同样要在「待付款」里盯住加购应收。
+ * 含：`partial_paid`，以及「首单仍待确认(pending)时又加购」——此时仍为 pending，但同样要在「待付款」里盯住加购应收。
  */
 function orderNeedsAppendPaymentUpload(order: OrderDoc): boolean {
   const batches = pendingUnconfirmedBatches(order);
@@ -229,7 +229,7 @@ export default function OrderManagement() {
   const tabs: { id: TabId; label: string; count: number }[] = [
     { id: 'all', label: '全部', count: counts.all },
     { id: 'unpaid', label: '待付款', count: counts.unpaid },
-    { id: 'open', label: '待处理', count: counts.open },
+    { id: 'open', label: '待确认', count: counts.open },
     { id: 'done', label: '已确认', count: counts.done },
     { id: 'cancelled', label: '已取消', count: counts.cancelled },
   ];
@@ -260,7 +260,7 @@ export default function OrderManagement() {
       </div>
 
       <p className="mb-3 text-xs text-gray-500">
-        同一订单可同时出现在多个标签：例如首单待核实(pending)时又加购未付→会在「待处理」与「待付款」各出现一笔（同一订单号）。
+        同一订单可同时出现在多个标签：例如首单待确认(pending)时又加购未付→会在「待确认」与「待付款」各出现一笔（同一订单号）。
       </p>
 
       <div className="mb-4 flex flex-wrap gap-1 border-b border-gray-100 pb-2">

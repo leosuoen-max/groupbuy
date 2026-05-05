@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   parseScreenshotEntries,
   type ParsedScreenshotEntry,
@@ -66,6 +67,7 @@ type Props = {
   /** 未挂批次图必须 uploadedAt >= 该毫秒时间（一般为待确认加购最早 appendedAt） */
   untaggedNotBeforeMillis?: number;
   emptyHint?: string;
+  emptyAction?: ReactNode;
 };
 
 /** 商户核对付款凭证（大图 + 可选三色标记；可按 appendBatchId 分区） */
@@ -76,6 +78,7 @@ export function PaymentScreenshotsPanel({
   includeUntagged,
   untaggedNotBeforeMillis,
   emptyHint,
+  emptyAction,
 }: Props) {
   const parsed = parseScreenshotEntries(paymentScreenshots);
   const filtered = filterByAppendBatch(
@@ -86,8 +89,9 @@ export function PaymentScreenshotsPanel({
     untaggedNotBeforeMillis
   );
   const withUrl = filtered.filter((p) => p.url);
+  const waivedNoShot = filtered.filter((p) => !p.url && p.waivedNoScreenshot);
 
-  if (withUrl.length === 0) {
+  if (withUrl.length === 0 && waivedNoShot.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/60 px-3 py-3 text-sm text-amber-950">
         <p className="font-semibold">暂无对应付款截图</p>
@@ -95,15 +99,38 @@ export function PaymentScreenshotsPanel({
           {emptyHint ??
             '顾客上传打款凭证后，请在此对照金额与时间；确认无误后再确认收款。'}
         </p>
+        {emptyAction ? <div className="mt-3">{emptyAction}</div> : null}
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-gray-600">
-        以下为该分区内的凭证（可与下方明细金额、时间对照）。
-      </p>
+      <p className="text-xs text-gray-600">以下为该分区内的凭证（含无图免提交通道）。</p>
+      {waivedNoShot.map((shot, i) => (
+        <div
+          key={`${shot.id ?? 'waive'}-waive-${i}`}
+          className="overflow-hidden rounded-xl border border-amber-200 bg-amber-50/70"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 px-3 py-2 text-xs text-amber-900">
+            <span>🧾 免提交付款凭证</span>
+            {shot.uploadedAt ? (
+              <span className="text-amber-800">
+                时间：
+                {typeof shot.uploadedAt.toDate === 'function'
+                  ? shot.uploadedAt.toDate().toLocaleString()
+                  : ''}
+              </span>
+            ) : null}
+          </div>
+          <div className="px-3 py-2 text-xs text-amber-950">
+            <p>该组由商户人工标记为“免提交付款凭证”，无顾客上传截图。</p>
+            {shot.waivedByUserId ? (
+              <p className="mt-1 text-amber-900">操作人：{shot.waivedByUserId.slice(0, 8)}…</p>
+            ) : null}
+          </div>
+        </div>
+      ))}
       {withUrl.map((shot, i) => (
         <div
           key={`${shot.id ?? shot.url}-${i}`}

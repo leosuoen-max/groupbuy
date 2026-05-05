@@ -147,7 +147,7 @@ export default function MerchantDashboard() {
               </div>
             </div>
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-amber-950 shadow-sm">
-              <div className="text-xs font-medium text-amber-800">待核实</div>
+              <div className="text-xs font-medium text-amber-800">待确认</div>
               <div className="mt-1 text-xl font-bold tabular-nums">
                 {formatMYR(todayStats.pendingReviewAmount)}
               </div>
@@ -168,7 +168,7 @@ export default function MerchantDashboard() {
         )}
         {!ordersLoading && !ordersErr ? (
           <p className="mt-2 text-xs text-gray-500">
-            今日有效单共 {todayStats.todayOpenOrdersCount} 笔（已排除已取消；待核实含待补款等需跟进的单）。
+            今日有效单共 {todayStats.todayOpenOrdersCount} 笔（已排除已取消；待确认含待付款等需跟进的单）。
           </p>
         ) : null}
       </section>

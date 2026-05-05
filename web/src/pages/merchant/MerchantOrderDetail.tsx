@@ -13,15 +13,17 @@ import {
   merchantAppendInternalNote,
   merchantConfirmAppendBatch,
   merchantConfirmPayment,
+  merchantWaiveInitialPaymentScreenshot,
+  merchantWaiveAppendBatchScreenshot,
   type OrderRow,
 } from '../../lib/orderService';
 import type { OrderAppendBatchDoc, OrderDoc, OrderLineDoc } from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
-  pending: '待核实',
+  pending: '待确认',
   confirmed: '已确认付款',
-  partial_paid: '待补付款',
+  partial_paid: '待付款',
   cancelled: '已取消',
 };
 
@@ -113,7 +115,12 @@ export default function MerchantOrderDetail() {
   const [row, setRow] = useState<OrderRow | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [busy, setBusy] = useState<
-    'confirm' | 'note' | 'confirm_append_single' | null
+    | 'confirm'
+    | 'note'
+    | 'confirm_append_single'
+    | 'waive_append_proof'
+    | 'waive_initial_proof'
+    | null
   >(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -164,6 +171,36 @@ export default function MerchantOrderDetail() {
     try {
       await merchantConfirmAppendBatch(row.id, appendBatchId, user.uid);
       setMsg('已确认该组加购补款');
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleWaiveAppendProof = async (appendBatchId: string) => {
+    if (!user || !row) return;
+    setBusy('waive_append_proof');
+    setMsg(null);
+    try {
+      await merchantWaiveAppendBatchScreenshot(row.id, appendBatchId, user.uid);
+      setMsg('该组已设为免提交付款凭证，现可进行确认');
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleWaiveInitialProof = async () => {
+    if (!user || !row) return;
+    setBusy('waive_initial_proof');
+    setMsg(null);
+    try {
+      await merchantWaiveInitialPaymentScreenshot(row.id, user.uid);
+      setMsg('首单已设为免提交付款凭证，现可进行确认');
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '操作失败');
@@ -255,8 +292,20 @@ export default function MerchantOrderDetail() {
     );
   const pendingBatches = appendBatches.filter((b) => !b.confirmedAt);
   const pendingIds = pendingBatches.map((b) => b.id);
+  const firstGroupHasProof = Array.isArray(order.paymentScreenshots)
+    ? order.paymentScreenshots.some((raw) => {
+        if (!raw || typeof raw !== 'object') return false;
+        const o = raw as Record<string, unknown>;
+        const url = typeof o.url === 'string' ? o.url.trim() : '';
+        const bid =
+          typeof o.appendBatchId === 'string' ? o.appendBatchId.trim() : '';
+        const waived = o.waivedNoScreenshot === true;
+        return !bid && (Boolean(url) || waived);
+      })
+    : false;
   const canConfirmWhole =
     !firstPaymentAcknowledged &&
+    firstGroupHasProof &&
     (order.status === 'unpaid' ||
       order.status === 'pending' ||
       order.status === 'partial_paid');
@@ -309,7 +358,7 @@ export default function MerchantOrderDetail() {
   const pendingSection = pendingBatchGroups.length > 0 ? (
     <div className="space-y-3">
       <h2 className="text-sm font-semibold text-amber-950">
-        待核实加购（按提交凭证行为分组；每组独立确认）
+        待确认加购（按提交凭证行为分组；每组独立确认）
       </h2>
       <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
         {pendingBatchGroups.map(({ batch, canConfirm, includeUntagged }) => (
@@ -357,6 +406,22 @@ export default function MerchantOrderDetail() {
                 includeUntagged={includeUntagged}
                 untaggedNotBeforeMillis={batch.appendedAt.toMillis()}
                 emptyHint="该组尚未上传对应补款截图。"
+                emptyAction={
+                  !canConfirm &&
+                  order.status !== 'cancelled' &&
+                  order.status !== 'confirmed' ? (
+                    <button
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => void handleWaiveAppendProof(batch.id)}
+                      className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 disabled:cursor-not-allowed disabled:bg-gray-100"
+                    >
+                      {busy === 'waive_append_proof'
+                        ? '处理中…'
+                        : '免提交付款凭证'}
+                    </button>
+                  ) : null
+                }
               />
             </div>
             {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
@@ -476,7 +541,22 @@ export default function MerchantOrderDetail() {
             <PaymentScreenshotsPanel
               paymentScreenshots={order.paymentScreenshots}
               appendBatchIdFilter={null}
-              emptyHint="暂无首单截图；顾客可能在「待补款」阶段才上传，请查看对应加购分区。"
+              emptyHint="暂无首单截图；顾客可能在「待付款」阶段才上传，请查看对应加购分区。"
+              emptyAction={
+                !firstPaymentAcknowledged &&
+                !firstGroupHasProof &&
+                order.status !== 'cancelled' &&
+                order.status !== 'confirmed' ? (
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => void handleWaiveInitialProof()}
+                    className="inline-flex h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 text-xs font-semibold text-amber-900 disabled:cursor-not-allowed disabled:bg-gray-100"
+                  >
+                    {busy === 'waive_initial_proof' ? '处理中…' : '免提交付款凭证'}
+                  </button>
+                ) : null
+              }
             />
           </div>
           {canConfirmWhole ? (

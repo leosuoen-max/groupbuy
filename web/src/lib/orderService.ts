@@ -39,6 +39,17 @@ import type {
 
 export type OrderRow = { id: string; data: OrderDoc };
 
+type OrdersCacheEntry = {
+  at: number;
+  rows: OrderRow[];
+  pending?: Promise<OrderRow[]>;
+};
+
+/** 订单列表短时缓存：降低后台多个页面频繁来回时的重复读。 */
+const ORDERS_CACHE_TTL_MS = 5000;
+const shopOrdersCache = new Map<string, OrdersCacheEntry>();
+const customerOrdersCache = new Map<string, OrdersCacheEntry>();
+
 export type CreateOrderInput = {
   shopSlug: string;
   projectId: string;
@@ -217,20 +228,49 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
 }
 
 export async function listOrdersByCustomer(projectId: string, customerKey: string): Promise<OrderRow[]> {
+  const ck = `${projectId}::${customerKey}`;
+  const now = Date.now();
+  const hit = customerOrdersCache.get(ck);
+  if (hit && !hit.pending && now - hit.at < ORDERS_CACHE_TTL_MS) {
+    return hit.rows;
+  }
+  if (hit?.pending) return hit.pending;
+
   const db = getDb();
-  const q = query(
-    collection(db, 'orders'),
-    where('projectId', '==', projectId),
-    where('customerKey', '==', customerKey)
-  );
-  const snap = await getDocs(q);
-  return snap.docs
-    .map((d) => ({ id: d.id, data: d.data() as OrderDoc }))
-    .sort((a, b) => {
-      const ta = a.data.createdAt?.toMillis?.() ?? 0;
-      const tb = b.data.createdAt?.toMillis?.() ?? 0;
-      return tb - ta;
-    });
+  const pending = (async () => {
+    const q = query(
+      collection(db, 'orders'),
+      where('projectId', '==', projectId),
+      where('customerKey', '==', customerKey)
+    );
+    const snap = await getDocs(q);
+    const rows = snap.docs
+      .map((d) => ({ id: d.id, data: d.data() as OrderDoc }))
+      .sort((a, b) => {
+        const ta = a.data.createdAt?.toMillis?.() ?? 0;
+        const tb = b.data.createdAt?.toMillis?.() ?? 0;
+        return tb - ta;
+      });
+    customerOrdersCache.set(ck, { at: Date.now(), rows });
+    return rows;
+  })();
+
+  customerOrdersCache.set(ck, {
+    at: hit?.at ?? 0,
+    rows: hit?.rows ?? [],
+    pending,
+  });
+  try {
+    return await pending;
+  } finally {
+    const latest = customerOrdersCache.get(ck);
+    if (latest?.pending === pending) {
+      customerOrdersCache.set(ck, {
+        at: latest.at,
+        rows: latest.rows,
+      });
+    }
+  }
 }
 
 async function md5DuplicateInShopOtherOrders(
@@ -775,16 +815,44 @@ export async function customerAppendLinesToOrder(input: {
 
 /** 商户端：按店铺拉取订单（客户端按时间倒序，避免复合索引） */
 export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
+  const now = Date.now();
+  const hit = shopOrdersCache.get(shopId);
+  if (hit && !hit.pending && now - hit.at < ORDERS_CACHE_TTL_MS) {
+    return hit.rows;
+  }
+  if (hit?.pending) return hit.pending;
+
   const db = getDb();
-  const q = query(collection(db, 'orders'), where('shopId', '==', shopId));
-  const snap = await getDocs(q);
-  return snap.docs
-    .map((d) => ({ id: d.id, data: d.data() as OrderDoc }))
-    .sort((a, b) => {
-      const ta = a.data.createdAt?.toMillis?.() ?? 0;
-      const tb = b.data.createdAt?.toMillis?.() ?? 0;
-      return tb - ta;
-    });
+  const pending = (async () => {
+    const q = query(collection(db, 'orders'), where('shopId', '==', shopId));
+    const snap = await getDocs(q);
+    const rows = snap.docs
+      .map((d) => ({ id: d.id, data: d.data() as OrderDoc }))
+      .sort((a, b) => {
+        const ta = a.data.createdAt?.toMillis?.() ?? 0;
+        const tb = b.data.createdAt?.toMillis?.() ?? 0;
+        return tb - ta;
+      });
+    shopOrdersCache.set(shopId, { at: Date.now(), rows });
+    return rows;
+  })();
+
+  shopOrdersCache.set(shopId, {
+    at: hit?.at ?? 0,
+    rows: hit?.rows ?? [],
+    pending,
+  });
+  try {
+    return await pending;
+  } finally {
+    const latest = shopOrdersCache.get(shopId);
+    if (latest?.pending === pending) {
+      shopOrdersCache.set(shopId, {
+        at: latest.at,
+        rows: latest.rows,
+      });
+    }
+  }
 }
 
 /**
@@ -949,6 +1017,76 @@ export async function merchantConfirmPayment(
   });
 }
 
+/** 商户将首单待付款标记为「免提交付款凭证」，使其进入待确认。 */
+export async function merchantWaiveInitialPaymentScreenshot(
+  orderFirestoreId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+  if (pre.status === 'cancelled' || pre.status === 'confirmed') {
+    throw new Error('当前状态不可免提交凭证');
+  }
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status === 'cancelled' || o.status === 'confirmed') {
+      throw new Error('订单状态已变更，请刷新后重试');
+    }
+    if (o.initialPaymentConfirmedAt) {
+      throw new Error('首单已确认，无需免提交');
+    }
+
+    const hasInitialProof = Array.isArray(o.paymentScreenshots)
+      ? o.paymentScreenshots.some((raw) => {
+          if (!raw || typeof raw !== 'object') return false;
+          const item = raw as Record<string, unknown>;
+          const bid =
+            typeof item.appendBatchId === 'string' ? item.appendBatchId.trim() : '';
+          if (bid) return false;
+          const hasUrl = typeof item.url === 'string' && item.url.trim().length > 0;
+          const waived = item.waivedNoScreenshot === true;
+          return hasUrl || waived;
+        })
+      : false;
+    if (hasInitialProof) {
+      throw new Error('首单已有可核对凭证，无需免提交');
+    }
+
+    const prevShots = Array.isArray(o.paymentScreenshots)
+      ? [...o.paymentScreenshots]
+      : [];
+    prevShots.push({
+      id: globalThis.crypto.randomUUID(),
+      uploadedAt: Timestamp.now(),
+      waivedNoScreenshot: true,
+      waivedByUserId: actorUserId,
+      flag: 'yellow',
+      flagReason: '商户已免提交付款凭证（首单）',
+    });
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'merchant_waive_initial_payment_screenshot',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+    });
+
+    tx.update(orderRef, {
+      paymentScreenshots: prevShots,
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+      ...(o.status === 'unpaid' ? { status: 'pending' as const } : {}),
+    });
+  });
+}
+
 /** 商户确认某一档加购的补款（仅订单处于待补付款且该档未确认时） */
 export async function merchantConfirmAppendBatch(
   orderFirestoreId: string,
@@ -1055,6 +1193,76 @@ export async function merchantConfirmAppendBatch(
           ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
           : {}),
       },
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 商户将某个待付款加购组标记为「免提交付款凭证」，使其进入待确认。 */
+export async function merchantWaiveAppendBatchScreenshot(
+  orderFirestoreId: string,
+  appendBatchId: string,
+  actorUserId: string
+): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+  if (pre.status === 'cancelled' || pre.status === 'confirmed') {
+    throw new Error('当前状态不可免提交凭证');
+  }
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status === 'cancelled' || o.status === 'confirmed') {
+      throw new Error('订单状态已变更，请刷新后重试');
+    }
+
+    const batches = o.appendBatches ?? [];
+    const batch = batches.find((b) => b.id === appendBatchId);
+    if (!batch) throw new Error('找不到该加购记录');
+    if (batch.confirmedAt) throw new Error('该笔加购已确认，无需免提交');
+
+    const pendingIds = batches.filter((b) => !b.confirmedAt).map((b) => b.id);
+    if (
+      canMerchantConfirmAppendBatchByScreenshots(
+        o.paymentScreenshots,
+        appendBatchId,
+        pendingIds,
+        batch.appendedAt
+      )
+    ) {
+      throw new Error('该组已有可核对凭证，无需免提交');
+    }
+
+    const prevShots = Array.isArray(o.paymentScreenshots)
+      ? [...o.paymentScreenshots]
+      : [];
+    prevShots.push({
+      id: globalThis.crypto.randomUUID(),
+      appendBatchId,
+      uploadedAt: Timestamp.now(),
+      waivedNoScreenshot: true,
+      waivedByUserId: actorUserId,
+      flag: 'yellow',
+      flagReason: '商户已免提交付款凭证',
+    });
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'merchant_waive_append_batch_screenshot',
+      timestamp: Timestamp.now(),
+      userId: actorUserId,
+      note: appendBatchId,
+    });
+
+    tx.update(orderRef, {
+      paymentScreenshots: prevShots,
+      statusHistory: history,
       updatedAt: serverTimestamp(),
     });
   });

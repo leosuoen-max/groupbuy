@@ -8,16 +8,23 @@ import {
   buildReconciliationCsv,
   buildReconciliationTotals,
 } from '../../lib/reconciliationSummary';
-import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
-import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
+import {
+  orderHasPaymentProof,
+  parseScreenshotEntries,
+} from '../../lib/paymentScreenshotHelpers';
+import {
+  listOrdersByShopId,
+  merchantConfirmPayment,
+  type OrderRow,
+} from '../../lib/orderService';
 import { getShopBySlug } from '../../lib/shopService';
 import type { OrderStatus } from '../../types/firestore';
 
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
-  if (s === 'pending') return '待核实';
+  if (s === 'pending') return '待确认';
   if (s === 'confirmed') return '已确认';
-  if (s === 'partial_paid') return '部分付款';
+  if (s === 'partial_paid') return '待付款';
   if (s === 'cancelled') return '已取消';
   return s;
 }
@@ -36,12 +43,15 @@ export default function ReconciliationStatement() {
   const { user, loading: authLoading } = useAuthUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectFilter = searchParams.get('project') ?? '';
+  const proofStart = searchParams.get('proofStart') ?? '';
+  const proofEnd = searchParams.get('proofEnd') ?? '';
 
   const [err, setErr] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [copyOk, setCopyOk] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -75,15 +85,97 @@ export default function ReconciliationStatement() {
     });
   }, [authLoading, user, refresh]);
 
+  function parseDateTimeMs(yyyyMmDdHhMm: string): number | null {
+    if (!yyyyMmDdHhMm.trim()) return null;
+    const ms = new Date(yyyyMmDdHhMm).getTime();
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  function hasProofInRange(
+    paymentScreenshots: unknown,
+    startMs: number | null,
+    endMs: number | null
+  ): boolean {
+    const list = parseScreenshotEntries(paymentScreenshots);
+    if (list.length === 0) return false;
+    return list.some((x) => {
+      if (!(x.url || x.waivedNoScreenshot)) return false;
+      const t = x.uploadedAt?.toMillis?.();
+      if (typeof t !== 'number') return false;
+      if (startMs != null && t < startMs) return false;
+      if (endMs != null && t > endMs) return false;
+      return true;
+    });
+  }
+
   const scopedOrders = useMemo(() => {
-    if (!projectFilter.trim()) return orders;
-    return orders.filter((r) => r.data.projectId === projectFilter.trim());
-  }, [orders, projectFilter]);
+    const pid = projectFilter.trim();
+    const startMs = parseDateTimeMs(proofStart);
+    const endMs = parseDateTimeMs(proofEnd);
+    if (startMs != null && endMs != null && startMs > endMs) return [];
+    return orders.filter((r) => {
+      if (pid && r.data.projectId !== pid) return false;
+      if (startMs == null && endMs == null) return true;
+      return hasProofInRange(r.data.paymentScreenshots, startMs, endMs);
+    });
+  }, [orders, projectFilter, proofStart, proofEnd]);
+
+  const pendingScopedOrders = useMemo(
+    () => scopedOrders.filter((r) => r.data.status === 'pending'),
+    [scopedOrders]
+  );
+
+  const handleBulkConfirmPending = async () => {
+    if (!user) return;
+    if (pendingScopedOrders.length === 0) {
+      setErr('当前筛选范围内没有待确认订单。');
+      return;
+    }
+    const pendingAmount = pendingScopedOrders.reduce(
+      (s, r) => s + (r.data.totalAmount ?? 0),
+      0
+    );
+    const ok = window.confirm(
+      [
+        `将确认当前筛选范围内 ${pendingScopedOrders.length} 笔待确认订单。`,
+        `参考金额：${formatMYR(pendingAmount)}`,
+        '请先确认与银行/收款渠道金额一致后再继续。',
+      ].join('\n')
+    );
+    if (!ok) return;
+
+    setBulkBusy(true);
+    setErr(null);
+    let success = 0;
+    let failed = 0;
+    for (const row of pendingScopedOrders) {
+      try {
+        await merchantConfirmPayment(row.id, user.uid);
+        success += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    await refresh();
+    if (failed > 0) {
+      setErr(`批量确认完成：成功 ${success} 笔，失败 ${failed} 笔（请刷新后逐笔检查失败单）。`);
+    } else {
+      setErr(`批量确认完成：成功 ${success} 笔。`);
+    }
+    setBulkBusy(false);
+  };
 
   const totals = useMemo(
     () => buildReconciliationTotals(scopedOrders),
     [scopedOrders]
   );
+  const unpaidMergedAmount = totals.unpaidAmount + totals.partialPaidPendingAmount;
+  const unpaidMergedCount = totals.unpaidCount + totals.partialPaidCount;
+  const fullCaliberAmount =
+    totals.confirmedAmount +
+    totals.pendingAmount +
+    unpaidMergedAmount;
+  const fullCaliberDiff = totals.totalActiveAmount - fullCaliberAmount;
 
   const projectOptions = useMemo(() => {
     const m = new Map<string, string>();
@@ -174,7 +266,7 @@ export default function ReconciliationStatement() {
       {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
 
       <p className="mb-4 text-xs text-gray-600">
-        汇总口径与 docs/04 一致：已确认到账、待核实、未付款；可与 TNG / DuitNow /
+        汇总口径与 docs/04 一致：已确认到账、待确认、待付款；可与 TNG / DuitNow /
         银行等收款明细逐笔核对。
       </p>
 
@@ -186,7 +278,10 @@ export default function ReconciliationStatement() {
             value={projectFilter}
             onChange={(e) => {
               const v = e.target.value;
-              setSearchParams(v ? { project: v } : {});
+              const next = new URLSearchParams(searchParams);
+              if (v) next.set('project', v);
+              else next.delete('project');
+              setSearchParams(next);
             }}
           >
             <option value="">全部项目</option>
@@ -197,6 +292,41 @@ export default function ReconciliationStatement() {
             ))}
           </select>
         </label>
+        <div className="mt-3 grid max-w-md gap-2 sm:grid-cols-2">
+          <label className="block text-sm text-gray-800">
+            凭证时间起（精确到分钟）
+            <input
+              type="datetime-local"
+              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              value={proofStart}
+              onChange={(e) => {
+                const v = e.target.value;
+                const next = new URLSearchParams(searchParams);
+                if (v) next.set('proofStart', v);
+                else next.delete('proofStart');
+                setSearchParams(next);
+              }}
+            />
+          </label>
+          <label className="block text-sm text-gray-800">
+            凭证时间止（精确到分钟）
+            <input
+              type="datetime-local"
+              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              value={proofEnd}
+              onChange={(e) => {
+                const v = e.target.value;
+                const next = new URLSearchParams(searchParams);
+                if (v) next.set('proofEnd', v);
+                else next.delete('proofEnd');
+                setSearchParams(next);
+              }}
+            />
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-gray-600">
+          时间筛选按「付款凭证提交时间」统计，包含顾客上传截图与商户免提交凭证。若要表示“5月4日24:00”，请填写次日 00:00。
+        </p>
       </div>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2">
@@ -208,18 +338,18 @@ export default function ReconciliationStatement() {
           <div className="text-xs text-emerald-800">{totals.confirmedCount} 单</div>
         </div>
         <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-          <div className="text-xs font-medium text-amber-900">待核实金额</div>
+          <div className="text-xs font-medium text-amber-900">待确认金额</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-amber-950">
             {formatMYR(totals.pendingAmount)}
           </div>
           <div className="text-xs text-amber-900">{totals.pendingCount} 单</div>
         </div>
         <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-          <div className="text-xs font-medium text-red-900">未付款</div>
+          <div className="text-xs font-medium text-red-900">待付款</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-red-950">
-            {formatMYR(totals.unpaidAmount)}
+            {formatMYR(unpaidMergedAmount)}
           </div>
-          <div className="text-xs text-red-900">{totals.unpaidCount} 单</div>
+          <div className="text-xs text-red-900">{unpaidMergedCount} 单</div>
         </div>
         <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
           <div className="text-xs font-medium text-gray-700">订单总额（未取消）</div>
@@ -230,13 +360,23 @@ export default function ReconciliationStatement() {
         </div>
       </div>
 
+      <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800">
+        <div className="font-medium">全口径核对</div>
+        <p className="mt-1 tabular-nums">
+          已确认 + 待确认 + 待付款 = {formatMYR(fullCaliberAmount)}
+        </p>
+        <p className="mt-1 tabular-nums text-xs text-gray-600">
+          与订单总额差值：{formatMYR(fullCaliberDiff)}
+        </p>
+      </div>
+
       <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
         <div className="font-medium">声称已付（业务侧）</div>
         <div className="mt-1 tabular-nums">
           {formatMYR(totals.claimedPaidAmount)} · {totals.claimedPaidCount} 单
         </div>
         <p className="mt-1 text-xs text-indigo-900/90">
-          含已上传截图或状态为待核实/已确认/部分付款的订单，便于与通道侧「客户声称已付」对照。
+          含已上传截图或状态为待确认/已确认/部分付款的订单，便于与通道侧「客户声称已付」对照。
         </p>
       </div>
 
@@ -262,6 +402,16 @@ export default function ReconciliationStatement() {
         >
           导出 CSV
         </button>
+        <button
+          type="button"
+          disabled={bulkBusy || pendingScopedOrders.length === 0}
+          className="inline-flex h-10 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+          onClick={() => void handleBulkConfirmPending()}
+        >
+          {bulkBusy
+            ? '批量确认中…'
+            : `一键确认待确认（${pendingScopedOrders.length}）`}
+        </button>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-gray-100">
@@ -285,7 +435,7 @@ export default function ReconciliationStatement() {
               const timeStr = d
                 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
                 : '—';
-              const hasShot = orderHasPaymentScreenshots(o.paymentScreenshots);
+              const hasShot = orderHasPaymentProof(o.paymentScreenshots);
               return (
                 <tr key={row.id} className="bg-white">
                   <td className="whitespace-nowrap px-3 py-2 text-gray-700">{timeStr}</td>

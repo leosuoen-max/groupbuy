@@ -1,5 +1,5 @@
 import type { OrderRow } from './orderService';
-import { orderHasPaymentScreenshots } from './paymentScreenshotHelpers';
+import { orderHasPaymentProof } from './paymentScreenshotHelpers';
 import type { OrderDoc, OrderStatus } from '../types/firestore';
 
 export type ReconciliationTotals = {
@@ -15,7 +15,7 @@ export type ReconciliationTotals = {
   /** 非取消订单合计金额 */
   totalActiveAmount: number;
   activeCount: number;
-  /** 声称已付：已上传截图，或状态为待核实/已确认/部分付款（与收款流水对账时参考） */
+  /** 声称已付：已上传截图，或状态为待确认/已确认/部分付款（与收款流水对账时参考） */
   claimedPaidAmount: number;
   claimedPaidCount: number;
   /** 有效订单率：已确认单数 / 非取消单数 */
@@ -23,7 +23,7 @@ export type ReconciliationTotals = {
 };
 
 function isClaimedPaid(o: OrderDoc): boolean {
-  if (orderHasPaymentScreenshots(o.paymentScreenshots)) return true;
+  if (orderHasPaymentProof(o.paymentScreenshots)) return true;
   const s: OrderStatus = o.status;
   return s === 'pending' || s === 'confirmed' || s === 'partial_paid';
 }
@@ -126,7 +126,7 @@ export function buildReconciliationCopyText(params: {
     );
   }
   lines.push('');
-  lines.push(`待核实（${totals.pendingCount} 单）`);
+  lines.push(`待确认（${totals.pendingCount} 单）`);
   for (const r of pending) {
     lines.push(
       `${r.data.customerName} #${r.data.orderNumber} ${formatRm(r.data.totalAmount)}`
@@ -141,7 +141,9 @@ export function buildReconciliationCopyText(params: {
   }
   lines.push('');
   lines.push(
-    `已确认金额：${formatRm(totals.confirmedAmount)} · 待核实：${formatRm(totals.pendingAmount)} · 未付款：${formatRm(totals.unpaidAmount)}`
+    `已确认金额：${formatRm(totals.confirmedAmount)} · 待确认：${formatRm(totals.pendingAmount)} · 待付款：${formatRm(
+      totals.unpaidAmount + totals.partialPaidPendingAmount
+    )}`
   );
   lines.push(`订单总额（未取消）：${formatRm(totals.totalActiveAmount)} / ${totals.activeCount} 单`);
   if (totals.effectiveRatePercent != null) {
@@ -191,7 +193,7 @@ export function buildReconciliationCsv(rows: OrderRow[]): string {
   });
   for (const r of sorted) {
     const o = r.data;
-    const hasShot = orderHasPaymentScreenshots(o.paymentScreenshots) ? '是' : '否';
+    const hasShot = orderHasPaymentProof(o.paymentScreenshots) ? '是' : '否';
     lines.push(
       [
         esc(formatOrderTime(o)),

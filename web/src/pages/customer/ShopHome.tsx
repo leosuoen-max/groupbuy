@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShopHeader } from '../../components/customer/ShopHeader';
 import { ShopContentBlocks } from '../../components/customer/ShopContentBlocks';
 import { ProductCard } from '../../components/customer/ProductCard';
@@ -19,6 +19,7 @@ import { listOrdersByCustomer } from '../../lib/orderService';
 import { getProjectPermissionForUser } from '../../lib/permissionService';
 import { getShopBySlug } from '../../lib/shopService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
+import type { CartLocationState } from '../../types/orderDraft';
 
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
@@ -36,6 +37,7 @@ export default function ShopHome() {
   }>();
   const { user, loading: authLoading } = useAuthUser();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const useMock = searchParams.get('mock') === '1';
   const navigate = useNavigate();
   const now = useTick(30_000);
@@ -182,6 +184,20 @@ export default function ShopHome() {
   const errorText = !useMock ? remote.error : undefined;
 
   const [cart, setCart] = useState<Record<string, number>>({});
+  const incoming = (location.state ?? {}) as CartLocationState;
+
+  useEffect(() => {
+    const draft = incoming.cartDraft;
+    if (!draft) return;
+    queueMicrotask(() => {
+      setCart((prev) => {
+        const hasChanged = Object.keys(draft).some(
+          (k) => (prev[k] ?? 0) !== (draft[k] ?? 0)
+        );
+        return hasChanged ? { ...draft } : prev;
+      });
+    });
+  }, [incoming.cartDraft]);
 
   const activeProducts = useMemo(
     () => (data ? data.products.filter((p) => p.isActive) : []),
@@ -229,7 +245,7 @@ export default function ShopHome() {
       })
       .filter(Boolean);
     navigate(`${basePath}/order`, {
-      state: { lines, projectTitle: data.projectTitle },
+      state: { lines, projectTitle: data.projectTitle, cartDraft: cart },
     });
   };
 

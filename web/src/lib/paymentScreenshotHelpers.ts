@@ -8,6 +8,9 @@ export type ParsedScreenshotEntry = {
   flagReason: string | null;
   /** 归属某一档加购补款；缺省表示首单/整单付款截图 */
   appendBatchId: string | null;
+  /** 商户免提交凭证（无截图） */
+  waivedNoScreenshot: boolean;
+  waivedByUserId: string | null;
 };
 
 /** 解析订单里的 paymentScreenshots（兼容未知结构） */
@@ -33,7 +36,21 @@ export function parseScreenshotEntries(raw: unknown): ParsedScreenshotEntry[] {
       typeof o.appendBatchId === 'string' && o.appendBatchId.trim()
         ? o.appendBatchId.trim()
         : null;
-    out.push({ id, url, uploadedAt, flag, flagReason, appendBatchId });
+    const waivedNoScreenshot = o.waivedNoScreenshot === true;
+    const waivedByUserId =
+      typeof o.waivedByUserId === 'string' && o.waivedByUserId.trim()
+        ? o.waivedByUserId.trim()
+        : null;
+    out.push({
+      id,
+      url,
+      uploadedAt,
+      flag,
+      flagReason,
+      appendBatchId,
+      waivedNoScreenshot,
+      waivedByUserId,
+    });
   }
   return out;
 }
@@ -42,7 +59,14 @@ export function orderHasPaymentScreenshots(raw: unknown): boolean {
   return parseScreenshotEntries(raw).some((x) => x.url);
 }
 
-/** 是否已有挂在指定加购批次 id 上的付款截图（有 URL） */
+/** 是否有任何付款凭证（顾客上传截图或商户免提交标记） */
+export function orderHasPaymentProof(raw: unknown): boolean {
+  return parseScreenshotEntries(raw).some(
+    (x) => Boolean(x.url) || x.waivedNoScreenshot
+  );
+}
+
+/** 是否已有挂在指定加购批次 id 上的付款凭证（截图或免提交标记） */
 export function hasPaymentScreenshotForAppendBatch(
   raw: unknown,
   appendBatchId: string
@@ -50,7 +74,7 @@ export function hasPaymentScreenshotForAppendBatch(
   const id = appendBatchId.trim();
   if (!id) return false;
   return parseScreenshotEntries(raw).some(
-    (x) => Boolean(x.url) && x.appendBatchId === id
+    (x) => x.appendBatchId === id && (Boolean(x.url) || x.waivedNoScreenshot)
   );
 }
 

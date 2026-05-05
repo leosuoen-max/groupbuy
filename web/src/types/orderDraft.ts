@@ -9,6 +9,8 @@ export type OrderLine = {
 export type CartLocationState = {
   lines?: OrderLine[] | null;
   projectTitle?: string;
+  /** 选菜页草稿数量，支持从订单页返回继续修改 */
+  cartDraft?: Record<string, number>;
 };
 
 export type MockDeliveryPoint = {

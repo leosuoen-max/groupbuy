@@ -15,6 +15,24 @@ import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../type
 import type { ProjectDoc } from '../../types/firestore';
 
 type Step = 1 | 2 | 3;
+const LOAD_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(`${label}超时，请重试`));
+    }, ms);
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
   if (project.status === 'draft') return false;
@@ -34,6 +52,16 @@ export default function OrderForm() {
   const incoming = (location.state ?? {}) as CartLocationState;
   const lines = (incoming.lines ?? []).filter(Boolean);
   const projectTitleState = incoming.projectTitle ?? '当前项目';
+  const returnCartDraft = useMemo(() => {
+    if (incoming.cartDraft && Object.keys(incoming.cartDraft).length > 0) {
+      return incoming.cartDraft;
+    }
+    const draft: Record<string, number> = {};
+    for (const l of lines) {
+      draft[l.productId] = l.quantity;
+    }
+    return draft;
+  }, [incoming.cartDraft, lines]);
 
   const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
 
@@ -70,12 +98,20 @@ export default function OrderForm() {
         setBooting(true);
         setBootErr(null);
         try {
-          const shopRow = await getShopBySlug(decodeURIComponent(shopSlug));
+          const shopRow = await withTimeout(
+            getShopBySlug(decodeURIComponent(shopSlug)),
+            LOAD_TIMEOUT_MS,
+            '店铺加载'
+          );
           if (!shopRow) {
             if (!cancelled) setBootErr('店铺不存在或链接有误。');
             return;
           }
-          const projectRow = await getProject(decodeURIComponent(projectId));
+          const projectRow = await withTimeout(
+            getProject(decodeURIComponent(projectId)),
+            LOAD_TIMEOUT_MS,
+            '项目加载'
+          );
           if (!projectRow) {
             if (!cancelled) setBootErr('项目不存在或已删除。');
             return;
@@ -85,7 +121,11 @@ export default function OrderForm() {
             return;
           }
 
-          const allPoints = await listDeliveryPointsByShopId(shopRow.id);
+          const allPoints = await withTimeout(
+            listDeliveryPointsByShopId(shopRow.id),
+            LOAD_TIMEOUT_MS,
+            '配送点加载'
+          );
           const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
           const filtered =
             allowed.size > 0
@@ -411,12 +451,20 @@ export default function OrderForm() {
             />
           </label>
           <div className="flex flex-wrap gap-2 pt-2">
-            <Link
-              to={base}
+            <button
+              type="button"
+              onClick={() =>
+                navigate(base, {
+                  state: {
+                    projectTitle: resolvedProjectTitle,
+                    cartDraft: returnCartDraft,
+                  },
+                })
+              }
               className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-800"
             >
-              返回选菜
-            </Link>
+              再想想
+            </button>
             <button
               type="button"
               className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
