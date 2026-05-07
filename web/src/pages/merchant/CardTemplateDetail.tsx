@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug } from '../../lib/shopService';
@@ -61,6 +61,7 @@ export default function CardTemplateDetail() {
   }>();
   const slug = decodeURIComponent(shopSlug);
   const tid = decodeURIComponent(templateId);
+  const [searchParams] = useSearchParams();
   const { user, loading: authLoading } = useAuthUser();
 
   const [bootErr, setBootErr] = useState<string | null>(null);
@@ -113,6 +114,36 @@ export default function CardTemplateDetail() {
       cancelled = true;
     };
   }, [authLoading, user, slug, refresh]);
+
+  const highlightId = searchParams.get('highlight')?.trim() ?? '';
+  const pendingRequests = useMemo(
+    () => requests.filter((r) => r.data.status === 'pending'),
+    [requests]
+  );
+
+  useEffect(() => {
+    if (!highlightId || loading) return;
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`card-request-${highlightId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add(
+        'ring-2',
+        'ring-indigo-400',
+        'ring-offset-2',
+        'rounded-xl'
+      );
+      window.setTimeout(() => {
+        el.classList.remove(
+          'ring-2',
+          'ring-indigo-400',
+          'ring-offset-2',
+          'rounded-xl'
+        );
+      }, 2800);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [highlightId, loading, pendingRequests.length]);
 
   const handleConfirm = async (req: CardPurchaseRequestRow) => {
     if (!user) return;
@@ -175,7 +206,6 @@ export default function CardTemplateDetail() {
     ? `面值 RM ${Number(tpl.faceValueOrUses ?? 0).toFixed(2)}`
     : `${Number(tpl.faceValueOrUses ?? 0)} 次`;
 
-  const pendingRequests = requests.filter((r) => r.data.status === 'pending');
   const recentDoneRequests = requests
     .filter((r) => r.data.status !== 'pending')
     .slice(0, 10);
@@ -245,7 +275,11 @@ export default function CardTemplateDetail() {
             {pendingRequests.map((req) => {
               const isStoredReq = req.data.templateTypeSnapshot === 'stored';
               return (
-                <div key={req.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <div
+                  key={req.id}
+                  id={`card-request-${req.id}`}
+                  className="rounded-xl border border-amber-200 bg-amber-50 p-3"
+                >
                   <div className="flex flex-wrap items-baseline justify-between gap-1 text-xs text-amber-900">
                     <span className="font-semibold">
                       {req.data.kind === 'topup' ? '充值' : '购买'}
@@ -267,22 +301,37 @@ export default function CardTemplateDetail() {
                   </div>
                   {Array.isArray(req.data.paymentScreenshots) &&
                   req.data.paymentScreenshots.length > 0 ? (
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      {req.data.paymentScreenshots.map((s) => (
-                        <button
-                          key={s.url}
-                          type="button"
-                          onClick={() => setPreviewUrl(s.url)}
-                          className="overflow-hidden rounded ring-1 ring-amber-200"
-                        >
-                          <img
-                            src={s.url}
-                            alt=""
-                            className="h-20 w-full object-cover"
-                          />
-                        </button>
-                      ))}
-                    </div>
+                    <>
+                      <div className="mt-2 grid grid-cols-3 gap-2">
+                        {req.data.paymentScreenshots.map((s) => (
+                          <div key={s.url} className="relative">
+                            {s.duplicateRisk ? (
+                              <span className="absolute left-0 top-0 z-10 rounded-br-md bg-red-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm">
+                                疑似重复
+                              </span>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => setPreviewUrl(s.url)}
+                              className="block w-full overflow-hidden rounded ring-1 ring-amber-200"
+                            >
+                              <img
+                                src={s.url}
+                                alt=""
+                                className="h-20 w-full object-cover"
+                              />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {req.data.paymentScreenshots.some((x) => x.duplicateRisk) ? (
+                        <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-2 py-2 text-[11px] leading-snug text-red-900">
+                          <span className="font-semibold">自动重复识别：</span>
+                          标红的凭证与<strong>本店其它购卡/充值请求</strong>
+                          曾上传过<strong>完全相同文件</strong>的截图（按 SHA-256 指纹比对）。有可能是重复使用付款凭证，请人工核对后再确认到账。
+                        </p>
+                      ) : null}
+                    </>
                   ) : (
                     <p className="mt-2 text-xs text-amber-700">尚未上传截图</p>
                   )}
@@ -401,9 +450,18 @@ export default function CardTemplateDetail() {
                       <span className="ml-1 text-gray-500">· {l.data.note}</span>
                     ) : null}
                     {l.data.orderNumber ? (
-                      <span className="ml-1 text-indigo-600">
-                        · 订单 #{l.data.orderNumber}
-                      </span>
+                      l.data.orderProjectId && l.data.orderShopSlug ? (
+                        <Link
+                          to={`/dashboard/${encodeURIComponent(l.data.orderShopSlug)}/order/${encodeURIComponent(l.data.orderProjectId)}/${encodeURIComponent(l.data.orderNumber)}`}
+                          className="ml-1 text-indigo-600 underline-offset-2 hover:underline"
+                        >
+                          · 订单 #{l.data.orderNumber}
+                        </Link>
+                      ) : (
+                        <span className="ml-1 text-indigo-600">
+                          · 订单 #{l.data.orderNumber}
+                        </span>
+                      )
                     ) : null}
                     <div className="text-[11px] text-gray-500">
                       持卡人 {l.data.customerKey.slice(-6)} · 余{' '}

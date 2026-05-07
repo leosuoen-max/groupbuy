@@ -790,6 +790,7 @@ export async function customerAppendLinesToOrder(input: {
   orderNumber: string;
   customerKey: string;
   additionalLines: OrderLine[];
+  bundleSelections?: BundleSelectionDraft[];
 }): Promise<void> {
   if (!input.additionalLines.length) throw new Error('请选择要加购的商品');
 
@@ -829,7 +830,14 @@ export async function customerAppendLinesToOrder(input: {
     }
 
     const newLineDocs = toOrderLines(input.additionalLines);
-    const nextProducts = applyStockDeduction(project, input.additionalLines);
+    const normalLines = input.additionalLines.filter(
+      (l) => !String(l.productId ?? '').startsWith('bundle:')
+    );
+    const nextProducts = applyStockDeduction(project, normalLines);
+    const nextBundleTools = applyBundleStockDeduction(
+      project,
+      input.bundleSelections
+    );
     const delta = computeTotal(newLineDocs);
     if (delta <= 0) throw new Error('加购金额无效');
 
@@ -928,6 +936,7 @@ export async function customerAppendLinesToOrder(input: {
 
     tx.update(projectRef, {
       products: nextProducts,
+      bundleTools: nextBundleTools,
       stats: {
         ...prevStats,
         totalRevenue: (prevStats.totalRevenue ?? 0) + delta,

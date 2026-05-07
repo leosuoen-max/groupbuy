@@ -15,6 +15,10 @@ import {
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
 import { getShopBySlug, type ShopRow } from '../../lib/shopService';
+import {
+  listCardTemplatesByShop,
+  type CardTemplateRow,
+} from '../../lib/cardService';
 import type { BundleToolDoc, ProjectProduct } from '../../types/firestore';
 
 function toDatetimeLocalValue(d: Date) {
@@ -51,6 +55,12 @@ function parseMaybeTimestamp(v: unknown): Timestamp | null | undefined {
   return undefined;
 }
 
+function normalizeApplicableCardIds(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const out = input.filter((x): x is string => typeof x === 'string' && !!x);
+  return out.length > 0 ? out : undefined;
+}
+
 function normalizeDraftProducts(input: unknown): ProjectProduct[] {
   if (!Array.isArray(input)) return [];
   return input.map((p, i) => {
@@ -73,6 +83,9 @@ function normalizeDraftProducts(input: unknown): ProjectProduct[] {
         typeof row.sortOrder === 'number' && Number.isFinite(row.sortOrder)
           ? row.sortOrder
           : i,
+      applicableCardTemplateIds: normalizeApplicableCardIds(
+        (row as { applicableCardTemplateIds?: unknown }).applicableCardTemplateIds
+      ),
     } satisfies ProjectProduct;
   });
 }
@@ -118,6 +131,9 @@ export default function ProjectEdit() {
   const [validationHighlightKey, setValidationHighlightKey] = useState<string | null>(null);
 
   const [shopRow, setShopRow] = useState<ShopRow | null>(null);
+  const [passCardTemplates, setPassCardTemplates] = useState<CardTemplateRow[]>(
+    []
+  );
   const [deliveryLibrary, setDeliveryLibrary] = useState<DeliveryPointRow[]>(
     []
   );
@@ -279,6 +295,15 @@ export default function ProjectEdit() {
           return;
         }
         if (!cancelled) setShopRow(shop);
+        // 拉取本店的次卡模板（仅 active），供产品 / 套餐方案勾选适配
+        try {
+          const cards = await listCardTemplatesByShop(shop.id);
+          if (!cancelled) {
+            setPassCardTemplates(cards.filter((c) => c.data.type === 'pass'));
+          }
+        } catch {
+          if (!cancelled) setPassCardTemplates([]);
+        }
         if (isNew) {
           const id = await createDraftProject(shop.id);
           if (!cancelled) {
@@ -368,6 +393,14 @@ export default function ProjectEdit() {
           ...(discountPrice != null
             ? { discountEnd: parsedDiscountEnd instanceof Timestamp ? parsedDiscountEnd : null }
             : {}),
+          ...(Array.isArray(p.applicableCardTemplateIds) &&
+          p.applicableCardTemplateIds.length > 0
+            ? {
+                applicableCardTemplateIds: p.applicableCardTemplateIds.filter(
+                  (x): x is string => typeof x === 'string' && !!x
+                ),
+              }
+            : {}),
         };
         return normalized;
       })
@@ -444,6 +477,19 @@ export default function ProjectEdit() {
                 : {}),
               ...(discountPrice != null
                 ? { discountEnd: parsedDiscountEnd instanceof Timestamp ? parsedDiscountEnd : null }
+                : {}),
+              ...(Array.isArray(
+                (sch as { applicableCardTemplateIds?: unknown })
+                  .applicableCardTemplateIds
+              ) &&
+              ((sch as { applicableCardTemplateIds?: string[] })
+                .applicableCardTemplateIds?.length ?? 0) > 0
+                ? {
+                    applicableCardTemplateIds: (
+                      (sch as { applicableCardTemplateIds: string[] })
+                        .applicableCardTemplateIds
+                    ).filter((x): x is string => typeof x === 'string' && !!x),
+                  }
                 : {}),
             };
           })
@@ -936,6 +982,58 @@ export default function ProjectEdit() {
                 <p className="mt-1 text-[11px] text-gray-500">
                   规则：不填优惠价=普通；填优惠价=特惠；再填结束时间=早鸟价。
                 </p>
+                {passCardTemplates.length > 0 ? (
+                  <div className="mt-3 rounded-lg border border-gray-100 bg-white p-2">
+                    <div className="mb-1 text-[11px] font-medium text-gray-700">
+                      适配次卡（顾客可用此次卡抵扣本商品）
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {passCardTemplates.map((c) => {
+                        const checked =
+                          p.applicableCardTemplateIds?.includes(c.id) ?? false;
+                        return (
+                          <label
+                            key={c.id}
+                            className={`flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11px] ${
+                              checked
+                                ? 'border-purple-300 bg-purple-50 text-purple-800'
+                                : 'border-gray-200 bg-white text-gray-700'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-3 w-3"
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                setProducts((prev) =>
+                                  prev.map((x) => {
+                                    if (x.id !== p.id) return x;
+                                    const cur = Array.isArray(
+                                      x.applicableCardTemplateIds
+                                    )
+                                      ? x.applicableCardTemplateIds
+                                      : [];
+                                    const set = new Set(cur);
+                                    if (next) set.add(c.id);
+                                    else set.delete(c.id);
+                                    const arr = Array.from(set);
+                                    return {
+                                      ...x,
+                                      applicableCardTemplateIds:
+                                        arr.length > 0 ? arr : undefined,
+                                    };
+                                  })
+                                );
+                              }}
+                            />
+                            {c.data.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-2 flex justify-end">
                   <button
                     type="button"
@@ -1570,6 +1668,69 @@ export default function ProjectEdit() {
                               </label>
                             ))}
                           </div>
+                          {passCardTemplates.length > 0 ? (
+                            <div className="mt-2 rounded border border-gray-100 bg-white p-2">
+                              <div className="mb-1 text-[11px] font-medium text-gray-700">
+                                适配次卡（顾客可用此次卡抵扣本方案）
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {passCardTemplates.map((c) => {
+                                  const ids =
+                                    (sch as { applicableCardTemplateIds?: string[] })
+                                      .applicableCardTemplateIds ?? [];
+                                  const checked = ids.includes(c.id);
+                                  return (
+                                    <label
+                                      key={c.id}
+                                      className={`flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11px] ${
+                                        checked
+                                          ? 'border-purple-300 bg-purple-50 text-purple-800'
+                                          : 'border-gray-200 bg-white text-gray-700'
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="h-3 w-3"
+                                        checked={checked}
+                                        onChange={(e) => {
+                                          const next = e.target.checked;
+                                          setBundleTools((prev) =>
+                                            prev.map((x) => {
+                                              if (x.id !== tool.id) return x;
+                                              return {
+                                                ...x,
+                                                schemes: x.schemes.map((s) => {
+                                                  if (s.id !== sch.id) return s;
+                                                  const cur =
+                                                    (s as {
+                                                      applicableCardTemplateIds?: string[];
+                                                    }).applicableCardTemplateIds ??
+                                                    [];
+                                                  const set = new Set(cur);
+                                                  if (next) set.add(c.id);
+                                                  else set.delete(c.id);
+                                                  const arr = Array.from(set);
+                                                  const updated = {
+                                                    ...s,
+                                                    applicableCardTemplateIds:
+                                                      arr.length > 0
+                                                        ? arr
+                                                        : undefined,
+                                                  };
+                                                  return updated;
+                                                }),
+                                              };
+                                            })
+                                          );
+                                        }}
+                                      />
+                                      {c.data.name}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>

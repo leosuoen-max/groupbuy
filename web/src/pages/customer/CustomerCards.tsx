@@ -129,6 +129,21 @@ export default function CustomerCards() {
 
   const pendingRequests = requests.filter((r) => r.data.status === 'pending');
 
+  /** 仅展示仍可「首次开通」的模板：已持卡或有待确认的购买请求则不重复列出 */
+  const purchasableTemplates = templates.filter((t) => {
+    const hasPendingPurchase = requests.some(
+      (r) =>
+        r.data.templateId === t.id &&
+        r.data.kind === 'purchase' &&
+        r.data.status === 'pending'
+    );
+    const hasOwnedNonCancelled = myCards.some(
+      (c) =>
+        c.data.templateId === t.id && c.data.status !== 'cancelled'
+    );
+    return !hasOwnedNonCancelled && !hasPendingPurchase;
+  });
+
   return (
     <PageShell title="优惠卡" subtitle={shop.data.name}>
       {msg ? (
@@ -148,7 +163,9 @@ export default function CustomerCards() {
         <h2 className="mb-2 text-sm font-semibold text-gray-900">我的卡片</h2>
         {myCards.length === 0 ? (
           <p className="rounded-xl border border-dashed border-gray-300 px-3 py-5 text-center text-xs text-gray-500">
-            还没有任何卡，下方可购买。
+            {purchasableTemplates.length > 0
+              ? '还没有任何卡，下方可选择首次开通。'
+              : '还没有任何卡；当前暂无可首购的卡种。'}
           </p>
         ) : (
           <div className="space-y-2">
@@ -248,13 +265,20 @@ export default function CustomerCards() {
       {/* 可购买的卡 */}
       <section className="mb-5">
         <h2 className="mb-2 text-sm font-semibold text-gray-900">可购买的卡</h2>
+        <p className="mb-2 text-xs leading-relaxed text-gray-500">
+          下列为尚未持有的卡种，标价为首购专享；开通后请在「我的卡片」充值，充值按商户配置的档位执行。
+        </p>
         {templates.length === 0 ? (
           <p className="rounded-xl border border-dashed border-gray-300 px-3 py-5 text-center text-xs text-gray-500">
             店铺暂未上架优惠卡。
           </p>
+        ) : purchasableTemplates.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-gray-300 px-3 py-5 text-center text-xs text-gray-500">
+            当前暂无可首购的卡；已持卡请在上方「我的卡片」充值，有待确认的开通请在「待商户确认」查看。
+          </p>
         ) : (
           <div className="space-y-2">
-            {templates.map((t) => {
+            {purchasableTemplates.map((t) => {
               const isStored = t.data.type === 'stored';
               const valueText = isStored
                 ? `面值 RM ${Number(t.data.faceValueOrUses ?? 0).toFixed(2)}`
@@ -263,20 +287,7 @@ export default function CustomerCards() {
                 Number(t.data.validityDays ?? 0) > 0
                   ? `${t.data.validityDays} 天有效`
                   : '永久有效';
-              const myActiveWallet = isStored
-                ? myCards.find(
-                    (c) =>
-                      c.data.templateId === t.id && c.data.status === 'active'
-                  )
-                : null;
-              const myPendingPurchase = isStored
-                ? requests.find(
-                    (r) =>
-                      r.data.templateId === t.id &&
-                      r.data.kind === 'purchase' &&
-                      r.data.status === 'pending'
-                  )
-                : null;
+
               return (
                 <div
                   key={t.id}
@@ -299,11 +310,11 @@ export default function CustomerCards() {
                         </span>
                       </div>
                       <p className="mt-1 text-xs text-gray-700">
-                        {valueText} · 售价{' '}
+                        {valueText} · 首购{' '}
                         <span className="text-base font-bold text-gray-900">
                           {formatMYR(Number(t.data.salePrice ?? 0))}
                         </span>
-                        ·{validity}
+                        · {validity}
                       </p>
                       {t.data.description ? (
                         <p className="mt-1 line-clamp-2 text-xs text-gray-500">
@@ -311,25 +322,12 @@ export default function CustomerCards() {
                         </p>
                       ) : null}
                     </div>
-                    {myActiveWallet ? (
-                      <Link
-                        to={`${topupHrefBase}/${encodeURIComponent(myActiveWallet.id)}${queryFrom}`}
-                        className="shrink-0 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700"
-                      >
-                        去充值
-                      </Link>
-                    ) : myPendingPurchase ? (
-                      <span className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
-                        待确认
-                      </span>
-                    ) : (
-                      <Link
-                        to={`${buyHrefBase}/${encodeURIComponent(t.id)}${queryFrom}`}
-                        className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
-                      >
-                        购买
-                      </Link>
-                    )}
+                    <Link
+                      to={`${buyHrefBase}/${encodeURIComponent(t.id)}${queryFrom}`}
+                      className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
+                    >
+                      购买
+                    </Link>
                   </div>
                 </div>
               );

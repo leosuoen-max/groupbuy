@@ -656,6 +656,34 @@ export default function MerchantOrderDetail() {
             <span>应付合计</span>
             <span>{formatMYR(order.totalAmount)}</span>
           </div>
+          {order.cardPayment ? (
+            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+              <p className="font-semibold">卡支付（系统已抵扣）</p>
+              <ul className="mt-1 space-y-0.5">
+                {order.cardPayment.passCards.map((c) => (
+                  <li key={c.customerCardId}>
+                    · 次卡 #{c.customerCardId.slice(0, 6)} — 抵扣 {c.uses} 次（
+                    {c.appliedLineProductIds
+                      .map((pid) =>
+                        order.lines.find((l) => l.productId === pid)?.name ?? '行'
+                      )
+                      .join('、')}
+                    ）
+                  </li>
+                ))}
+                {order.cardPayment.wallet ? (
+                  <li>
+                    · 钱包扣减 RM{' '}
+                    {Number(order.cardPayment.wallet.deduct ?? 0).toFixed(2)}
+                  </li>
+                ) : null}
+                <li className="pt-1 font-semibold">
+                  共抵扣 RM{' '}
+                  {Number(order.cardPayment.totalDeducted ?? 0).toFixed(2)}
+                </li>
+              </ul>
+            </div>
+          ) : null}
         </div>
 
         <div>

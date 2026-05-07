@@ -18,6 +18,7 @@ import {
   type CardTemplateRow,
   type CustomerCardRow,
 } from '../../lib/cardService';
+import { sha256HexOfFile } from '../../lib/fileSha256';
 import { formatMYR } from '../../lib/formatMYR';
 import type {
   CardTopupRule,
@@ -49,6 +50,11 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
   const [existingCard, setExistingCard] = useState<CustomerCardRow | null>(null);
   const [walletBlock, setWalletBlock] = useState<
     | { kind: 'has_active'; cardId: string }
+    | { kind: 'has_pending'; requestId: string }
+    | null
+  >(null);
+  const [passBlock, setPassBlock] = useState<
+    | { kind: 'has_card'; cardId: string }
     | { kind: 'has_pending'; requestId: string }
     | null
   >(null);
@@ -107,6 +113,36 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
                 requestId: pendingPurchase.id,
               });
             }
+          } else if (t.data.type === 'pass') {
+            const [cards, reqs] = await Promise.all([
+              listCustomerCardsByCustomer(customerKey, row.id),
+              listCardRequestsByCustomer(customerKey, row.id, {
+                status: 'pending',
+              }),
+            ]);
+            const pendingPur = reqs.find(
+              (r) =>
+                r.data.templateId === t.id && r.data.kind === 'purchase'
+            );
+            const owned = cards.filter(
+              (c) =>
+                c.data.templateId === t.id &&
+                c.data.status !== 'cancelled'
+            );
+            const rechargeable = owned.find(
+              (c) =>
+                c.data.status === 'active' || c.data.status === 'used_up'
+            );
+            if (cancelled) return;
+            if (pendingPur) {
+              setPassBlock({
+                kind: 'has_pending',
+                requestId: pendingPur.id,
+              });
+            } else if (owned.length > 0) {
+              const targetId = rechargeable?.id ?? owned[0]!.id;
+              setPassBlock({ kind: 'has_card', cardId: targetId });
+            }
           }
         } else {
           if (!params.cardId) throw new Error('缺少卡实例参数');
@@ -137,35 +173,35 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
 
   const offers = useMemo(() => {
     if (!tplData) return [] as { idx: number; pay: number; gain: number; label: string }[];
-    const list: { idx: number; pay: number; gain: number; label: string }[] = [];
     if (mode === 'purchase') {
-      list.push({
-        idx: -1,
-        pay: Number(tplData.salePrice) || 0,
-        gain: Number(tplData.faceValueOrUses) || 0,
-        label: '首次购买',
-      });
+      return [
+        {
+          idx: -1,
+          pay: Number(tplData.salePrice) || 0,
+          gain: Number(tplData.faceValueOrUses) || 0,
+          label: '首购专享（仅首次购买）',
+        },
+      ];
     }
     const rules: CardTopupRule[] = Array.isArray(tplData.topupRules)
       ? tplData.topupRules
       : [];
-    rules.forEach((r, i) => {
-      list.push({
-        idx: i,
-        pay: Number(r.pay) || 0,
-        gain: Number(r.gain) || 0,
-        label: mode === 'purchase' ? `档位 ${i + 1}` : `充值档位 ${i + 1}`,
-      });
-    });
-    return list;
+    return rules.map((r, i) => ({
+      idx: i,
+      pay: Number(r.pay) || 0,
+      gain: Number(r.gain) || 0,
+      label: `充值档位 ${i + 1}`,
+    }));
   }, [tplData, mode]);
 
-  // 默认选中第 1 项
   useEffect(() => {
-    if (offers.length > 0 && selectedRuleIdx === -1 && !requestId) {
-      setSelectedRuleIdx(offers[0]!.idx);
-    }
-  }, [offers, selectedRuleIdx, requestId]);
+    if (requestId || offers.length === 0) return;
+    setSelectedRuleIdx((prev) => {
+      const stillValid = offers.some((o) => o.idx === prev);
+      if (stillValid) return prev;
+      return offers[0]!.idx;
+    });
+  }, [offers, requestId]);
 
   const selected = useMemo(() => {
     return offers.find((o) => o.idx === selectedRuleIdx) ?? null;
@@ -212,12 +248,15 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     setUploading(true);
     setMsg(null);
     try {
+      const hex = await sha256HexOfFile(file);
       const url = await uploadCardPaymentImage({
         shopId: shop.id,
         requestId,
         file,
       });
-      await appendCardPaymentScreenshotToRequest(requestId, url);
+      await appendCardPaymentScreenshotToRequest(requestId, url, {
+        contentSha256: hex,
+      });
       await refreshRequest();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '上传失败');
@@ -308,10 +347,25 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           </span>
         </div>
         <p className="mt-1 text-xs text-gray-700">
-          {valueLabel} · 售价 RM {Number(template.data.salePrice ?? 0).toFixed(2)} ·{' '}
-          {Number(template.data.validityDays ?? 0) > 0
-            ? `${template.data.validityDays} 天有效`
-            : '永久有效'}
+          {mode === 'topup' ? (
+            <>
+              充值仅适用下方「充值档位」，不包含首购专享价。
+              {Number(template.data.validityDays ?? 0) > 0
+                ? ` · ${template.data.validityDays} 天有效`
+                : ' · 永久有效'}
+            </>
+          ) : (
+            <>
+              {valueLabel} · 首购实付{' '}
+              <span className="font-bold text-gray-900">
+                RM {Number(template.data.salePrice ?? 0).toFixed(2)}
+              </span>{' '}
+              ·{' '}
+              {Number(template.data.validityDays ?? 0) > 0
+                ? `${template.data.validityDays} 天有效`
+                : '永久有效'}
+            </>
+          )}
         </p>
         {existingCard ? (
           <p className="mt-1 text-xs text-gray-600">
@@ -360,14 +414,46 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
               </>
             )}
           </section>
+        ) : passBlock ? (
+          <section className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {passBlock.kind === 'has_pending' ? (
+              <>
+                <p className="font-semibold">你还有一笔待商户确认的次卡首购</p>
+                <p className="mt-1 text-xs">
+                  请先回到卡片首页查看 / 撤销；首购价仅首笔购买可享受。
+                </p>
+                <Link
+                  to={cardsHref}
+                  className="mt-3 inline-block rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  返回卡片首页
+                </Link>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold">你已持有该次卡</p>
+                <p className="mt-1 text-xs">
+                  同一模板不可重复首购；续次数请按商户配置的「充值档位」充值。
+                </p>
+                <Link
+                  to={`/shop/${encodeURIComponent(slug)}/cards/topup/${encodeURIComponent(passBlock.cardId)}${fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''}`}
+                  className="mt-3 inline-block rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
+                >
+                  前往充值
+                </Link>
+              </>
+            )}
+          </section>
         ) : (
         <section className="mb-4">
           <h2 className="mb-2 text-sm font-semibold text-gray-900">
-            {mode === 'purchase' ? '购买方式' : '充值档位'}
+            {mode === 'purchase' ? '首购确认' : '充值档位'}
           </h2>
           {offers.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-gray-300 px-3 py-5 text-center text-xs text-gray-500">
-              暂无可用档位。
+            <p className="rounded-xl border border-dashed border-amber-200 bg-amber-50 px-3 py-5 text-center text-xs text-amber-900">
+              {mode === 'topup'
+                ? '商户尚未配置充值档位，暂时无法在线充值，请联系店家。'
+                : '暂无可选方案。'}
             </p>
           ) : (
             <div className="space-y-2">
@@ -422,7 +508,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
             type="button"
             className="mt-4 w-full rounded-xl bg-emerald-600 py-3 text-sm font-semibold text-white disabled:bg-gray-300"
             onClick={() => void handleSubmit()}
-            disabled={submitting}
+            disabled={submitting || offers.length === 0}
           >
             {submitting ? '提交中…' : '生成请求并去上传截图'}
           </button>

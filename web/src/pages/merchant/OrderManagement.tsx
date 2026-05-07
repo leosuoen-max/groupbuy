@@ -275,6 +275,19 @@ export default function OrderManagement() {
         </label>
       </div>
 
+      <p className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-950">
+        <strong>说明：</strong>
+        本页仅列出<strong>团购/点餐订单</strong>（菜品配送）。
+        顾客<strong>购买或充值钱包、次卡</strong>并上传付款凭证的请求<strong>不会出现在此处</strong>，
+        请到「优惠卡」点击对应卡模板的<strong>详情</strong>，在页面顶部查看待确认的购卡/充值记录。
+        <Link
+          className="ml-1 font-semibold text-indigo-700 underline-offset-2 hover:underline"
+          to={`${baseDash}/cards`}
+        >
+          打开优惠卡管理
+        </Link>
+      </p>
+
       <p className="mb-3 text-xs text-gray-500">
         同一订单可同时出现在多个标签：例如首单待确认(pending)时又加购未付→会在「待确认」与「待付款」各出现一笔（同一订单号）。
       </p>

@@ -28,6 +28,8 @@ export type ProjectProduct = {
   imageUrl?: string;
   isActive: boolean;
   sortOrder: number;
+  /** 本商品可被以下次卡模板抵扣（id 列表，对应 CardTemplateDoc.id） */
+  applicableCardTemplateIds?: string[];
 };
 
 export type BundleSeriesOptionDoc = {
@@ -60,6 +62,8 @@ export type BundleSchemeDoc = {
   requirements: Record<string, number>;
   isActive: boolean;
   sortOrder: number;
+  /** 本方案可被以下次卡模板抵扣（id 列表，对应 CardTemplateDoc.id） */
+  applicableCardTemplateIds?: string[];
 };
 
 export type BundleToolDoc = {
@@ -162,11 +166,6 @@ export type CardTemplateDoc = {
   validityDays: number;
   /** 充值/续卡规则（可空） */
   topupRules: CardTopupRule[];
-  /** 仅次卡：本张卡可抵扣的产品（按行）。productIds 对应 ProjectProduct.id；bundleSchemeIds 对应 BundleSchemeDoc.id */
-  scope?: {
-    productIds?: string[];
-    bundleSchemeIds?: string[];
-  };
   /** 备注 / 描述（前端展示用） */
   description?: string;
   isActive: boolean;
@@ -234,7 +233,16 @@ export type CardPurchaseRequestDoc = {
   payAmount: number;
   /** 到账值：钱包=面值；次卡=次数 */
   gainValue: number;
-  paymentScreenshots: { url: string; uploadedAt: Timestamp }[];
+  paymentScreenshots: {
+    url: string;
+    uploadedAt: Timestamp;
+    /** 上传时计算的 SHA-256（十六进制），用于跨请求重复识别 */
+    contentSha256?: string;
+    /** 本店其它购卡/充值请求已使用过相同文件 */
+    duplicateRisk?: boolean;
+    /** 与本截图哈希相同的其它请求文档 ID（不含当前请求） */
+    duplicateMatchRequestIds?: string[];
+  }[];
   status: CardPurchaseRequestStatus;
   rejectReason?: string;
   templateNameSnapshot: string;
@@ -255,8 +263,14 @@ export type CardLedgerDoc = {
   delta: number;
   /** 变动后剩余 */
   remainingAfter: number;
+  /** 关联订单 ID（订单文档 ID，用于跳转） */
+  orderId?: string;
   /** 关联订单号（购卡 / 使用 / 退款时） */
   orderNumber?: string;
+  /** 关联订单的项目 ID（用于商户后台跳转 /order/:projectId/:orderNumber） */
+  orderProjectId?: string;
+  /** 关联订单的店铺 slug（同上） */
+  orderShopSlug?: string;
   /** 关联订单中具体哪几行被抵扣（次卡使用时） */
   orderLineIds?: string[];
   note?: string;
@@ -302,6 +316,33 @@ export type OrderLineDoc = {
   isDiscount: boolean;
   discountEndsAt?: string;
   subtotal: number;
+  /** 本行被次卡抵扣的份数（quantity 中的多少份已用次卡覆盖） */
+  cardCoveredQuantity?: number;
+};
+
+/** 卡支付汇总（订单上） */
+export type OrderCardPaymentDoc = {
+  /** 钱包抵扣（可能不存在） */
+  wallet?: {
+    customerCardId: string;
+    templateId: string;
+    deduct: number;
+    ledgerId: string;
+  };
+  /** 次卡抵扣分配 */
+  passCards: Array<{
+    customerCardId: string;
+    templateId: string;
+    /** 用了多少次 */
+    uses: number;
+    /** 命中的订单行 productId（可重复） */
+    appliedLineProductIds: string[];
+    ledgerId: string;
+  }>;
+  /** 卡侧抵扣总金额 = wallet.deduct + Σ(pass.uses × 该行 unitPrice) */
+  totalDeducted: number;
+  /** 抵扣发生时间 */
+  appliedAt: Timestamp;
 };
 
 /** 顾客每次「加菜」产生一档记录，便于商户分笔核对补款 */
@@ -346,6 +387,8 @@ export type OrderDoc = {
   };
   isManualMatch: boolean;
   paymentScreenshots: unknown[];
+  /** 已应用的卡支付（钱包+次卡）；自动取消时回滚以此为依据 */
+  cardPayment?: OrderCardPaymentDoc;
   status: OrderStatus;
   internalNotes: unknown[];
   statusHistory: {

@@ -2,7 +2,7 @@ import type { OrderRow } from './orderService';
 import { orderHasPaymentProof } from './paymentScreenshotHelpers';
 import type { OrderDoc, OrderStatus } from '../types/firestore';
 import {
-  deliveryPointLabel,
+  deliveryPointReconciliationLabel,
   proofRiskDisplayTone,
   linesInSelectedBuckets,
   listOrderPaymentGroups,
@@ -10,6 +10,7 @@ import {
   orderNeedsMissingProofLabel,
   scopedGroupAmount,
   type BucketSelection,
+  type DeliveryPointLookupMeta,
 } from './reconciliationGroups';
 
 export type ReconciliationTotals = {
@@ -30,6 +31,19 @@ export type ReconciliationTotals = {
   claimedPaidCount: number;
   /** 有效订单率：已确认单数 / 非取消单数（订单状态口径） */
   effectiveRatePercent: number | null;
+};
+
+export type ProductionCountRow = {
+  name: string;
+  quantity: number;
+};
+
+export type ProductionTotals = {
+  normalItems: ProductionCountRow[];
+  bundleOptionItems: ProductionCountRow[];
+  normalTotalQty: number;
+  bundleOptionTotalQty: number;
+  totalQty: number;
 };
 
 function isClaimedPaid(o: OrderDoc): boolean {
@@ -125,8 +139,16 @@ export function buildReconciliationCopyText(params: {
   rows: OrderRow[];
   totals: ReconciliationTotals;
   bucketSelection: BucketSelection;
+  deliveryPointLookup?: Map<string, DeliveryPointLookupMeta> | null;
 }): string {
-  const { shopName, projectLabel, rows, totals, bucketSelection } = params;
+  const {
+    shopName,
+    projectLabel,
+    rows,
+    totals,
+    bucketSelection,
+    deliveryPointLookup = null,
+  } = params;
   const lines: string[] = [];
   lines.push(`${shopName} · ${projectLabel}对账单`);
   lines.push('=============');
@@ -168,7 +190,7 @@ export function buildReconciliationCopyText(params: {
     for (const r of activeRows) {
       const g = listOrderPaymentGroups(r.data);
       if (!g.some((x) => x.bucket === bm.key)) continue;
-      const dp = deliveryPointLabel(r.data);
+      const dp = deliveryPointReconciliationLabel(r.data, deliveryPointLookup);
       if (!byPoint.has(dp)) byPoint.set(dp, []);
       byPoint.get(dp)!.push(r);
     }
@@ -239,9 +261,127 @@ function proofExportLabel(o: OrderDoc): string {
   return '绿旗';
 }
 
-export function buildReconciliationCsv(
+function toSortedCountRows(m: Map<string, number>): ProductionCountRow[] {
+  return [...m.entries()]
+    .map(([name, quantity]) => ({ name, quantity }))
+    .sort((a, b) => {
+      if (b.quantity !== a.quantity) return b.quantity - a.quantity;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+}
+
+/** 从套餐行名称中拆出系列单项，例如：`二荤一素（标准） 汤:鸡汤；饭:白饭` => [鸡汤, 白饭] */
+function extractBundleOptionNames(lineName: string): string[] {
+  const raw = lineName.trim();
+  if (!raw) return [];
+  const idx = raw.indexOf('）');
+  const tail = (idx >= 0 ? raw.slice(idx + 1) : raw).trim();
+  if (!tail) return [];
+
+  const out: string[] = [];
+  const groups = tail.split(/[；;]/).map((x) => x.trim()).filter(Boolean);
+  for (const g of groups) {
+    const seg = g.includes('：')
+      ? g.split('：').slice(1).join('：').trim()
+      : g.includes(':')
+        ? g.split(':').slice(1).join(':').trim()
+        : g;
+    if (!seg) continue;
+    for (const n of seg.split(/[、,，]/).map((x) => x.trim()).filter(Boolean)) {
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/** 厨房生产统计：普通商品数量 + 套餐拆解单项数量（复用当前筛选口径） */
+export function buildProductionTotals(
   rows: OrderRow[],
   bucketSelection: BucketSelection
+): ProductionTotals {
+  const normal = new Map<string, number>();
+  const bundleOptions = new Map<string, number>();
+  let normalTotalQty = 0;
+  let bundleOptionTotalQty = 0;
+
+  for (const r of rows) {
+    const o = r.data;
+    if (o.status === 'cancelled') continue;
+    const groups = listOrderPaymentGroups(o);
+    if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
+    const scopedLines = linesInSelectedBuckets(groups, bucketSelection);
+    for (const line of scopedLines) {
+      const qty = Math.max(0, Number(line.quantity) || 0);
+      if (qty <= 0) continue;
+      const isBundle = String(line.productId ?? '').startsWith('bundle:');
+      if (!isBundle) {
+        const key = line.name?.trim() || '未命名商品';
+        normal.set(key, (normal.get(key) ?? 0) + qty);
+        normalTotalQty += qty;
+        continue;
+      }
+      const optionNames = extractBundleOptionNames(line.name ?? '');
+      if (optionNames.length === 0) {
+        const key = line.name?.trim() || '未命名套餐项';
+        bundleOptions.set(key, (bundleOptions.get(key) ?? 0) + qty);
+        bundleOptionTotalQty += qty;
+        continue;
+      }
+      for (const name of optionNames) {
+        bundleOptions.set(name, (bundleOptions.get(name) ?? 0) + qty);
+        bundleOptionTotalQty += qty;
+      }
+    }
+  }
+
+  return {
+    normalItems: toSortedCountRows(normal),
+    bundleOptionItems: toSortedCountRows(bundleOptions),
+    normalTotalQty,
+    bundleOptionTotalQty,
+    totalQty: normalTotalQty + bundleOptionTotalQty,
+  };
+}
+
+export function buildProductionCopyText(params: {
+  shopName: string;
+  projectLabel: string;
+  totals: ProductionTotals;
+}): string {
+  const { shopName, projectLabel, totals } = params;
+  const out: string[] = [];
+  out.push(`${shopName} · ${projectLabel}厨房生产统计`);
+  out.push('=============');
+  out.push(`总份数：${totals.totalQty}`);
+  out.push(`普通商品：${totals.normalTotalQty}`);
+  out.push(`套餐拆解单项：${totals.bundleOptionTotalQty}`);
+  out.push('');
+  out.push(`普通商品（${totals.normalItems.length}种）`);
+  if (totals.normalItems.length === 0) out.push('—');
+  for (const r of totals.normalItems) out.push(`${r.name} × ${r.quantity}`);
+  out.push('');
+  out.push(`套餐拆解（${totals.bundleOptionItems.length}项）`);
+  if (totals.bundleOptionItems.length === 0) out.push('—');
+  for (const r of totals.bundleOptionItems) out.push(`${r.name} × ${r.quantity}`);
+  out.push('=============');
+  return out.join('\n');
+}
+
+export function buildProductionCsv(totals: ProductionTotals): string {
+  const lines = ['类型,名称,数量'];
+  for (const r of totals.normalItems) {
+    lines.push(`普通商品,"${r.name.replace(/"/g, '""')}",${r.quantity}`);
+  }
+  for (const r of totals.bundleOptionItems) {
+    lines.push(`套餐拆解,"${r.name.replace(/"/g, '""')}",${r.quantity}`);
+  }
+  return lines.join('\n');
+}
+
+export function buildReconciliationCsv(
+  rows: OrderRow[],
+  bucketSelection: BucketSelection,
+  deliveryPointLookup?: Map<string, DeliveryPointLookupMeta> | null
 ): string {
   const header = [
     '配送点',
@@ -258,8 +398,8 @@ export function buildReconciliationCsv(
   const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
   const outLines = [header.join(',')];
   const sorted = [...rows].sort((a, b) => {
-    const da = deliveryPointLabel(a.data);
-    const db = deliveryPointLabel(b.data);
+    const da = deliveryPointReconciliationLabel(a.data, deliveryPointLookup ?? null);
+    const db = deliveryPointReconciliationLabel(b.data, deliveryPointLookup ?? null);
     if (da !== db) return da.localeCompare(db, 'zh-CN');
     const ta = a.data.createdAt?.toMillis?.() ?? 0;
     const tb = b.data.createdAt?.toMillis?.() ?? 0;
@@ -274,7 +414,7 @@ export function buildReconciliationCsv(
     const detailLines = linesInSelectedBuckets(groups, bucketSelection);
     outLines.push(
       [
-        esc(deliveryPointLabel(o)),
+        esc(deliveryPointReconciliationLabel(o, deliveryPointLookup ?? null)),
         esc(formatOrderTime(o)),
         esc(o.customerName ?? ''),
         esc(o.customerPhone ?? ''),

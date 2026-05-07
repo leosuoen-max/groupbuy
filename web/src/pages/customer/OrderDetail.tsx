@@ -21,6 +21,11 @@ import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getProject } from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
 import {
+  applyCardPaymentToOrder,
+  planCardPayment,
+  type CardPaymentPlan,
+} from '../../lib/cardService';
+import {
   hasPaymentScreenshotForAppendBatch,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
@@ -148,6 +153,14 @@ export default function OrderDetail() {
   const [error, setError] = useState<string | null>(null);
   const [orderRow, setOrderRow] = useState<OrderRow | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
+  const [projectDoc, setProjectDoc] = useState<ProjectDoc | null>(null);
+
+  const [cardPlan, setCardPlan] = useState<CardPaymentPlan | null>(null);
+  const [cardPlanLoading, setCardPlanLoading] = useState(false);
+  const [cardPaying, setCardPaying] = useState(false);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [cardSuccess, setCardSuccess] = useState<string | null>(null);
+  const customerKey = getOrCreateCustomerKey();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
@@ -207,7 +220,10 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (!orderRow?.data.projectId) {
-      queueMicrotask(() => setProjectOpen(false));
+      queueMicrotask(() => {
+        setProjectOpen(false);
+        setProjectDoc(null);
+      });
       return;
     }
     let cancelled = false;
@@ -215,8 +231,10 @@ export default function OrderDetail() {
       if (cancelled) return;
       if (!row) {
         setProjectOpen(false);
+        setProjectDoc(null);
         return;
       }
+      setProjectDoc(row.data);
       setProjectOpen(projectAllowsCustomerEdit(row.data));
     });
     return () => {
@@ -287,6 +305,64 @@ export default function OrderDetail() {
 
   const canUpload =
     order && uploadAllowedStatuses.has(order.status);
+
+  /** 卡支付能力：未确认且仍有待付金额时均可走自动抵扣（含加购后的 partial_paid/pending） */
+  const canCardPay =
+    !!order &&
+    !!projectDoc &&
+    (order.status === 'unpaid' ||
+      order.status === 'pending' ||
+      order.status === 'partial_paid') &&
+    Number(order.pendingAmount ?? 0) > 0;
+
+  useEffect(() => {
+    if (!canCardPay || !order || !projectDoc) {
+      setCardPlan(null);
+      return;
+    }
+    let cancelled = false;
+    setCardPlanLoading(true);
+    void planCardPayment(order, projectDoc, customerKey)
+      .then((plan) => {
+        if (!cancelled) setCardPlan(plan);
+      })
+      .catch(() => {
+        if (!cancelled) setCardPlan(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCardPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canCardPay, order, projectDoc, customerKey]);
+
+  const handleCardPay = useCallback(async () => {
+    if (!order || !projectDoc) return;
+    if (!cardPlan?.ok) return;
+    if (!confirm(`将使用 ${cardPlan.summary.passUseCount > 0 ? `次卡 ${cardPlan.summary.passUseCount} 次` : ''}${cardPlan.summary.passUseCount > 0 && cardPlan.walletDeduct > 0 ? ' + ' : ''}${cardPlan.walletDeduct > 0 ? `钱包 RM ${cardPlan.walletDeduct.toFixed(2)}` : ''} 付清本订单。\n确认抵扣并自动确认订单？`)) {
+      return;
+    }
+    setCardPaying(true);
+    setCardError(null);
+    setCardSuccess(null);
+    try {
+      const orderDocId = orderRow?.id;
+      if (!orderDocId) throw new Error('订单 ID 缺失');
+      await applyCardPaymentToOrder({
+        projectId: order.projectId,
+        orderId: orderDocId,
+        customerKey,
+      });
+      setCardSuccess('卡支付成功，订单已确认');
+      const next = await getOrderByNumber(order.projectId, order.orderNumber);
+      if (next) applyOrderRow(next);
+    } catch (e) {
+      setCardError(e instanceof Error ? e.message : '卡支付失败');
+    } finally {
+      setCardPaying(false);
+    }
+  }, [order, projectDoc, cardPlan, orderRow?.id, customerKey, applyOrderRow]);
 
   const canEditContact =
     !!order &&
@@ -628,6 +704,30 @@ export default function OrderDetail() {
               已付（商户已确认部分）：{formatMYR(paid)} · 待付：{' '}
               <strong>{formatMYR(pending)}</strong>
             </p>
+          ) : null}
+          {order.cardPayment ? (
+            <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5 text-[11px] text-emerald-900 ring-1 ring-emerald-200">
+              <span className="font-semibold">卡支付：</span>
+              {order.cardPayment.passCards.length > 0 ? (
+                <span className="ml-1">
+                  次卡{' '}
+                  {order.cardPayment.passCards.reduce(
+                    (s, c) => s + (Number(c.uses) || 0),
+                    0
+                  )}{' '}
+                  次
+                </span>
+              ) : null}
+              {order.cardPayment.wallet ? (
+                <span className="ml-1">
+                  · 钱包 RM{' '}
+                  {Number(order.cardPayment.wallet.deduct ?? 0).toFixed(2)}
+                </span>
+              ) : null}
+              <span className="ml-1">
+                · 共 RM {Number(order.cardPayment.totalDeducted ?? 0).toFixed(2)}
+              </span>
+            </div>
           ) : null}
           {order.status === 'unpaid' && order.timedPromoPaymentDueAt ? (
             <p className="mt-1 text-xs text-amber-700">
@@ -1017,6 +1117,94 @@ export default function OrderDetail() {
             </div>
           )}
         </div>
+
+        {canCardPay ? (
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">
+            <h2 className="mb-1 text-sm font-semibold text-indigo-900">
+              钱包 / 优惠卡支付
+            </h2>
+            <p className="mb-2 text-xs leading-relaxed text-indigo-900/80">
+              一键自动抵扣：先扣可用次卡，再用钱包补齐。
+              全额抵扣完成即自动确认订单（无需上传截图）。
+            </p>
+            {cardPlanLoading ? (
+              <p className="text-xs text-indigo-700">正在评估你的卡余额…</p>
+            ) : null}
+            {cardPlan ? (
+              cardPlan.ok ? (
+                <>
+                  <div className="mb-2 rounded-lg bg-white px-3 py-2 text-xs text-indigo-900 ring-1 ring-indigo-100">
+                    <p>
+                      可抵扣：
+                      {cardPlan.summary.passUseCount > 0 ? (
+                        <span className="ml-1 inline-flex rounded-full bg-purple-100 px-2 py-0.5 text-[11px] font-medium text-purple-800">
+                          次卡 {cardPlan.summary.passUseCount} 次（≈ RM{' '}
+                          {cardPlan.passCovered.toFixed(2)}）
+                        </span>
+                      ) : null}
+                      {cardPlan.walletDeduct > 0 ? (
+                        <span className="ml-1 inline-flex rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800">
+                          钱包 RM {cardPlan.walletDeduct.toFixed(2)}
+                        </span>
+                      ) : null}
+                    </p>
+                    <p className="mt-1">
+                      合计抵扣 RM {cardPlan.totalAmount.toFixed(2)}
+                      <span className="ml-1 text-indigo-600">→ 全额付清</span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={cardPaying}
+                    onClick={() => void handleCardPay()}
+                    className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {cardPaying ? '处理中…' : '立即抵扣并确认订单'}
+                  </button>
+                </>
+              ) : (
+                <div className="space-y-2 rounded-lg bg-white px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-100">
+                  <p className="font-medium">{cardPlan.message}</p>
+                  <p>
+                    已可抵扣：次卡覆盖 RM {cardPlan.passCovered.toFixed(2)} ·
+                    钱包余额 RM {cardPlan.walletAvailable.toFixed(2)} · 合计差{' '}
+                    RM {cardPlan.gap.toFixed(2)}
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Link
+                      to={`/shop/${encodeURIComponent(order.shopSlug)}/cards?from=${encodeURIComponent(order.projectId)}`}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white"
+                    >
+                      去充值 / 购买
+                    </Link>
+                    <span className="text-[11px] text-amber-700">
+                      或在下方上传付款凭证
+                    </span>
+                  </div>
+                </div>
+              )
+            ) : !cardPlanLoading ? (
+              <p className="text-xs text-indigo-700">
+                <Link
+                  to={`/shop/${encodeURIComponent(order.shopSlug)}/cards?from=${encodeURIComponent(order.projectId)}`}
+                  className="underline-offset-2 hover:underline"
+                >
+                  查看 / 购买卡 →
+                </Link>
+              </p>
+            ) : null}
+            {cardError ? (
+              <p className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">
+                {cardError}
+              </p>
+            ) : null}
+            {cardSuccess ? (
+              <p className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+                {cardSuccess}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
           <h2 className="mb-2 text-sm font-semibold text-gray-900">

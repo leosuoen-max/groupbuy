@@ -4,12 +4,18 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug } from '../../lib/shopService';
 import {
+  cardRequestAwaitingCustomerProof,
+  cardRequestNeedsMerchantConfirm,
   cardTemplateHasIssued,
+  confirmCardPurchaseRequest,
   createCardTemplate,
   deleteCardTemplate,
+  listCardRequestsByShop,
   listCardTemplatesByShop,
+  rejectCardPurchaseRequest,
   setCardTemplateActive,
   updateCardTemplate,
+  type CardPurchaseRequestRow,
   type CardTemplateRow,
 } from '../../lib/cardService';
 import type {
@@ -30,22 +36,27 @@ type EditingDraft = {
   isActive: boolean;
 };
 
-const blankDraft = (): EditingDraft => ({
-  id: null,
-  name: '钱包',
-  type: 'stored',
-  faceValueOrUses: 0,
-  salePrice: 0,
-  validityDays: 0,
-  description: '',
-  topupRules: [],
-  isActive: true,
-});
+function blankDraftForType(type: CardType): EditingDraft {
+  return {
+    id: null,
+    name: type === 'stored' ? '钱包' : '',
+    type,
+    faceValueOrUses: 0,
+    salePrice: 0,
+    validityDays: 0,
+    description: '',
+    topupRules: [],
+    isActive: true,
+  };
+}
 
 function fromDoc(row: CardTemplateRow): EditingDraft {
   return {
     id: row.id,
-    name: row.data.type === 'stored' ? '钱包' : (row.data.name ?? ''),
+    name:
+      row.data.type === 'stored'
+        ? (row.data.name?.trim() || '钱包')
+        : (row.data.name ?? ''),
     type: row.data.type,
     faceValueOrUses: Number(row.data.faceValueOrUses ?? 0) || 0,
     salePrice: Number(row.data.salePrice ?? 0) || 0,
@@ -73,6 +84,9 @@ export default function CardTemplates() {
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<CardTemplateRow[]>([]);
+  const [purchaseRequests, setPurchaseRequests] = useState<
+    CardPurchaseRequestRow[]
+  >([]);
   const [issuedMap, setIssuedMap] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState<EditingDraft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -81,8 +95,12 @@ export default function CardTemplates() {
   const refresh = useCallback(async (sid: string) => {
     setLoading(true);
     try {
-      const list = await listCardTemplatesByShop(sid, { includeInactive: true });
+      const [list, reqs] = await Promise.all([
+        listCardTemplatesByShop(sid, { includeInactive: true }),
+        listCardRequestsByShop(sid),
+      ]);
       setRows(list);
+      setPurchaseRequests(reqs);
       const issued: Record<string, boolean> = {};
       await Promise.all(
         list.map(async (r) => {
@@ -145,7 +163,7 @@ export default function CardTemplates() {
         setMsg('已保存修改');
       } else {
         await createCardTemplate(shopId, ownerId, payload);
-        setMsg('已新建优惠卡');
+        setMsg(draft.type === 'stored' ? '钱包已开通' : '已新建次卡');
       }
       setDraft(null);
       await refresh(shopId);
@@ -183,6 +201,15 @@ export default function CardTemplates() {
     [slug]
   );
 
+  const walletTemplates = useMemo(
+    () => rows.filter((r) => r.data.type === 'stored'),
+    [rows]
+  );
+  const passTemplates = useMemo(
+    () => rows.filter((r) => r.data.type === 'pass'),
+    [rows]
+  );
+
   if (authLoading || loading) {
     return (
       <PageShell title="优惠卡管理" subtitle="加载中…">
@@ -210,42 +237,102 @@ export default function CardTemplates() {
         </p>
       ) : null}
 
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-4">
         <Link to={back} className="text-sm text-indigo-600 underline-offset-2 hover:underline">
           ← 返回店铺后台
         </Link>
-        <button
-          type="button"
-          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white"
-          onClick={() => setDraft(blankDraft())}
-        >
-          + 新增卡
-        </button>
       </div>
 
-      {rows.length === 0 && !draft ? (
-        <p className="rounded-xl border border-dashed border-gray-300 px-3 py-6 text-center text-sm text-gray-500">
-          还没有优惠卡。点击右上方「+ 新增卡」开始配置。
-        </p>
-      ) : null}
+      <div className="space-y-8">
+        {/* 每店仅一个钱包模板：未开通时只展示简介 + 开通；开通后与次卡分区展示 */}
+        <section>
+          <h3 className="mb-3 text-base font-bold tracking-tight text-indigo-900 sm:text-lg">
+            钱包（按金额抵扣）
+          </h3>
+          {walletTemplates.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/40 px-4 py-6">
+              <p className="text-sm leading-relaxed text-gray-800">
+                每店只需开通<strong className="font-semibold text-indigo-900">一个钱包</strong>
+                ：顾客储值余额可在下单时按金额抵扣。请先设定<strong>首购面值与售价</strong>
+                ，并配置<strong>充值档位</strong>以便顾客后续充值。
+              </p>
+              <button
+                type="button"
+                className="mt-4 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+                onClick={() => setDraft(blankDraftForType('stored'))}
+              >
+                开通钱包
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {walletTemplates.map((row) => (
+                <CardRow
+                  key={row.id}
+                  row={row}
+                  issued={!!issuedMap[row.id]}
+                  onOpen={() =>
+                    navigate(
+                      `/dashboard/${encodeURIComponent(slug)}/cards/${encodeURIComponent(row.id)}`
+                    )
+                  }
+                  onEdit={() => setDraft(fromDoc(row))}
+                  onDelete={() => void handleDelete(row)}
+                  onToggleActive={() => void handleToggleActive(row)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
 
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <CardRow
-            key={row.id}
-            row={row}
-            issued={!!issuedMap[row.id]}
-            onOpen={() =>
-              navigate(
-                `/dashboard/${encodeURIComponent(slug)}/cards/${encodeURIComponent(row.id)}`
-              )
-            }
-            onEdit={() => setDraft(fromDoc(row))}
-            onDelete={() => void handleDelete(row)}
-            onToggleActive={() => void handleToggleActive(row)}
-          />
-        ))}
+        <section>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-bold tracking-tight text-purple-900 sm:text-lg">
+              次卡（按次数抵扣）
+            </h3>
+            <button
+              type="button"
+              className="shrink-0 rounded-lg border border-purple-300 bg-purple-50 px-3 py-2 text-sm font-semibold text-purple-900 hover:bg-purple-100"
+              onClick={() => setDraft(blankDraftForType('pass'))}
+            >
+              + 新增次卡
+            </button>
+          </div>
+          {passTemplates.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-purple-100 bg-purple-50/30 px-4 py-6 text-center text-sm text-gray-600">
+              暂无次卡。点击右上方「新增次卡」添加可按次数抵扣的优惠卡。
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {passTemplates.map((row) => (
+                <CardRow
+                  key={row.id}
+                  row={row}
+                  issued={!!issuedMap[row.id]}
+                  onOpen={() =>
+                    navigate(
+                      `/dashboard/${encodeURIComponent(slug)}/cards/${encodeURIComponent(row.id)}`
+                    )
+                  }
+                  onEdit={() => setDraft(fromDoc(row))}
+                  onDelete={() => void handleDelete(row)}
+                  onToggleActive={() => void handleToggleActive(row)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       </div>
+
+      <CardPurchaseOrdersSection
+        slug={slug}
+        requests={purchaseRequests}
+        userId={user?.uid ?? null}
+        setMsg={setMsg}
+        onRefresh={() => {
+          if (shopId) void refresh(shopId);
+        }}
+      />
 
       {draft ? (
         <CardEditor
@@ -257,6 +344,304 @@ export default function CardTemplates() {
         />
       ) : null}
     </PageShell>
+  );
+}
+
+type CardOrdersTab =
+  | 'all'
+  | 'pending_confirm'
+  | 'confirmed'
+  | 'pending_payment'
+  | 'rejected';
+
+function matchesOrdersTab(
+  req: CardPurchaseRequestRow,
+  tab: CardOrdersTab
+): boolean {
+  const d = req.data;
+  if (tab === 'all') return true;
+  if (tab === 'confirmed') return d.status === 'confirmed';
+  if (tab === 'rejected') return d.status === 'rejected';
+  if (tab === 'pending_confirm') return cardRequestNeedsMerchantConfirm(d);
+  if (tab === 'pending_payment') return cardRequestAwaitingCustomerProof(d);
+  return false;
+}
+
+function fmtReqTs(t: { toDate?: () => Date } | null | undefined): string {
+  if (!t || typeof t.toDate !== 'function') return '';
+  return t.toDate().toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function CardPurchaseOrdersSection({
+  slug,
+  requests,
+  userId,
+  setMsg,
+  onRefresh,
+}: {
+  slug: string;
+  requests: CardPurchaseRequestRow[];
+  userId: string | null;
+  setMsg: (m: string | null) => void;
+  onRefresh: () => void | Promise<void>;
+}) {
+  const [tab, setTab] = useState<CardOrdersTab>('pending_confirm');
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const counts = useMemo(() => {
+    return {
+      all: requests.length,
+      pending_confirm: requests.filter((r) =>
+        cardRequestNeedsMerchantConfirm(r.data)
+      ).length,
+      confirmed: requests.filter((r) => r.data.status === 'confirmed').length,
+      pending_payment: requests.filter((r) =>
+        cardRequestAwaitingCustomerProof(r.data)
+      ).length,
+      rejected: requests.filter((r) => r.data.status === 'rejected').length,
+    };
+  }, [requests]);
+
+  const filtered = useMemo(() => {
+    const rows = requests.filter((r) => matchesOrdersTab(r, tab));
+    rows.sort((a, b) => {
+      const ta = a.data.createdAt?.toMillis?.() ?? 0;
+      const tb = b.data.createdAt?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+    return rows;
+  }, [requests, tab]);
+
+  const tabs: { id: CardOrdersTab; label: string }[] = [
+    { id: 'pending_confirm', label: '待确认' },
+    { id: 'all', label: '全部' },
+    { id: 'confirmed', label: '已确认' },
+    { id: 'pending_payment', label: '待付款' },
+    { id: 'rejected', label: '已拒绝' },
+  ];
+
+  const detailHref = (req: CardPurchaseRequestRow) =>
+    `/dashboard/${encodeURIComponent(slug)}/cards/${encodeURIComponent(req.data.templateId)}?highlight=${encodeURIComponent(req.id)}`;
+
+  const handleConfirm = async (req: CardPurchaseRequestRow) => {
+    if (!userId) return;
+    setBusyId(req.id);
+    setMsg(null);
+    try {
+      await confirmCardPurchaseRequest(req.id, userId);
+      setMsg('已确认到账');
+      await onRefresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '确认失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleReject = async (req: CardPurchaseRequestRow) => {
+    if (!userId) return;
+    const reason = prompt('请填写拒绝原因（可选）') ?? '';
+    if (!confirm('确认拒绝该购卡/充值请求？')) return;
+    setBusyId(req.id);
+    setMsg(null);
+    try {
+      await rejectCardPurchaseRequest(req.id, reason.trim(), userId);
+      setMsg('已拒绝');
+      await onRefresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '拒绝失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="mt-8 border-t border-gray-200 pt-6">
+      <h2 className="mb-1 text-sm font-semibold text-gray-900">
+        购卡 / 充值订单
+      </h2>
+      <p className="mb-3 text-xs text-gray-500">
+        汇总本店所有钱包与次卡的购买、充值请求。「待付款」表示顾客尚未上传付款截图；「待确认」表示已上传凭证，可在此直接确认或拒绝。
+      </p>
+
+      <div className="mb-3 flex flex-wrap gap-1 rounded-xl border border-gray-100 bg-gray-50 p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+              tab === t.id
+                ? 'bg-gray-900 text-white shadow-sm'
+                : 'bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-100'
+            }`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            <span className="ml-0.5 tabular-nums opacity-80">
+              ({counts[t.id]})
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-500">
+          当前筛选下暂无记录。
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((req) => {
+            const d = req.data;
+            const isStored = d.templateTypeSnapshot === 'stored';
+            const shots = Array.isArray(d.paymentScreenshots)
+              ? d.paymentScreenshots
+              : [];
+            const dupShot = shots.some((s) => s.duplicateRisk);
+            const detailLink = detailHref(req);
+            const canQuickAct =
+              cardRequestNeedsMerchantConfirm(d) && userId != null;
+
+            return (
+              <div
+                key={req.id}
+                className="rounded-xl border border-gray-200 bg-white p-3 text-xs text-gray-800 shadow-sm"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-semibold text-gray-900">
+                        {d.templateNameSnapshot || '优惠卡'}
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          isStored
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'bg-purple-50 text-purple-700'
+                        }`}
+                      >
+                        {isStored ? '钱包' : '次卡'}
+                      </span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                        {d.kind === 'topup' ? '充值' : '购买'}
+                      </span>
+                      {d.status === 'pending' &&
+                      cardRequestNeedsMerchantConfirm(d) ? (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                          待确认
+                        </span>
+                      ) : null}
+                      {d.status === 'pending' &&
+                      cardRequestAwaitingCustomerProof(d) ? (
+                        <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
+                          待付款截图
+                        </span>
+                      ) : null}
+                      {d.status === 'confirmed' ? (
+                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                          已确认
+                        </span>
+                      ) : null}
+                      {d.status === 'rejected' ? (
+                        <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-800">
+                          已拒绝
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-600">
+                      {fmtReqTs(d.createdAt)} · 顾客 {d.customerName ?? '—'}{' '}
+                      {d.customerPhone ? `· ${d.customerPhone}` : ''}
+                      <span className="text-gray-400">
+                        （{d.customerKey.slice(-6)}）
+                      </span>
+                    </p>
+                    <p className="mt-1 font-medium text-gray-900">
+                      实付 RM {Number(d.payAmount).toFixed(2)} → 到账{' '}
+                      {isStored
+                        ? `面值 RM ${Number(d.gainValue).toFixed(2)}`
+                        : `${Number(d.gainValue)} 次`}
+                    </p>
+                    {dupShot ? (
+                      <p className="mt-1 text-[11px] font-medium text-red-700">
+                        含自动识别的疑似重复凭证，请核对。
+                      </p>
+                    ) : null}
+                    {d.status === 'rejected' && d.rejectReason ? (
+                      <p className="mt-1 text-[11px] text-gray-500">
+                        原因：{d.rejectReason}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <Link
+                      to={detailLink}
+                      className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700"
+                    >
+                      卡详情
+                    </Link>
+                  </div>
+                </div>
+                {shots.length > 0 ? (
+                  <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
+                    {shots.slice(0, 4).map((s) => (
+                      <a
+                        key={s.url}
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="relative h-14 w-14 shrink-0 overflow-hidden rounded border border-gray-100 bg-gray-50"
+                      >
+                        {s.duplicateRisk ? (
+                          <span className="absolute left-0 top-0 z-10 bg-red-600 px-0.5 text-[8px] font-bold text-white">
+                            重复
+                          </span>
+                        ) : null}
+                        <img
+                          src={s.url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </a>
+                    ))}
+                    {shots.length > 4 ? (
+                      <span className="flex h-14 w-8 shrink-0 items-center text-[10px] text-gray-400">
+                        +{shots.length - 4}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {canQuickAct ? (
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      className="flex-1 rounded-lg bg-emerald-600 py-2 text-xs font-semibold text-white disabled:bg-gray-300"
+                      disabled={busyId === req.id}
+                      onClick={() => void handleConfirm(req)}
+                    >
+                      {busyId === req.id ? '处理中…' : '确认到账'}
+                    </button>
+                    <button
+                      type="button"
+                      className="flex-1 rounded-lg border border-red-200 bg-white py-2 text-xs font-medium text-red-700 disabled:opacity-50"
+                      disabled={busyId === req.id}
+                      onClick={() => void handleReject(req)}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -386,6 +771,15 @@ function CardEditor({ draft, onChange, onCancel, onSave, saving }: CardEditorPro
   const isStored = draft.type === 'stored';
   const valueLabel = isStored ? '面值 (RM)' : '使用次数';
 
+  const modalTitle =
+    draft.id != null
+      ? isStored
+        ? '编辑钱包'
+        : '编辑次卡'
+      : isStored
+        ? '开通钱包'
+        : '新增次卡';
+
   const addRule = () =>
     set({ topupRules: [...draft.topupRules, { pay: 0, gain: 0 }] });
   const updateRule = (i: number, patch: Partial<CardTopupRule>) => {
@@ -403,9 +797,7 @@ function CardEditor({ draft, onChange, onCancel, onSave, saving }: CardEditorPro
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center">
       <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900">
-            {draft.id ? '编辑优惠卡' : '新增优惠卡'}
-          </h2>
+          <h2 className="text-base font-semibold text-gray-900">{modalTitle}</h2>
           <button
             type="button"
             className="rounded-md px-2 py-1 text-sm text-gray-500"
@@ -416,39 +808,24 @@ function CardEditor({ draft, onChange, onCancel, onSave, saving }: CardEditorPro
         </div>
 
         <div className="space-y-3">
-          <div>
-            <span className="text-sm text-gray-800">类型</span>
-            <div className="mt-1 flex gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  set({ type: 'stored', validityDays: 0, name: '钱包' })
-                }
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
-                  draft.type === 'stored'
-                    ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                    : 'border-gray-200 bg-white text-gray-700'
-                }`}
-              >
-                钱包（按金额抵扣）
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  set({
-                    type: 'pass',
-                    name: draft.name === '钱包' ? '' : draft.name,
-                  })
-                }
-                className={`flex-1 rounded-lg border px-3 py-2 text-sm ${
-                  draft.type === 'pass'
-                    ? 'border-purple-500 bg-purple-50 text-purple-700'
-                    : 'border-gray-200 bg-white text-gray-700'
-                }`}
-              >
-                次卡（按次数抵扣）
-              </button>
-            </div>
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              isStored
+                ? 'border-indigo-200 bg-indigo-50 text-indigo-900'
+                : 'border-purple-200 bg-purple-50 text-purple-900'
+            }`}
+          >
+            {isStored ? (
+              <>
+                <strong>钱包</strong>
+                ：按订单金额抵扣；名称固定为「钱包」，与次卡分开配置。
+              </>
+            ) : (
+              <>
+                <strong>次卡（优惠卡）</strong>
+                ：按次数抵扣；每张次卡单独起名，与钱包分开配置。
+              </>
+            )}
           </div>
 
           {draft.type === 'pass' ? (

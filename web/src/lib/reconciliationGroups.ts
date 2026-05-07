@@ -1,4 +1,9 @@
-import type { OrderAppendBatchDoc, OrderDoc, OrderLineDoc } from '../types/firestore';
+import type {
+  DeliveryPointDoc,
+  OrderAppendBatchDoc,
+  OrderDoc,
+  OrderLineDoc,
+} from '../types/firestore';
 import {
   canMerchantConfirmAppendBatchByScreenshots,
   parseScreenshotEntries,
@@ -22,6 +27,39 @@ const EPS = 0.001;
 export function deliveryPointLabel(o: OrderDoc): string {
   const n = o.deliveryPointSnapshot?.name?.trim();
   return n || '未指定配送点';
+}
+
+/** 由配送点文档 id 查到编号 + 简称，供对账单紧凑展示 */
+export type DeliveryPointLookupMeta = { code: string; shortName: string };
+
+export function buildDeliveryPointLookup(
+  rows: Array<{ id: string; data: DeliveryPointDoc }>
+): Map<string, DeliveryPointLookupMeta> {
+  const m = new Map<string, DeliveryPointLookupMeta>();
+  for (const r of rows) {
+    const code = (r.data.code ?? '').trim();
+    const shortName = (r.data.shortName ?? r.data.name ?? '').trim();
+    m.set(r.id, {
+      code: code || '—',
+      shortName: shortName || '—',
+    });
+  }
+  return m;
+}
+
+/**
+ * 对账单用：有 deliveryPointId 且能在库里命中时显示 `[编号] 简称`，否则回落到订单快照名称。
+ */
+export function deliveryPointReconciliationLabel(
+  o: OrderDoc,
+  lookup?: Map<string, DeliveryPointLookupMeta> | null
+): string {
+  const id = o.deliveryPointId?.trim();
+  if (id && lookup?.has(id)) {
+    const x = lookup.get(id)!;
+    return `[${x.code}] ${x.shortName}`;
+  }
+  return deliveryPointLabel(o);
 }
 
 /**

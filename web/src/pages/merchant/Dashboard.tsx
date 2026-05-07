@@ -5,6 +5,11 @@ import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import { aggregateShopOrdersForToday } from '../../lib/merchantDashboardStats';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
+import {
+  cardRequestNeedsMerchantConfirm,
+  listCardRequestsByShop,
+  type CardPurchaseRequestRow,
+} from '../../lib/cardService';
 import { getShopBySlug } from '../../lib/shopService';
 import type { ShopRow } from '../../lib/shopService';
 
@@ -16,6 +21,9 @@ export default function MerchantDashboard() {
   const [orderRows, setOrderRows] = useState<OrderRow[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersErr, setOrdersErr] = useState<string | null>(null);
+  const [cardPurchaseRows, setCardPurchaseRows] = useState<
+    CardPurchaseRequestRow[]
+  >([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +75,31 @@ export default function MerchantDashboard() {
       cancelled = true;
     };
   }, [shop, user]);
+
+  useEffect(() => {
+    if (!shop || !user || shop.data.ownerId !== user.uid) {
+      queueMicrotask(() => setCardPurchaseRows([]));
+      return;
+    }
+    let cancelled = false;
+    void listCardRequestsByShop(shop.id)
+      .then((rows) => {
+        if (!cancelled) setCardPurchaseRows(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setCardPurchaseRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shop, user]);
+
+  const pendingCardConfirmCount = useMemo(
+    () =>
+      cardPurchaseRows.filter((r) => cardRequestNeedsMerchantConfirm(r.data))
+        .length,
+    [cardPurchaseRows]
+  );
 
   const todayStats = useMemo(
     () => aggregateShopOrdersForToday(orderRows),
@@ -174,7 +207,16 @@ export default function MerchantDashboard() {
       </section>
 
       <h2 className="mb-2 text-sm font-semibold text-gray-900">快捷入口</h2>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {pendingCardConfirmCount > 0 ? (
+        <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+          <span className="font-semibold text-amber-900">优惠卡：</span>
+          当前有{' '}
+          <strong className="tabular-nums">{pendingCardConfirmCount}</strong>{' '}
+          笔购卡/充值<strong>待确认到账</strong>
+          （顾客已传截图）。请到「优惠卡」页面处理。
+        </p>
+      ) : null}
+      <div className="grid grid-cols-2 gap-2 overflow-visible sm:grid-cols-3">
         <Link
           to={`${base}/projects`}
           className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
@@ -213,9 +255,23 @@ export default function MerchantDashboard() {
         </Link>
         <Link
           to={`${base}/cards`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="relative flex min-h-[3.5rem] items-center justify-center overflow-visible rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
         >
-          优惠卡
+          <span className="relative z-0 px-3">优惠卡</span>
+          {pendingCardConfirmCount > 0 ? (
+            <>
+              <span
+                className="pointer-events-none absolute right-2 top-2 z-10 flex h-3 w-3 items-center justify-center"
+                aria-hidden
+              >
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-70" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-600 ring-2 ring-white" />
+              </span>
+              <span className="sr-only">
+                {pendingCardConfirmCount} 笔优惠卡购卡或充值待确认
+              </span>
+            </>
+          ) : null}
         </Link>
         <Link
           to="/dashboard"

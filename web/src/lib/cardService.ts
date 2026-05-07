@@ -6,8 +6,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit as fsLimit,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -18,6 +16,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
 import type {
+  BundleSchemeDoc,
   CardLedgerDoc,
   CardLedgerType,
   CardPurchaseRequestDoc,
@@ -27,6 +26,11 @@ import type {
   CardType,
   CustomerCardDoc,
   CustomerCardStatus,
+  OrderCardPaymentDoc,
+  OrderDoc,
+  OrderLineDoc,
+  ProjectDoc,
+  ProjectProduct,
 } from '../types/firestore';
 
 export type CardTemplateRow = { id: string; data: CardTemplateDoc };
@@ -35,12 +39,85 @@ const COLL = 'card_templates';
 const CUSTOMER_CARDS_COLL = 'customer_cards';
 const CARD_REQUESTS_COLL = 'card_purchase_requests';
 const CARD_LEDGER_COLL = 'card_ledger';
+/** 本店凭证文件哈希索引（用于跨请求识别相同截图文件） */
+const CARD_PAYMENT_HASH_COLL = 'card_payment_proof_hashes';
+
+type CardProofHashHit = {
+  requestId: string;
+  templateId: string;
+  uploadedAt: Timestamp;
+};
+
+function cardProofHashDocId(shopId: string, sha256Hex: string): string {
+  return `${shopId}__${sha256Hex}`;
+}
+
+function parseProofHashHits(raw: unknown): CardProofHashHit[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CardProofHashHit[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue;
+    const o = row as Record<string, unknown>;
+    const requestId = typeof o.requestId === 'string' ? o.requestId : '';
+    const templateId = typeof o.templateId === 'string' ? o.templateId : '';
+    let uploadedAt: Timestamp | null = null;
+    const u = o.uploadedAt;
+    if (u instanceof Timestamp) uploadedAt = u;
+    else if (u && typeof u === 'object') {
+      const x = u as { seconds?: unknown; _seconds?: unknown; nanoseconds?: unknown };
+      const sec =
+        typeof x.seconds === 'number'
+          ? x.seconds
+          : typeof x._seconds === 'number'
+            ? x._seconds
+            : null;
+      if (sec != null) {
+        const nano =
+          typeof x.nanoseconds === 'number'
+            ? x.nanoseconds
+            : typeof (x as { _nanoseconds?: unknown })._nanoseconds === 'number'
+              ? Number((x as { _nanoseconds: unknown })._nanoseconds)
+              : 0;
+        uploadedAt = new Timestamp(sec, nano);
+      }
+    }
+    if (!requestId || !uploadedAt) continue;
+    out.push({ requestId, templateId, uploadedAt });
+  }
+  return out;
+}
+
+function isLikelySha256Hex(s: string): boolean {
+  return /^[a-f0-9]{64}$/i.test(s);
+}
 
 export type CustomerCardRow = { id: string; data: CustomerCardDoc };
 export type CardPurchaseRequestRow = {
   id: string;
   data: CardPurchaseRequestDoc;
 };
+
+/** pending 且已上传凭证 → 商户可「确认到账」 */
+export function cardRequestNeedsMerchantConfirm(
+  data: CardPurchaseRequestDoc
+): boolean {
+  return (
+    data.status === 'pending' &&
+    Array.isArray(data.paymentScreenshots) &&
+    data.paymentScreenshots.length > 0
+  );
+}
+
+/** pending 且未上传凭证 → 顾客尚未上传付款截图 */
+export function cardRequestAwaitingCustomerProof(
+  data: CardPurchaseRequestDoc
+): boolean {
+  return (
+    data.status === 'pending' &&
+    (!Array.isArray(data.paymentScreenshots) ||
+      data.paymentScreenshots.length === 0)
+  );
+}
 export type CardLedgerRow = { id: string; data: CardLedgerDoc };
 
 function sanitizeTopupRules(rules: CardTopupRule[] | undefined): CardTopupRule[] {
@@ -53,22 +130,6 @@ function sanitizeTopupRules(rules: CardTopupRule[] | undefined): CardTopupRule[]
     .filter((r) => r.pay > 0 && r.gain > 0);
 }
 
-function sanitizeScope(
-  type: CardType,
-  scope: CardTemplateDoc['scope'] | undefined
-): CardTemplateDoc['scope'] | undefined {
-  if (type !== 'pass') return undefined;
-  if (!scope) return { productIds: [], bundleSchemeIds: [] };
-  return {
-    productIds: Array.isArray(scope.productIds)
-      ? scope.productIds.filter((x): x is string => typeof x === 'string' && !!x)
-      : [],
-    bundleSchemeIds: Array.isArray(scope.bundleSchemeIds)
-      ? scope.bundleSchemeIds.filter((x): x is string => typeof x === 'string' && !!x)
-      : [],
-  };
-}
-
 export type CardTemplateInput = {
   name: string;
   type: CardType;
@@ -76,7 +137,6 @@ export type CardTemplateInput = {
   salePrice: number;
   validityDays: number;
   topupRules?: CardTopupRule[];
-  scope?: CardTemplateDoc['scope'];
   description?: string;
   isActive?: boolean;
   sortOrder?: number;
@@ -142,6 +202,23 @@ export async function getCardTemplate(
   return { id: snap.id, data: snap.data() as CardTemplateDoc };
 }
 
+/** 同一店铺仅允许一个「钱包」模板（stored）；excludeTemplateId 用于编辑/类型切换时排除当前文档 */
+async function shopHasStoredWalletTemplate(
+  shopId: string,
+  excludeTemplateId?: string
+): Promise<boolean> {
+  const db = getDb();
+  const snap = await getDocs(
+    query(collection(db, COLL), where('shopId', '==', shopId))
+  );
+  for (const d of snap.docs) {
+    if (excludeTemplateId && d.id === excludeTemplateId) continue;
+    const docType = (d.data() as CardTemplateDoc).type;
+    if (docType === 'stored') return true;
+  }
+  return false;
+}
+
 export async function createCardTemplate(
   shopId: string,
   ownerId: string,
@@ -149,6 +226,13 @@ export async function createCardTemplate(
 ): Promise<string> {
   basicValidate(input);
   const db = getDb();
+  if (input.type === 'stored') {
+    if (await shopHasStoredWalletTemplate(shopId)) {
+      throw new Error(
+        '本店已开通钱包，请在「钱包」区块点击「编辑」调整配置，无需重复开通'
+      );
+    }
+  }
   const payload: Record<string, unknown> = {
     shopId,
     ownerId,
@@ -163,8 +247,6 @@ export async function createCardTemplate(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
-  const scope = sanitizeScope(input.type, input.scope);
-  if (scope) payload.scope = scope;
   const desc = input.description?.trim();
   if (desc) payload.description = desc;
   const ref = await addDoc(collection(db, COLL), payload);
@@ -187,6 +269,11 @@ export async function updateCardTemplate(
   if (patch.type !== undefined) {
     if (patch.type !== 'stored' && patch.type !== 'pass') {
       throw new Error('卡类型不合法');
+    }
+    if (patch.type === 'stored' && cur.type !== 'stored') {
+      if (await shopHasStoredWalletTemplate(cur.shopId, templateId)) {
+        throw new Error('本店已有钱包模板，无法将次卡改为钱包');
+      }
     }
     next.type = patch.type;
     // 类型从其它切换到 stored，名字强制为"钱包"
@@ -223,11 +310,6 @@ export async function updateCardTemplate(
   }
   if (patch.topupRules !== undefined) {
     next.topupRules = sanitizeTopupRules(patch.topupRules);
-  }
-  if (patch.scope !== undefined) {
-    const t = patch.type ?? cur.type;
-    const s = sanitizeScope(t, patch.scope);
-    next.scope = s ?? deleteField();
   }
   if (patch.description !== undefined) {
     const v = patch.description?.trim();
@@ -317,6 +399,16 @@ export type SubmitCardRequestInput = {
   gainValue: number;
 };
 
+function autoExpireFlag(card: CustomerCardDoc, now: Date): CustomerCardStatus {
+  if (card.status === 'expired') return 'expired';
+  if (card.status === 'cancelled') return 'cancelled';
+  if (card.validUntil && card.validUntil.toDate() < now) return 'expired';
+  if (Number(card.remaining ?? 0) <= 0 && card.status === 'active') {
+    return 'used_up';
+  }
+  return card.status;
+}
+
 /**
  * 检查同店铺、同模板、同顾客是否已有可用钱包（active）或待确认的购卡请求。
  * 用于"一人一钱包"约束。
@@ -368,6 +460,95 @@ async function findExistingActiveWalletForCustomer(
   return { activeCard, pendingRequest };
 }
 
+/** 次卡：已有实例（非已取消）或待确认首购请求时，禁止再次首购 */
+async function assertCanPurchasePassTemplate(
+  shopId: string,
+  templateId: string,
+  customerKey: string
+): Promise<void> {
+  const db = getDb();
+  const reqSnap = await getDocs(
+    query(
+      collection(db, CARD_REQUESTS_COLL),
+      where('shopId', '==', shopId),
+      where('templateId', '==', templateId),
+      where('customerKey', '==', customerKey),
+      where('kind', '==', 'purchase'),
+      where('status', '==', 'pending')
+    )
+  );
+  if (!reqSnap.empty) {
+    throw new Error(
+      '你已有一笔待确认的购买请求，请先完成或撤销后再试'
+    );
+  }
+  const cardsSnap = await getDocs(
+    query(
+      collection(db, CUSTOMER_CARDS_COLL),
+      where('shopId', '==', shopId),
+      where('templateId', '==', templateId),
+      where('customerKey', '==', customerKey)
+    )
+  );
+  const now = new Date();
+  for (const d of cardsSnap.docs) {
+    const raw = d.data() as CustomerCardDoc;
+    const st = autoExpireFlag(raw, now);
+    if (st !== 'cancelled') {
+      throw new Error(
+        '你已持有该次卡，请对该卡「充值」续次数；首购专享价仅适用于首次购买'
+      );
+    }
+  }
+}
+
+const MONEY_EPS = 0.005;
+
+function nearlyEqMoney(a: number, b: number): boolean {
+  return Math.abs(Number(a) - Number(b)) < MONEY_EPS;
+}
+
+function nearlyEqPassGain(a: number, b: number): boolean {
+  return Math.round(Number(a)) === Math.round(Number(b));
+}
+
+function validatePurchaseAmountsAgainstTemplate(
+  tpl: CardTemplateDoc,
+  payAmount: number,
+  gainValue: number
+): void {
+  const sp = Number(tpl.salePrice) || 0;
+  const fv = Number(tpl.faceValueOrUses) || 0;
+  if (tpl.type === 'stored') {
+    if (!nearlyEqMoney(payAmount, sp) || !nearlyEqMoney(gainValue, fv)) {
+      throw new Error('购卡金额与模板不符，请刷新页面后重试');
+    }
+  } else {
+    if (!nearlyEqMoney(payAmount, sp) || !nearlyEqPassGain(gainValue, fv)) {
+      throw new Error('购卡金额与模板不符，请刷新页面后重试');
+    }
+  }
+}
+
+function validateTopupAmountsAgainstRules(
+  tpl: CardTemplateDoc,
+  payAmount: number,
+  gainValue: number
+): void {
+  const rules = sanitizeTopupRules(tpl.topupRules);
+  if (rules.length === 0) {
+    throw new Error('商户尚未配置充值档位，暂时无法充值');
+  }
+  const ok = rules.some((r) =>
+    tpl.type === 'stored'
+      ? nearlyEqMoney(r.pay, payAmount) && nearlyEqMoney(r.gain, gainValue)
+      : nearlyEqMoney(r.pay, payAmount) && nearlyEqPassGain(r.gain, gainValue)
+  );
+  if (!ok) {
+    throw new Error('充值档位无效，请刷新页面后重试');
+  }
+}
+
 /** 顾客创建一笔购卡 / 充值请求；返回 requestId（之后追加截图、等商户确认） */
 export async function submitCardPurchaseRequest(
   input: SubmitCardRequestInput
@@ -403,6 +584,24 @@ export async function submitCardPurchaseRequest(
     }
   }
 
+  if (input.kind === 'purchase' && tpl.type === 'pass') {
+    await assertCanPurchasePassTemplate(
+      input.shopId,
+      input.templateId,
+      input.customerKey
+    );
+  }
+
+  if (input.kind === 'purchase') {
+    validatePurchaseAmountsAgainstTemplate(
+      tpl,
+      input.payAmount,
+      input.gainValue
+    );
+  } else {
+    validateTopupAmountsAgainstRules(tpl, input.payAmount, input.gainValue);
+  }
+
   const payload: Record<string, unknown> = {
     shopId: input.shopId,
     templateId: input.templateId,
@@ -427,19 +626,70 @@ export async function submitCardPurchaseRequest(
 
 export async function appendCardPaymentScreenshotToRequest(
   requestId: string,
-  url: string
+  url: string,
+  opts?: { contentSha256?: string }
 ): Promise<void> {
-  const refDoc = doc(getDb(), CARD_REQUESTS_COLL, requestId);
-  await runTransaction(getDb(), async (tx) => {
+  const db = getDb();
+  const refDoc = doc(db, CARD_REQUESTS_COLL, requestId);
+  await runTransaction(db, async (tx) => {
     const snap = await tx.get(refDoc);
     if (!snap.exists()) throw new Error('请求不存在');
     const cur = snap.data() as CardPurchaseRequestDoc;
     if (cur.status !== 'pending') {
       throw new Error('该请求已不可修改');
     }
+
+    const sha =
+      typeof opts?.contentSha256 === 'string'
+        ? opts.contentSha256.trim().toLowerCase()
+        : '';
+
+    const baseShot: CardPurchaseRequestDoc['paymentScreenshots'][number] = {
+      url,
+      uploadedAt: Timestamp.now(),
+    };
+
+    if (sha && isLikelySha256Hex(sha)) {
+      const hashRef = doc(db, CARD_PAYMENT_HASH_COLL, cardProofHashDocId(cur.shopId, sha));
+      const hashSnap = await tx.get(hashRef);
+      const prevHits = hashSnap.exists()
+        ? parseProofHashHits(hashSnap.data().hits)
+        : [];
+      const otherRequests = prevHits.filter((h) => h.requestId !== requestId);
+      if (otherRequests.length > 0) {
+        baseShot.contentSha256 = sha;
+        baseShot.duplicateRisk = true;
+        baseShot.duplicateMatchRequestIds = [
+          ...new Set(otherRequests.map((h) => h.requestId)),
+        ];
+      } else {
+        baseShot.contentSha256 = sha;
+      }
+
+      const nextHits: CardProofHashHit[] = [
+        ...prevHits,
+        {
+          requestId,
+          templateId: cur.templateId,
+          uploadedAt: Timestamp.now(),
+        },
+      ];
+      const capped = nextHits.slice(-120);
+      tx.set(
+        hashRef,
+        {
+          shopId: cur.shopId,
+          sha256: sha,
+          hits: capped,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
     const nextShots = [
       ...(Array.isArray(cur.paymentScreenshots) ? cur.paymentScreenshots : []),
-      { url, uploadedAt: Timestamp.now() },
+      baseShot,
     ];
     tx.update(refDoc, {
       paymentScreenshots: nextShots,
@@ -740,16 +990,6 @@ export async function rejectCardPurchaseRequest(
 
 /* ============================== 顾客卡 & 流水查询 ============================== */
 
-function autoExpireFlag(card: CustomerCardDoc, now: Date): CustomerCardStatus {
-  if (card.status === 'expired') return 'expired';
-  if (card.status === 'cancelled') return 'cancelled';
-  if (card.validUntil && card.validUntil.toDate() < now) return 'expired';
-  if (Number(card.remaining ?? 0) <= 0 && card.status === 'active') {
-    return 'used_up';
-  }
-  return card.status;
-}
-
 export async function listCustomerCardsByCustomer(
   customerKey: string,
   shopId: string
@@ -841,15 +1081,20 @@ export async function listCardLedger(opts: {
     return [];
   }
   const cap = Math.max(1, Math.min(500, Number(opts.limit ?? 200)));
+  /** 单字段 equality，无需复合索引；在客户端按时间排序（Firestore 上 equality + orderBy 另一字段会触发索引错误） */
   const snap = await getDocs(
-    query(
-      collection(db, CARD_LEDGER_COLL),
-      ...constraints,
-      orderBy('createdAt', 'desc'),
-      fsLimit(cap)
-    )
+    query(collection(db, CARD_LEDGER_COLL), ...constraints)
   );
-  return snap.docs.map((d) => ({ id: d.id, data: d.data() as CardLedgerDoc }));
+  const rows = snap.docs.map((d) => ({
+    id: d.id,
+    data: d.data() as CardLedgerDoc,
+  }));
+  rows.sort((a, b) => {
+    const tb = b.data.createdAt?.toMillis?.() ?? 0;
+    const ta = a.data.createdAt?.toMillis?.() ?? 0;
+    return tb - ta;
+  });
+  return rows.slice(0, cap);
 }
 
 /** 顾客取消尚未确认的请求（顾客主动撤销） */
@@ -871,4 +1116,516 @@ export async function cancelCardPurchaseRequest(
       updatedAt: serverTimestamp(),
     });
   });
+}
+
+/* ======================================================================
+ *  订单结算时使用卡（钱包 + 次卡）
+ * ====================================================================== */
+
+const ROUND2 = (n: number) => Math.round(n * 100) / 100;
+
+/** 把订单行解析成可被次卡匹配的"产品键" */
+type LineKey =
+  | { kind: 'product'; productId: string }
+  | { kind: 'bundle'; bundleToolId: string; schemeId: string };
+
+function parseLineKey(line: OrderLineDoc): LineKey {
+  if (line.productId.startsWith('bundle:')) {
+    const parts = line.productId.split(':');
+    const bundleToolId = parts[1] ?? '';
+    const schemeId = parts[2] ?? '';
+    return { kind: 'bundle', bundleToolId, schemeId };
+  }
+  return { kind: 'product', productId: line.productId };
+}
+
+/** 从项目中查询某行可使用的次卡模板 id 列表 */
+function resolveApplicableTemplatesForLine(
+  project: ProjectDoc,
+  line: OrderLineDoc
+): string[] {
+  const key = parseLineKey(line);
+  if (key.kind === 'product') {
+    const product = (project.products ?? []).find(
+      (p) => p.id === key.productId
+    ) as ProjectProduct | undefined;
+    return Array.isArray(product?.applicableCardTemplateIds)
+      ? (product?.applicableCardTemplateIds ?? [])
+      : [];
+  }
+  const tool = (project.bundleTools ?? []).find((t) => t.id === key.bundleToolId);
+  if (!tool) return [];
+  const scheme = tool.schemes.find(
+    (s) => s.id === key.schemeId
+  ) as BundleSchemeDoc | undefined;
+  return Array.isArray(
+    (scheme as { applicableCardTemplateIds?: string[] } | undefined)
+      ?.applicableCardTemplateIds
+  )
+    ? (scheme as { applicableCardTemplateIds?: string[] })
+        .applicableCardTemplateIds!
+    : [];
+}
+
+export type CardPaymentPlanLineAlloc = {
+  /** 订单行 productId（包含 bundle: 前缀） */
+  lineProductId: string;
+  unitPrice: number;
+  quantity: number;
+  /** 命中次卡的份数 */
+  passCovered: number;
+};
+
+export type CardPaymentPlanCardAlloc = {
+  customerCardId: string;
+  templateId: string;
+  templateNameSnapshot: string;
+  /** 该卡共消耗多少次 */
+  uses: number;
+  /** 命中的订单行 productId 列表（按消耗顺序，可重复） */
+  appliedLineProductIds: string[];
+};
+
+export type CardPaymentPlan =
+  | {
+      ok: true;
+      totalAmount: number;
+      passCovered: number;
+      walletDeduct: number;
+      walletCardId?: string;
+      walletTemplateId?: string;
+      walletNameSnapshot?: string;
+      lineAllocations: CardPaymentPlanLineAlloc[];
+      cardAllocations: CardPaymentPlanCardAlloc[];
+      summary: {
+        passUseCount: number;
+        walletUsed: number;
+        cardsCount: number;
+      };
+    }
+  | {
+      ok: false;
+      reason: 'insufficient' | 'no_cards';
+      totalAmount: number;
+      passCovered: number;
+      walletAvailable: number;
+      gap: number;
+      message: string;
+    };
+
+/** 计算挑卡 + 钱包抵扣方案，不写库 */
+export async function planCardPayment(
+  order: OrderDoc,
+  project: ProjectDoc,
+  customerKey: string
+): Promise<CardPaymentPlan> {
+  const totalAmount = ROUND2(Number(order.totalAmount ?? 0));
+  // 1. 拉取本店该顾客所有 active 卡
+  const cards = (
+    await listCustomerCardsByCustomer(customerKey, order.shopId)
+  ).filter((c) => c.data.status === 'active' && Number(c.data.remaining ?? 0) > 0);
+  const passCards = cards.filter((c) => c.data.type === 'pass');
+  const wallet = cards.find((c) => c.data.type === 'stored') ?? null;
+
+  // 2. 每行可被哪些 templateId 抵扣
+  const lines = (order.lines ?? []) as OrderLineDoc[];
+  const lineMeta = lines.map((l) => ({
+    line: l,
+    applicableTemplateIds: resolveApplicableTemplatesForLine(project, l),
+    coveredQuantity: 0,
+  }));
+
+  // 3. 评估每张次卡的"可用范围广度"——本订单中能匹配的不同 productId 数
+  const cardScopeBreadth = new Map<string, number>();
+  for (const c of passCards) {
+    let breadth = 0;
+    const seen = new Set<string>();
+    for (const m of lineMeta) {
+      if (seen.has(m.line.productId)) continue;
+      if (m.applicableTemplateIds.includes(c.data.templateId)) {
+        seen.add(m.line.productId);
+        breadth += 1;
+      }
+    }
+    cardScopeBreadth.set(c.id, breadth);
+  }
+
+  // 4. 排序：广度升序 → 到期升序 → 剩余次数升序
+  const sortedPass = [...passCards].sort((a, b) => {
+    const ba = cardScopeBreadth.get(a.id) ?? 0;
+    const bb = cardScopeBreadth.get(b.id) ?? 0;
+    if (ba !== bb) return ba - bb;
+    const ea = a.data.validUntil?.toMillis?.() ?? Number.MAX_SAFE_INTEGER;
+    const eb = b.data.validUntil?.toMillis?.() ?? Number.MAX_SAFE_INTEGER;
+    if (ea !== eb) return ea - eb;
+    return Number(a.data.remaining ?? 0) - Number(b.data.remaining ?? 0);
+  });
+
+  // 5. 贪婪分配：每张卡逐次抵扣命中行
+  const cardUses = new Map<
+    string,
+    { card: CustomerCardRow; uses: number; appliedLineProductIds: string[] }
+  >();
+
+  for (const card of sortedPass) {
+    let remaining = Number(card.data.remaining ?? 0);
+    const tplId = card.data.templateId;
+    while (remaining > 0) {
+      const target = lineMeta.find(
+        (m) =>
+          m.coveredQuantity < m.line.quantity &&
+          m.applicableTemplateIds.includes(tplId)
+      );
+      if (!target) break;
+      target.coveredQuantity += 1;
+      remaining -= 1;
+
+      const key = card.id;
+      const cur = cardUses.get(key) ?? {
+        card,
+        uses: 0,
+        appliedLineProductIds: [] as string[],
+      };
+      cur.uses += 1;
+      cur.appliedLineProductIds.push(target.line.productId);
+      cardUses.set(key, cur);
+    }
+  }
+
+  const passCovered = ROUND2(
+    lineMeta.reduce(
+      (acc, m) => acc + m.coveredQuantity * Number(m.line.unitPrice ?? 0),
+      0
+    )
+  );
+
+  const remainingAmount = ROUND2(totalAmount - passCovered);
+  const walletAvailable = ROUND2(Number(wallet?.data.remaining ?? 0));
+
+  if (remainingAmount > walletAvailable + 0.0001) {
+    const gap = ROUND2(remainingAmount - walletAvailable);
+    return {
+      ok: false,
+      reason: passCards.length === 0 && !wallet ? 'no_cards' : 'insufficient',
+      totalAmount,
+      passCovered,
+      walletAvailable,
+      gap,
+      message:
+        passCards.length === 0 && !wallet
+          ? '尚未持有可用的钱包/次卡，请先购买或充值'
+          : `卡余额不足，差 RM ${gap.toFixed(2)}`,
+    };
+  }
+
+  const lineAllocations: CardPaymentPlanLineAlloc[] = lineMeta.map((m) => ({
+    lineProductId: m.line.productId,
+    unitPrice: Number(m.line.unitPrice ?? 0),
+    quantity: Number(m.line.quantity ?? 0),
+    passCovered: m.coveredQuantity,
+  }));
+
+  const cardAllocations: CardPaymentPlanCardAlloc[] = Array.from(
+    cardUses.values()
+  ).map((u) => ({
+    customerCardId: u.card.id,
+    templateId: u.card.data.templateId,
+    templateNameSnapshot: u.card.data.templateNameSnapshot,
+    uses: u.uses,
+    appliedLineProductIds: u.appliedLineProductIds,
+  }));
+
+  const walletDeduct = ROUND2(remainingAmount);
+
+  return {
+    ok: true,
+    totalAmount,
+    passCovered,
+    walletDeduct,
+    walletCardId: walletDeduct > 0 ? wallet?.id : undefined,
+    walletTemplateId: walletDeduct > 0 ? wallet?.data.templateId : undefined,
+    walletNameSnapshot:
+      walletDeduct > 0 ? wallet?.data.templateNameSnapshot : undefined,
+    lineAllocations,
+    cardAllocations,
+    summary: {
+      passUseCount: cardAllocations.reduce((acc, a) => acc + a.uses, 0),
+      walletUsed: walletDeduct,
+      cardsCount:
+        cardAllocations.length + (walletDeduct > 0 && wallet ? 1 : 0),
+    },
+  };
+}
+
+/**
+ * 原子事务执行：扣卡 + 写流水 + 更新订单为已确认
+ * - 入参：订单文档路径（projectId + orderId）+ customerKey
+ * - 内部重新拉取订单与项目 → 复算 plan → 在事务里逐张校验余额并执行
+ */
+export async function applyCardPaymentToOrder(params: {
+  projectId: string;
+  orderId: string;
+  customerKey: string;
+}): Promise<{ confirmed: true; deducted: number }> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', params.orderId);
+  const projectRef = doc(db, 'projects', params.projectId);
+
+  // 事务前预取一次（计算 plan + 提前给出错误信息）
+  const [orderSnapPre, projectSnapPre] = await Promise.all([
+    getDoc(orderRef),
+    getDoc(projectRef),
+  ]);
+  if (!orderSnapPre.exists()) throw new Error('订单不存在');
+  if (!projectSnapPre.exists()) throw new Error('项目不存在');
+  const orderPre = orderSnapPre.data() as OrderDoc;
+  const projectPre = projectSnapPre.data() as ProjectDoc;
+  if (orderPre.customerKey !== params.customerKey) {
+    throw new Error('无权操作他人订单');
+  }
+  if (orderPre.status === 'cancelled') {
+    throw new Error('订单已取消');
+  }
+  if (orderPre.status === 'confirmed') {
+    throw new Error('订单已确认，无需再次支付');
+  }
+  if (Number(orderPre.pendingAmount ?? 0) <= 0) {
+    throw new Error('订单已无未付金额');
+  }
+  const plan = await planCardPayment(orderPre, projectPre, params.customerKey);
+  if (!plan.ok) {
+    throw new Error(plan.message);
+  }
+
+  // 准备事务里要 get 的所有 doc
+  const cardRefs = plan.cardAllocations.map((a) =>
+    doc(db, CUSTOMER_CARDS_COLL, a.customerCardId)
+  );
+  const walletRef = plan.walletCardId
+    ? doc(db, CUSTOMER_CARDS_COLL, plan.walletCardId)
+    : null;
+  const ledgerCardRefs = plan.cardAllocations.map(() =>
+    doc(collection(db, CARD_LEDGER_COLL))
+  );
+  const ledgerWalletRef = walletRef
+    ? doc(collection(db, CARD_LEDGER_COLL))
+    : null;
+
+  await runTransaction(db, async (tx) => {
+    // 1. 重新读取订单 → 状态校验
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const order = oSnap.data() as OrderDoc;
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+    if (order.status === 'confirmed') throw new Error('订单已确认');
+    if (Number(order.pendingAmount ?? 0) <= 0)
+      throw new Error('订单已无未付金额');
+
+    // 2. 读卡 + 读钱包
+    const cardSnaps = await Promise.all(cardRefs.map((r) => tx.get(r)));
+    const walletSnap = walletRef ? await tx.get(walletRef) : null;
+
+    // 3. 校验余额是否仍然足够
+    for (let i = 0; i < plan.cardAllocations.length; i++) {
+      const a = plan.cardAllocations[i]!;
+      const snap = cardSnaps[i]!;
+      if (!snap.exists()) throw new Error('卡已失效，请刷新');
+      const card = snap.data() as CustomerCardDoc;
+      if (card.shopId !== order.shopId) throw new Error('卡与店铺不匹配');
+      if (card.customerKey !== params.customerKey)
+        throw new Error('无权使用他人卡');
+      if (card.status !== 'active') throw new Error('卡状态异常，请刷新');
+      if (Number(card.remaining ?? 0) < a.uses) {
+        throw new Error('卡次数不足，请刷新页面');
+      }
+    }
+    if (walletSnap && plan.walletDeduct > 0) {
+      if (!walletSnap.exists()) throw new Error('钱包不存在，请刷新');
+      const w = walletSnap.data() as CustomerCardDoc;
+      if (w.shopId !== order.shopId) throw new Error('钱包与店铺不匹配');
+      if (w.customerKey !== params.customerKey)
+        throw new Error('无权使用他人钱包');
+      if (w.status !== 'active') throw new Error('钱包不可用');
+      if (ROUND2(Number(w.remaining ?? 0)) + 0.0001 < plan.walletDeduct) {
+        throw new Error('钱包余额不足，请刷新');
+      }
+    }
+
+    const now = Timestamp.now();
+
+    // 4. 扣卡 + 写次卡流水
+    const passCardLedgerRefs: string[] = [];
+    for (let i = 0; i < plan.cardAllocations.length; i++) {
+      const a = plan.cardAllocations[i]!;
+      const cardRef = cardRefs[i]!;
+      const cardData = cardSnaps[i]!.data() as CustomerCardDoc;
+      const newRemaining = Number(cardData.remaining ?? 0) - a.uses;
+      const newOut = Number(cardData.totalOut ?? 0) + a.uses;
+      const nextStatus: CustomerCardStatus =
+        newRemaining <= 0 ? 'used_up' : 'active';
+      tx.update(cardRef, {
+        remaining: newRemaining,
+        totalOut: newOut,
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      const ledgerRef = ledgerCardRefs[i]!;
+      tx.set(ledgerRef, {
+        shopId: order.shopId,
+        customerCardId: a.customerCardId,
+        templateId: a.templateId,
+        customerKey: params.customerKey,
+        type: 'use' satisfies CardLedgerType,
+        delta: -a.uses,
+        remainingAfter: newRemaining,
+        orderId: params.orderId,
+        orderNumber: order.orderNumber,
+        orderProjectId: params.projectId,
+        orderShopSlug: order.shopSlug,
+        orderLineIds: a.appliedLineProductIds,
+        note: `订单 #${order.orderNumber} 抵扣`,
+        createdAt: serverTimestamp(),
+      });
+      passCardLedgerRefs.push(ledgerRef.id);
+    }
+
+    // 5. 钱包扣减 + 流水
+    let walletLedgerId: string | undefined;
+    if (walletRef && plan.walletDeduct > 0 && walletSnap?.exists()) {
+      const w = walletSnap.data() as CustomerCardDoc;
+      const newRemaining = ROUND2(
+        Number(w.remaining ?? 0) - plan.walletDeduct
+      );
+      const newOut = ROUND2(Number(w.totalOut ?? 0) + plan.walletDeduct);
+      const nextStatus: CustomerCardStatus =
+        newRemaining <= 0 ? 'used_up' : 'active';
+      tx.update(walletRef, {
+        remaining: newRemaining,
+        totalOut: newOut,
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      const ledgerRef = ledgerWalletRef!;
+      tx.set(ledgerRef, {
+        shopId: order.shopId,
+        customerCardId: plan.walletCardId!,
+        templateId: plan.walletTemplateId!,
+        customerKey: params.customerKey,
+        type: 'use' satisfies CardLedgerType,
+        delta: -plan.walletDeduct,
+        remainingAfter: newRemaining,
+        orderId: params.orderId,
+        orderNumber: order.orderNumber,
+        orderProjectId: params.projectId,
+        orderShopSlug: order.shopSlug,
+        note: `订单 #${order.orderNumber} 抵扣`,
+        createdAt: serverTimestamp(),
+      });
+      walletLedgerId = ledgerRef.id;
+    }
+
+    // 6. 更新订单：line.cardCoveredQuantity + cardPayment + 状态/金额
+    const allocByPid = new Map<string, number>();
+    for (const a of plan.lineAllocations) {
+      allocByPid.set(a.lineProductId, a.passCovered);
+    }
+    const nextLines = (order.lines ?? []).map((l) => {
+      const covered = allocByPid.get(l.productId) ?? 0;
+      const next: OrderLineDoc = {
+        productId: l.productId,
+        name: l.name,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        isDiscount: l.isDiscount,
+        ...(l.discountEndsAt ? { discountEndsAt: l.discountEndsAt } : {}),
+        subtotal: l.subtotal,
+        ...(covered > 0 ? { cardCoveredQuantity: covered } : {}),
+      };
+      return next;
+    });
+
+    const cardPaymentDoc: OrderCardPaymentDoc = {
+      passCards: plan.cardAllocations.map((a, i) => ({
+        customerCardId: a.customerCardId,
+        templateId: a.templateId,
+        uses: a.uses,
+        appliedLineProductIds: a.appliedLineProductIds,
+        ledgerId: passCardLedgerRefs[i]!,
+      })),
+      ...(plan.walletDeduct > 0 && walletLedgerId
+        ? {
+            wallet: {
+              customerCardId: plan.walletCardId!,
+              templateId: plan.walletTemplateId!,
+              deduct: plan.walletDeduct,
+              ledgerId: walletLedgerId,
+            },
+          }
+        : {}),
+      totalDeducted: ROUND2(plan.totalAmount),
+      appliedAt: now,
+    };
+
+    // 卡支付是自动确认：把尚未确认的加购档一并标记为已确认，避免 UI 仍显示「待商户确认」
+    const nextAppendBatches = (order.appendBatches ?? []).map((b) =>
+      b.confirmedAt
+        ? b
+        : {
+            ...b,
+            confirmedAt: now,
+            confirmedByUserId: 'customer_card_auto',
+          }
+    );
+
+    const hist = [...(order.statusHistory ?? [])];
+    hist.push({
+      action: 'card_payment_applied',
+      timestamp: now,
+      note: `卡支付：钱包 RM ${plan.walletDeduct.toFixed(2)} + 次卡 ${plan.summary.passUseCount} 次`,
+    });
+
+    tx.update(orderRef, {
+      lines: nextLines,
+      appendBatches: nextAppendBatches,
+      cardPayment: cardPaymentDoc,
+      paidAmount: ROUND2(plan.totalAmount),
+      pendingAmount: 0,
+      status: 'confirmed',
+      initialPaymentConfirmedAt:
+        order.initialPaymentConfirmedAt ?? serverTimestamp(),
+      statusHistory: hist,
+      updatedAt: serverTimestamp(),
+    });
+
+    // 7. 项目统计：unpaid - 1, confirmed + 1, confirmedRevenue +
+    const stats = projectPre.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+    const wasUnpaid = order.status === 'unpaid';
+    const wasPending =
+      order.status === 'pending' || order.status === 'partial_paid';
+    const nextStats = {
+      ...stats,
+      unpaidOrders: Math.max(0, (stats.unpaidOrders ?? 0) - (wasUnpaid ? 1 : 0)),
+      pendingOrders: Math.max(
+        0,
+        (stats.pendingOrders ?? 0) - (wasPending ? 1 : 0)
+      ),
+      confirmedOrders: (stats.confirmedOrders ?? 0) + 1,
+      confirmedRevenue:
+        ROUND2(Number(stats.confirmedRevenue ?? 0)) +
+        ROUND2(plan.totalAmount),
+    };
+    tx.update(projectRef, {
+      stats: nextStats,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  return { confirmed: true, deducted: plan.totalAmount };
 }
