@@ -59,6 +59,21 @@ function batchTimeStr(b: OrderAppendBatchDoc): string {
   return d.toLocaleString();
 }
 
+function linePromoTag(line: OrderLineDoc) {
+  if (!line.isDiscount) return null;
+  const isEarlyBird =
+    typeof line.discountEndsAt === 'string' && line.discountEndsAt.trim().length > 0;
+  return (
+    <span
+      className={`ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+        isEarlyBird ? 'bg-amber-100 text-amber-900' : 'bg-rose-100 text-rose-900'
+      }`}
+    >
+      {isEarlyBird ? '早鸟价' : '特惠价'}
+    </span>
+  );
+}
+
 /** 已入账的历史加购（商户曾逐笔确认过的批次） */
 function ConfirmedAppendBatchCard({
   batch,
@@ -88,7 +103,8 @@ function ConfirmedAppendBatchCard({
             className="flex justify-between gap-2 px-3 py-2 text-sm"
           >
             <span>
-              {l.name} ×{l.quantity}
+              {l.name}
+              {linePromoTag(l)} ×{l.quantity}
             </span>
             <span className="tabular-nums font-medium">
               {formatMYR(l.subtotal)}
@@ -399,7 +415,8 @@ export default function MerchantOrderDetail() {
                   className="flex justify-between gap-2 px-3 py-2 text-sm"
                 >
                   <span>
-                    {l.name} ×{l.quantity}
+                    {l.name}
+                    {linePromoTag(l)} ×{l.quantity}
                   </span>
                   <span className="tabular-nums font-medium">
                     {formatMYR(l.subtotal)}
@@ -538,7 +555,8 @@ export default function MerchantOrderDetail() {
                 className="flex justify-between gap-2 px-3 py-2"
               >
                 <span>
-                  {l.name} ×{l.quantity}
+                  {l.name}
+                  {linePromoTag(l)} ×{l.quantity}
                 </span>
                 <span className="tabular-nums font-medium">
                   {formatMYR(l.subtotal)}
@@ -625,7 +643,8 @@ export default function MerchantOrderDetail() {
                 className="flex justify-between gap-2 px-3 py-2"
               >
                 <span>
-                  {l.name} ×{l.quantity}
+                  {l.name}
+                  {linePromoTag(l)} ×{l.quantity}
                 </span>
                 <span className="tabular-nums font-medium">
                   {formatMYR(l.subtotal)}

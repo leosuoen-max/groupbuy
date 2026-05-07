@@ -4,13 +4,28 @@ export type OrderLine = {
   quantity: number;
   unitPrice: number;
   isDiscount: boolean;
+  /** 限时优惠（早鸟）的截止时间，仅用于下单后付款时限判断 */
+  discountEndsAt?: string;
 };
 
 export type CartLocationState = {
   lines?: OrderLine[] | null;
+  bundleSelections?: BundleSelectionDraft[] | null;
   projectTitle?: string;
   /** 选菜页草稿数量，支持从订单页返回继续修改 */
   cartDraft?: Record<string, number>;
+};
+
+export type BundleSelectionDraft = {
+  bundleToolId: string;
+  schemeId: string;
+  /** key=seriesId, value=selected option ids */
+  selectedOptionIdsBySeries: Record<string, string[]>;
+  quantity: number;
+  unitPrice: number;
+  isDiscount?: boolean;
+  discountEndsAt?: string;
+  label: string;
 };
 
 export type MockDeliveryPoint = {

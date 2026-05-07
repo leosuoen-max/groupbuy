@@ -1,17 +1,20 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
+  limit,
   query,
   serverTimestamp,
   updateDoc,
   Timestamp,
   where,
 } from 'firebase/firestore';
-import { getDb } from './firebase';
-import type { ProjectDoc, ProjectProduct } from '../types/firestore';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getDb, getStorageClient } from './firebase';
+import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
 export type ProjectRow = { id: string; data: ProjectDoc };
 
@@ -24,6 +27,7 @@ function defaultProjectPayload(shopId: string): Omit<ProjectDoc, 'createdAt' | '
     textContent: '',
     imageBlocks: [],
     products: [],
+    bundleTools: [],
     deliveryPointIds: [],
     formFields: {
       name: { required: true },
@@ -88,6 +92,7 @@ export async function updateProjectDoc(
     closesAt?: Timestamp;
     textContent?: string;
     products?: ProjectProduct[];
+    bundleTools?: BundleToolDoc[];
     publishedAt?: Timestamp | null;
     deliveryPointIds?: string[];
   }
@@ -98,4 +103,48 @@ export async function updateProjectDoc(
     ...patch,
     updatedAt: serverTimestamp(),
   });
+}
+
+export async function canDeleteProject(
+  projectId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+  const row = await getProject(projectId);
+  if (!row) return { allowed: false, reason: '项目不存在' };
+  if (row.data.status === 'draft') return { allowed: true };
+
+  const db = getDb();
+  const q = query(
+    collection(db, 'orders'),
+    where('projectId', '==', projectId),
+    limit(1)
+  );
+  const snap = await getDocs(q);
+  if (!snap.empty) {
+    return { allowed: false, reason: '该项目已有订单，不能删除（请保留历史数据）' };
+  }
+  return { allowed: true };
+}
+
+export async function deleteProjectIfAllowed(projectId: string): Promise<void> {
+  const check = await canDeleteProject(projectId);
+  if (!check.allowed) throw new Error(check.reason ?? '当前项目不可删除');
+  const db = getDb();
+  await deleteDoc(doc(db, 'projects', projectId));
+}
+
+export async function uploadProjectAsset(
+  ownerId: string,
+  file: File,
+  scope: 'product' | 'bundle-option'
+): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('请上传图片文件');
+  const rawExt = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const safeExt = rawExt && /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
+  const name = `${globalThis.crypto.randomUUID()}.${safeExt}`;
+  const path = `projects/${ownerId}/${scope}/${name}`;
+  const storageRef = ref(getStorageClient(), path);
+  const contentType =
+    file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
+  await uploadBytes(storageRef, file, { contentType });
+  return getDownloadURL(storageRef);
 }

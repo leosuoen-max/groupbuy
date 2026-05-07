@@ -59,6 +59,20 @@ export function orderHasPaymentScreenshots(raw: unknown): boolean {
   return parseScreenshotEntries(raw).some((x) => x.url);
 }
 
+/**
+ * 写入 Firestore 前：带 `url` 的凭证条目若缺少 `flag`，补齐为 `green`，
+ * 保证落库始终可审计（未跑额外识别时与业务默认一致）。
+ */
+export function withDefaultScreenshotFlagIfUrl(
+  entry: Record<string, unknown>
+): Record<string, unknown> {
+  const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+  if (!url) return entry;
+  const f = entry.flag;
+  if (f === 'green' || f === 'yellow' || f === 'red') return entry;
+  return { ...entry, flag: 'green' };
+}
+
 /** 是否有任何付款凭证（顾客上传截图或商户免提交标记） */
 export function orderHasPaymentProof(raw: unknown): boolean {
   return parseScreenshotEntries(raw).some(

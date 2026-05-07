@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { ActionButton } from '../../components/ui/ActionButton';
 import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
@@ -7,21 +7,26 @@ import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
+  DEFAULT_BUCKET_SELECTION,
+  deliveryPointLabel,
+  proofRiskDisplayTone,
+  linesInSelectedBuckets,
+  listOrderPaymentGroups,
+  orderMatchesBucketSelection,
+  orderNeedsMissingProofLabel,
+  scopedGroupAmount,
+  type BucketSelection,
+  type GroupBucket,
+} from '../../lib/reconciliationGroups';
+import {
   buildReconciliationCopyText,
   buildReconciliationCsv,
   buildReconciliationTotals,
 } from '../../lib/reconciliationSummary';
-import {
-  orderHasPaymentProof,
-  parseScreenshotEntries,
-} from '../../lib/paymentScreenshotHelpers';
-import {
-  listOrdersByShopId,
-  merchantConfirmPayment,
-  type OrderRow,
-} from '../../lib/orderService';
+import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
+import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
 import { getShopBySlug } from '../../lib/shopService';
-import type { OrderStatus } from '../../types/firestore';
+import type { OrderLineDoc, OrderStatus } from '../../types/firestore';
 
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
@@ -32,14 +37,6 @@ function statusLabel(s: OrderStatus): string {
   return s;
 }
 
-function orderLinesSummary(lines: OrderRow['data']['lines']): string {
-  if (!lines?.length) return '—';
-  const first = lines[0];
-  return lines.length > 1
-    ? `${first.name}×${first.quantity} 等${lines.length}项`
-    : `${first.name}×${first.quantity}`;
-}
-
 function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cancelled' {
   if (s === 'confirmed') return 'confirmed';
   if (s === 'pending') return 'pending';
@@ -47,9 +44,21 @@ function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cance
   return 'cancelled';
 }
 
+function formatLinesCell(lines: OrderLineDoc[], mode: 'all' | 'first'): string {
+  if (lines.length === 0) return '—';
+  if (mode === 'first') {
+    const f = lines[0]!;
+    return lines.length > 1
+      ? `${f.name}×${f.quantity} 等${lines.length}项`
+      : `${f.name}×${f.quantity}`;
+  }
+  return lines.map((l) => `${l.name}×${l.quantity}`).join('、');
+}
+
 export default function ReconciliationStatement() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const slug = decodeURIComponent(shopSlug);
+  const navigate = useNavigate();
   const { user, loading: authLoading } = useAuthUser();
   const [searchParams, setSearchParams] = useSearchParams();
   const projectFilter = searchParams.get('project') ?? '';
@@ -61,7 +70,10 @@ export default function ReconciliationStatement() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [copyOk, setCopyOk] = useState(false);
-  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bucketSelection, setBucketSelection] = useState<BucketSelection>(
+    () => ({ ...DEFAULT_BUCKET_SELECTION })
+  );
+  const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -130,61 +142,13 @@ export default function ReconciliationStatement() {
     });
   }, [orders, projectFilter, proofStart, proofEnd]);
 
-  const pendingScopedOrders = useMemo(
-    () => scopedOrders.filter((r) => r.data.status === 'pending'),
-    [scopedOrders]
-  );
-
-  const handleBulkConfirmPending = async () => {
-    if (!user) return;
-    if (pendingScopedOrders.length === 0) {
-      setErr('当前筛选范围内没有待确认订单。');
-      return;
-    }
-    const pendingAmount = pendingScopedOrders.reduce(
-      (s, r) => s + (r.data.totalAmount ?? 0),
-      0
-    );
-    const ok = window.confirm(
-      [
-        `将确认当前筛选范围内 ${pendingScopedOrders.length} 笔待确认订单。`,
-        `参考金额：${formatMYR(pendingAmount)}`,
-        '请先确认与银行/收款渠道金额一致后再继续。',
-      ].join('\n')
-    );
-    if (!ok) return;
-
-    setBulkBusy(true);
-    setErr(null);
-    let success = 0;
-    let failed = 0;
-    for (const row of pendingScopedOrders) {
-      try {
-        await merchantConfirmPayment(row.id, user.uid);
-        success += 1;
-      } catch {
-        failed += 1;
-      }
-    }
-    await refresh();
-    if (failed > 0) {
-      setErr(`批量确认完成：成功 ${success} 笔，失败 ${failed} 笔（请刷新后逐笔检查失败单）。`);
-    } else {
-      setErr(`批量确认完成：成功 ${success} 笔。`);
-    }
-    setBulkBusy(false);
-  };
-
   const totals = useMemo(
     () => buildReconciliationTotals(scopedOrders),
     [scopedOrders]
   );
-  const unpaidMergedAmount = totals.unpaidAmount + totals.partialPaidPendingAmount;
-  const unpaidMergedCount = totals.unpaidCount + totals.partialPaidCount;
+
   const fullCaliberAmount =
-    totals.confirmedAmount +
-    totals.pendingAmount +
-    unpaidMergedAmount;
+    totals.confirmedAmount + totals.pendingAmount + totals.unpaidAmount;
   const fullCaliberDiff = totals.totalActiveAmount - fullCaliberAmount;
 
   const projectOptions = useMemo(() => {
@@ -202,13 +166,43 @@ export default function ReconciliationStatement() {
       ? projectOptions.find((x) => x[0] === projectFilter)![1]
       : '全部项目';
 
-  const sortedRows = useMemo(() => {
-    return [...scopedOrders].sort((a, b) => {
-      const ta = a.data.createdAt?.toMillis?.() ?? 0;
-      const tb = b.data.createdAt?.toMillis?.() ?? 0;
+  const tableRows = useMemo(() => {
+    type Row = {
+      row: OrderRow;
+      groups: ReturnType<typeof listOrderPaymentGroups>;
+      dp: string;
+      scopedAmt: number;
+    };
+    const acc: Row[] = [];
+    for (const r of scopedOrders) {
+      if (r.data.status === 'cancelled') continue;
+      const groups = listOrderPaymentGroups(r.data);
+      if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
+      acc.push({
+        row: r,
+        groups,
+        dp: deliveryPointLabel(r.data),
+        scopedAmt: scopedGroupAmount(groups, bucketSelection),
+      });
+    }
+    acc.sort((a, b) => {
+      const c = a.dp.localeCompare(b.dp, 'zh-CN');
+      if (c !== 0) return c;
+      const ta = a.row.data.createdAt?.toMillis?.() ?? 0;
+      const tb = b.row.data.createdAt?.toMillis?.() ?? 0;
       return ta - tb;
     });
-  }, [scopedOrders]);
+    return acc;
+  }, [scopedOrders, bucketSelection]);
+
+  const sectionsByDp = useMemo(() => {
+    const m = new Map<string, typeof tableRows>();
+    for (const item of tableRows) {
+      if (!m.has(item.dp)) m.set(item.dp, []);
+      m.get(item.dp)!.push(item);
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'));
+  }, [tableRows]);
 
   const handleCopy = async () => {
     const text = buildReconciliationCopyText({
@@ -216,6 +210,7 @@ export default function ReconciliationStatement() {
       projectLabel,
       rows: scopedOrders,
       totals,
+      bucketSelection,
     });
     try {
       await navigator.clipboard.writeText(text);
@@ -226,16 +221,34 @@ export default function ReconciliationStatement() {
     }
   };
 
+  const bucketFileSuffix = useMemo(() => {
+    const parts: string[] = [];
+    if (bucketSelection.confirmed) parts.push('已确认');
+    if (bucketSelection.pending) parts.push('待确认');
+    if (bucketSelection.unpaid) parts.push('待付款');
+    return parts.join('+') || '无';
+  }, [bucketSelection]);
+
   const handleExportCsv = () => {
-    const csv = '\ufeff' + buildReconciliationCsv(scopedOrders);
+    const csv = '\ufeff' + buildReconciliationCsv(scopedOrders, bucketSelection);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `对账单-${slug}-${projectFilter || 'all'}.csv`;
+    a.download = `对账单-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  function toggleBucket(k: GroupBucket) {
+    setBucketSelection((prev) => {
+      const next = { ...prev, [k]: !prev[k] };
+      if (!next.confirmed && !next.pending && !next.unpaid) {
+        return prev;
+      }
+      return next;
+    });
+  }
 
   const baseDash = `/dashboard/${encodeURIComponent(slug)}`;
 
@@ -280,8 +293,7 @@ export default function ReconciliationStatement() {
       ) : null}
 
       <p className="mb-4 text-xs text-gray-600">
-        汇总口径与 docs/04 一致：已确认到账、待确认、待付款；可与 TNG / DuitNow /
-        银行等收款明细逐笔核对。
+        清单按「付款组」统计金额（首单 / 加购各一档）；汇总卡片为当前项目与时间筛选下的全量组口径，清单可通过下方标签筛选包含哪些组。
       </p>
 
       <div className="mb-4 rounded-xl border border-gray-100 bg-white p-3">
@@ -345,25 +357,25 @@ export default function ReconciliationStatement() {
 
       <div className="mb-5 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-          <div className="text-xs font-medium text-emerald-800">已确认到账</div>
+          <div className="text-xs font-medium text-emerald-800">已确认到账（组口径）</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-emerald-900">
             {formatMYR(totals.confirmedAmount)}
           </div>
           <div className="text-xs text-emerald-800">{totals.confirmedCount} 单</div>
         </div>
         <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-          <div className="text-xs font-medium text-amber-900">待确认金额</div>
+          <div className="text-xs font-medium text-amber-900">待确认金额（组口径）</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-amber-950">
             {formatMYR(totals.pendingAmount)}
           </div>
           <div className="text-xs text-amber-900">{totals.pendingCount} 单</div>
         </div>
         <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-          <div className="text-xs font-medium text-red-900">待付款</div>
+          <div className="text-xs font-medium text-red-900">待付款（组口径）</div>
           <div className="mt-1 text-xl font-bold tabular-nums text-red-950">
-            {formatMYR(unpaidMergedAmount)}
+            {formatMYR(totals.unpaidAmount)}
           </div>
-          <div className="text-xs text-red-900">{unpaidMergedCount} 单</div>
+          <div className="text-xs text-red-900">{totals.unpaidCount} 单</div>
         </div>
         <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
           <div className="text-xs font-medium text-gray-700">订单总额（未取消）</div>
@@ -375,7 +387,7 @@ export default function ReconciliationStatement() {
       </div>
 
       <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 shadow-sm">
-        <div className="font-medium">全口径核对</div>
+        <div className="font-medium">全口径核对（组金额之和）</div>
         <p className="mt-1 tabular-nums">
           已确认 + 待确认 + 待付款 = {formatMYR(fullCaliberAmount)}
         </p>
@@ -396,10 +408,60 @@ export default function ReconciliationStatement() {
 
       {totals.effectiveRatePercent != null ? (
         <p className="mb-4 text-sm text-gray-700">
-          有效订单率（已确认单数 / 未取消单数）：
+          有效订单率（订单状态已确认 / 未取消单数）：
           <strong>{totals.effectiveRatePercent}%</strong>
         </p>
       ) : null}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-gray-700">清单包含：</span>
+        {(
+          [
+            ['confirmed', '已确认组'] as const,
+            ['pending', '待确认组'] as const,
+            ['unpaid', '待付款组'] as const,
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              bucketSelection[k]
+                ? 'bg-gray-900 text-white'
+                : 'border border-gray-200 bg-white text-gray-600'
+            }`}
+            onClick={() => toggleBucket(k)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-gray-700">商品展示：</span>
+        <button
+          type="button"
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            lineMode === 'first'
+              ? 'bg-gray-900 text-white'
+              : 'border border-gray-200 bg-white text-gray-600'
+          }`}
+          onClick={() => setLineMode('first')}
+        >
+          仅首行
+        </button>
+        <button
+          type="button"
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            lineMode === 'all'
+              ? 'bg-gray-900 text-white'
+              : 'border border-gray-200 bg-white text-gray-600'
+          }`}
+          onClick={() => setLineMode('all')}
+        >
+          全部行
+        </button>
+      </div>
 
       <div className="mb-4 flex flex-wrap gap-2">
         <ActionButton type="button" variant="primary" onClick={() => void handleCopy()}>
@@ -408,78 +470,118 @@ export default function ReconciliationStatement() {
         <ActionButton type="button" variant="secondary" onClick={handleExportCsv}>
           导出 CSV
         </ActionButton>
-        <ActionButton
-          type="button"
-          variant="primary"
-          disabled={bulkBusy || pendingScopedOrders.length === 0}
-          onClick={() => void handleBulkConfirmPending()}
-        >
-          {bulkBusy
-            ? '批量确认中…'
-            : `一键确认待确认（${pendingScopedOrders.length}）`}
-        </ActionButton>
       </div>
 
-      {sortedRows.length === 0 ? (
+      {tableRows.length === 0 ? (
         <EmptyStateCard
           title="当前筛选范围暂无订单"
-          hint="可放宽时间窗口或切换项目查看。"
+          hint="可放宽时间窗口、切换项目，或勾选更多「清单包含」标签。"
         />
       ) : (
-      <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
-            <tr>
-              <th className="px-3 py-2">时间</th>
-              <th className="px-3 py-2">付款方</th>
-              <th className="px-3 py-2">订单</th>
-              <th className="px-3 py-2">内容</th>
-              <th className="px-3 py-2">金额</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2">凭证</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {sortedRows.map((row) => {
-              const o = row.data;
-              const d = o.createdAt?.toDate?.();
-              const pad = (n: number) => String(n).padStart(2, '0');
-              const timeStr = d
-                ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-                : '—';
-              const hasShot = orderHasPaymentProof(o.paymentScreenshots);
-              return (
-                <tr key={row.id} className="bg-white">
-                  <td className="whitespace-nowrap px-3 py-2 text-gray-700">{timeStr}</td>
-                  <td className="px-3 py-2 text-gray-900">{o.customerName}</td>
-                  <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
-                    #{o.orderNumber}
-                  </td>
-                  <td className="max-w-[10rem] truncate px-3 py-2 text-gray-700">
-                    {orderLinesSummary(o.lines)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 tabular-nums font-medium">
-                    {formatMYR(o.totalAmount)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2">
-                    <StatusChip
-                      tone={toChipTone(o.status)}
-                      label={statusLabel(o.status)}
-                    />
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-xs">
-                    {hasShot ? (
-                      <span className="text-emerald-700">有</span>
-                    ) : (
-                      <span className="text-gray-400">无</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+        <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
+              <tr>
+                <th className="px-3 py-2">配送点</th>
+                <th className="px-3 py-2">时间</th>
+                <th className="px-3 py-2">付款方</th>
+                <th className="px-3 py-2">订单</th>
+                <th className="px-3 py-2">内容</th>
+                <th className="px-3 py-2">清单金额</th>
+                <th className="px-3 py-2">状态</th>
+                <th className="px-3 py-2">凭证</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {sectionsByDp.map(([dpLabel, items]) => (
+                <Fragment key={dpLabel}>
+                  <tr className="bg-gray-100/90">
+                    <td
+                      colSpan={8}
+                      className="px-3 py-1.5 text-xs font-semibold text-gray-800"
+                    >
+                      配送点：{dpLabel}
+                    </td>
+                  </tr>
+                  {items.map(({ row, groups, scopedAmt }) => {
+                    const o = row.data;
+                    const d = o.createdAt?.toDate?.();
+                    const pad = (n: number) => String(n).padStart(2, '0');
+                    const timeStr = d
+                      ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+                      : '—';
+                    const scopedLines = linesInSelectedBuckets(groups, bucketSelection);
+                    const contentStr = formatLinesCell(scopedLines, lineMode);
+                    const detailUrl = `${baseDash}/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`;
+                    const missingProof = orderNeedsMissingProofLabel(o);
+                    const flag = proofRiskDisplayTone(o);
+                    return (
+                      <tr
+                        key={row.id}
+                        role="link"
+                        tabIndex={0}
+                        className="cursor-pointer bg-white hover:bg-indigo-50/40"
+                        onClick={() => navigate(detailUrl)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            navigate(detailUrl);
+                          }
+                        }}
+                      >
+                        <td className="whitespace-nowrap px-3 py-2 text-gray-800">{dpLabel}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-gray-700">{timeStr}</td>
+                        <td className="px-3 py-2 text-gray-900">{o.customerName}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-indigo-700 underline-offset-2">
+                          #{o.orderNumber}
+                        </td>
+                        <td
+                          className={`max-w-[14rem] px-3 py-2 text-gray-700 ${lineMode === 'all' ? 'whitespace-normal' : 'truncate'}`}
+                          title={contentStr}
+                        >
+                          {contentStr}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 tabular-nums font-medium">
+                          {formatMYR(scopedAmt)}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <StatusChip
+                            tone={toChipTone(o.status)}
+                            label={statusLabel(o.status)}
+                          />
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs">
+                          {missingProof ? (
+                            <span className="font-medium text-amber-900">缺少凭证</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
+                                  flag === 'red'
+                                    ? 'bg-red-500'
+                                    : flag === 'yellow'
+                                      ? 'bg-amber-400'
+                                      : 'bg-emerald-500'
+                                }`}
+                                title={
+                                  flag === 'red'
+                                    ? '红旗'
+                                    : flag === 'yellow'
+                                      ? '黄旗'
+                                      : '绿旗'
+                                }
+                              />
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="mt-6 flex flex-wrap gap-2">

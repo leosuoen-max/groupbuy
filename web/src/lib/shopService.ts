@@ -1,15 +1,18 @@
 import {
   addDoc,
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocs,
   limit,
   query,
   serverTimestamp,
+  updateDoc,
   where,
 } from 'firebase/firestore';
-import { getDb } from './firebase';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getDb, getStorageClient } from './firebase';
 import type { ShopDoc } from '../types/firestore';
 
 export type ShopRow = { id: string; data: ShopDoc };
@@ -69,4 +72,60 @@ export async function createShop(
     isActive: true,
   });
   return ref.id;
+}
+
+export async function updateShop(
+  shopId: string,
+  patch: {
+    name?: string;
+    themeColor?: string;
+    bannerImage?: string | null;
+    logoImage?: string | null;
+    paymentMethods?: { id: string; name: string; qrCodeUrl: string }[];
+  }
+): Promise<void> {
+  const db = getDb();
+  const ref = doc(db, 'shops', shopId);
+  const payload: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (patch.name !== undefined) {
+    const v = patch.name.trim();
+    if (!v) throw new Error('店名不能为空');
+    payload.name = v;
+  }
+  if (patch.themeColor !== undefined) {
+    const v = patch.themeColor.trim();
+    if (!/^#[0-9A-Fa-f]{6}$/.test(v)) throw new Error('主题色格式错误');
+    payload.themeColor = v;
+  }
+  if (patch.bannerImage !== undefined) {
+    const v = patch.bannerImage?.trim();
+    payload.bannerImage = v ? v : deleteField();
+  }
+  if (patch.logoImage !== undefined) {
+    const v = patch.logoImage?.trim();
+    payload.logoImage = v ? v : deleteField();
+  }
+  if (patch.paymentMethods !== undefined) {
+    payload.paymentMethods = patch.paymentMethods;
+  }
+  await updateDoc(ref, payload);
+}
+
+export async function uploadShopImage(
+  ownerId: string,
+  kind: 'banner' | 'logo' | 'payment',
+  file: File
+): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('请上传图片文件');
+  const rawExt = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const safeExt = rawExt && /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
+  const name = `${globalThis.crypto.randomUUID()}.${safeExt}`;
+  const path = `shops/${ownerId}/${kind}/${name}`;
+  const storageRef = ref(getStorageClient(), path);
+  const contentType =
+    file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
+  await uploadBytes(storageRef, file, { contentType });
+  return getDownloadURL(storageRef);
 }

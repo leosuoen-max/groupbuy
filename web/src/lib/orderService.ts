@@ -18,18 +18,20 @@ import {
   canMerchantConfirmAppendBatchByScreenshots,
   canMerchantConfirmPendingAppendLump,
   orderHasPaymentScreenshots,
+  withDefaultScreenshotFlagIfUrl,
 } from './paymentScreenshotHelpers';
 import {
   computeImageFileMd5Hex,
   deleteFileByDownloadUrl,
   uploadOrderPaymentImage,
 } from './paymentImageUpload';
-import { listDeliveryPointsByShopId } from './deliveryPointService';
+import { listDeliveryPointsByOwnerId } from './deliveryPointService';
 import { getProject } from './projectService';
 import { getProjectPermissionForUser } from './permissionService';
 import { getShopById } from './shopService';
-import type { OrderLine } from '../types/orderDraft';
+import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type {
+  BundleToolDoc,
   OrderAppendBatchDoc,
   OrderDoc,
   OrderLineDoc,
@@ -38,6 +40,7 @@ import type {
 } from '../types/firestore';
 
 export type OrderRow = { id: string; data: OrderDoc };
+const TIMED_PROMO_PAYMENT_WINDOW_MINUTES = 30;
 
 type OrdersCacheEntry = {
   at: number;
@@ -64,6 +67,7 @@ export type CreateOrderInput = {
   deliverySnapshot?: { name: string; detail?: string };
   isManualMatch: boolean;
   lines: OrderLine[];
+  bundleSelections?: BundleSelectionDraft[];
 };
 
 type CreateOrderErrorCode =
@@ -99,12 +103,50 @@ function toOrderLines(lines: OrderLine[]): OrderLineDoc[] {
     quantity: l.quantity,
     unitPrice: l.unitPrice,
     isDiscount: l.isDiscount,
+    ...(l.discountEndsAt ? { discountEndsAt: l.discountEndsAt } : {}),
     subtotal: l.quantity * l.unitPrice,
   }));
 }
 
 function computeTotal(lines: OrderLineDoc[]): number {
   return lines.reduce((sum, l) => sum + l.subtotal, 0);
+}
+
+function hasTimedPromoLine(lines: OrderLineDoc[]): boolean {
+  return lines.some((l) => typeof l.discountEndsAt === 'string' && l.discountEndsAt.trim());
+}
+
+function isTimedPromoPaymentExpired(order: OrderDoc): boolean {
+  if (order.status !== 'unpaid') return false;
+  if ((Number(order.paidAmount) || 0) > 0) return false;
+  const due = order.timedPromoPaymentDueAt;
+  const dueMs = due?.toMillis?.();
+  if (!dueMs) return false;
+  return Date.now() > dueMs;
+}
+
+async function autoCancelExpiredTimedPromoOrder(
+  orderRef: ReturnType<typeof doc>,
+  order: OrderDoc
+): Promise<OrderDoc> {
+  if (!isTimedPromoPaymentExpired(order)) return order;
+  const hist = [...(order.statusHistory ?? [])];
+  hist.push({
+    action: 'auto_cancel_unpaid_timed_promo_expired',
+    timestamp: Timestamp.now(),
+    note: `限时优惠订单超过${TIMED_PROMO_PAYMENT_WINDOW_MINUTES}分钟未付款`,
+  });
+  await updateDoc(orderRef, {
+    status: 'cancelled' as const,
+    statusHistory: hist,
+    updatedAt: serverTimestamp(),
+  });
+  return {
+    ...order,
+    status: 'cancelled',
+    statusHistory: hist,
+    updatedAt: Timestamp.now(),
+  };
 }
 
 function ensureProjectCanOrder(project: ProjectDoc): void {
@@ -139,7 +181,58 @@ function applyStockDeduction(project: ProjectDoc, lines: OrderLine[]): ProjectDo
   return nextProducts;
 }
 
-export async function createOrder(input: CreateOrderInput): Promise<{ orderId: string; orderNumber: string }> {
+function applyBundleStockDeduction(
+  project: ProjectDoc,
+  selections: BundleSelectionDraft[] | undefined
+): BundleToolDoc[] {
+  const tools = (project.bundleTools ?? []).map((t) => ({
+    ...t,
+    series: t.series.map((s) => ({
+      ...s,
+      options: s.options.map((o) => ({ ...o })),
+    })),
+    schemes: t.schemes.map((x) => ({ ...x })),
+  }));
+  if (!selections?.length) return tools;
+
+  for (const sel of selections) {
+    const qty = Math.max(1, Math.floor(sel.quantity || 1));
+    const tool = tools.find((t) => t.id === sel.bundleToolId);
+    if (!tool || !tool.isActive) throw new Error('套餐工具不可用，请刷新后重试');
+    const scheme = tool.schemes.find((s) => s.id === sel.schemeId && s.isActive);
+    if (!scheme) throw new Error('套餐方案不可用，请刷新后重试');
+
+    for (const series of tool.series) {
+      const required = Number(scheme.requirements?.[series.id] ?? 0);
+      const picked = sel.selectedOptionIdsBySeries?.[series.id] ?? [];
+      if (picked.length !== required) {
+        throw new Error(`套餐选择不完整（${series.name} 需选 ${required} 项）`);
+      }
+      const uniq = new Set(picked);
+      if (uniq.size !== picked.length) {
+        throw new Error(`同系列不可重复选择（${series.name}）`);
+      }
+      for (const optId of picked) {
+        const opt = series.options.find((x) => x.id === optId);
+        if (!opt || !opt.isActive) throw new Error(`套餐选项不可用（${series.name}）`);
+        if ((opt.stock ?? 0) < qty) {
+          throw new Error(`库存不足：${series.name} - ${opt.name}`);
+        }
+      }
+    }
+
+    for (const series of tool.series) {
+      const picked = sel.selectedOptionIdsBySeries?.[series.id] ?? [];
+      for (const optId of picked) {
+        const opt = series.options.find((x) => x.id === optId)!;
+        opt.stock -= qty;
+      }
+    }
+  }
+  return tools;
+}
+
+export async function createOrder(input: CreateOrderInput): Promise<{ orderId: string; orderNumber: string; timedPromoPaymentDueAt?: string }> {
   const db = getDb();
   const orderRef = doc(collection(db, 'orders'));
   const projectRef = doc(db, 'projects', input.projectId);
@@ -152,8 +245,15 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
     ensureProjectCanOrder(project);
 
     const lines = toOrderLines(input.lines);
-    const nextProducts = applyStockDeduction(project, input.lines);
+    const normalLines = input.lines.filter((l) => !l.productId.startsWith('bundle:'));
+    const nextProducts = applyStockDeduction(project, normalLines);
+    const nextBundleTools = applyBundleStockDeduction(project, input.bundleSelections);
     const totalAmount = computeTotal(lines);
+    const timedPromoDueAt = hasTimedPromoLine(lines)
+      ? Timestamp.fromMillis(
+          Date.now() + TIMED_PROMO_PAYMENT_WINDOW_MINUTES * 60 * 1000
+        )
+      : null;
 
     const prevStats = project.stats ?? {
       totalOrders: 0,
@@ -189,6 +289,10 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       totalAmount,
       paidAmount: 0,
       pendingAmount: totalAmount,
+      timedPromoPaymentDueAt: timedPromoDueAt,
+      timedPromoWindowMinutes: timedPromoDueAt
+        ? TIMED_PROMO_PAYMENT_WINDOW_MINUTES
+        : null,
       deliveryPointSnapshot: {
         name: snapshotName,
         ...(snapshotDetail ? { detail: snapshotDetail } : {}),
@@ -214,6 +318,7 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
 
     tx.update(projectRef, {
       products: nextProducts,
+      bundleTools: nextBundleTools,
       stats: {
         ...prevStats,
         totalOrders: nextTotalOrders,
@@ -223,7 +328,13 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       updatedAt: serverTimestamp(),
     });
 
-    return { orderId: orderRef.id, orderNumber };
+    return {
+      orderId: orderRef.id,
+      orderNumber,
+      ...(timedPromoDueAt
+        ? { timedPromoPaymentDueAt: timedPromoDueAt.toDate().toISOString() }
+        : {}),
+    };
   });
 }
 
@@ -251,6 +362,10 @@ export async function listOrdersByCustomer(projectId: string, customerKey: strin
         const tb = b.data.createdAt?.toMillis?.() ?? 0;
         return tb - ta;
       });
+    for (const row of rows) {
+      const orderRef = doc(db, 'orders', row.id);
+      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+    }
     customerOrdersCache.set(ck, { at: Date.now(), rows });
     return rows;
   })();
@@ -343,7 +458,8 @@ export async function customerUploadPaymentScreenshot(input: {
   const orderRef = doc(db, 'orders', input.orderFirestoreId);
   const snap = await getDoc(orderRef);
   if (!snap.exists()) throw new Error('订单不存在');
-  const order = snap.data() as OrderDoc;
+  let order = snap.data() as OrderDoc;
+  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
 
   if (
     order.projectId !== input.projectId ||
@@ -403,7 +519,7 @@ export async function customerUploadPaymentScreenshot(input: {
   const prev = Array.isArray(order.paymentScreenshots)
     ? [...order.paymentScreenshots]
     : [];
-  prev.push(entry);
+  prev.push(withDefaultScreenshotFlagIfUrl(entry));
 
   const hist = [...(order.statusHistory ?? [])];
   hist.push({
@@ -440,7 +556,8 @@ export async function customerDeletePaymentScreenshot(input: {
   const orderRef = doc(db, 'orders', input.orderFirestoreId);
   const snap = await getDoc(orderRef);
   if (!snap.exists()) throw new Error('订单不存在');
-  const order = snap.data() as OrderDoc;
+  let order = snap.data() as OrderDoc;
+  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
 
   if (
     order.projectId !== input.projectId ||
@@ -550,7 +667,10 @@ export async function getOrderByNumber(projectId: string, orderNumber: string): 
   const snap = await getDocs(q);
   if (snap.empty) return null;
   const d = snap.docs[0];
-  return { id: d.id, data: d.data() as OrderDoc };
+  const orderRef = doc(db, 'orders', d.id);
+  let data = d.data() as OrderDoc;
+  data = await autoCancelExpiredTimedPromoOrder(orderRef, data);
+  return { id: d.id, data };
 }
 
 /** 顾客修改联系信息（项目未截单、订单未取消） */
@@ -616,7 +736,11 @@ export async function customerUpdateOrderContact(input: {
       const dpId = deliveryPointId?.trim();
       if (!dpId) throw new Error('请选择配送点');
 
-      const rows = await listDeliveryPointsByShopId(order.shopId);
+      const shopRow = await getShopById(order.shopId);
+      if (!shopRow) throw new Error('店铺不存在');
+      const rows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+        fallbackShopId: order.shopId,
+      });
       const okRow = rows.find((r) => r.id === dpId);
       if (!okRow) throw new Error('配送点不存在或已停用');
 
@@ -833,6 +957,10 @@ export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
         const tb = b.data.createdAt?.toMillis?.() ?? 0;
         return tb - ta;
       });
+    for (const row of rows) {
+      const orderRef = doc(db, 'orders', row.id);
+      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+    }
     shopOrdersCache.set(shopId, { at: Date.now(), rows });
     return rows;
   })();

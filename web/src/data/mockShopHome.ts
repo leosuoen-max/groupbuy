@@ -6,6 +6,7 @@ export type MockProduct = {
   id: string;
   name: string;
   note?: string;
+  sortOrder?: number;
   price: number;
   discountPrice?: number;
   discountStart?: string;
@@ -18,6 +19,43 @@ export type MockProduct = {
 export type MockImageBlock = {
   url: string;
   caption?: string;
+};
+
+export type MockBundleSeriesOption = {
+  id: string;
+  name: string;
+  note?: string;
+  imageUrl?: string;
+  stock: number;
+  isActive: boolean;
+};
+
+export type MockBundleSeries = {
+  id: string;
+  code: string;
+  name: string;
+  options: MockBundleSeriesOption[];
+};
+
+export type MockBundleScheme = {
+  id: string;
+  name: string;
+  price: number;
+  discountPrice?: number;
+  discountStart?: string;
+  discountEnd?: string;
+  requirements: Record<string, number>;
+  isActive: boolean;
+};
+
+export type MockBundleTool = {
+  id: string;
+  name: string;
+  description?: string;
+  isActive: boolean;
+  sortOrder?: number;
+  series: MockBundleSeries[];
+  schemes: MockBundleScheme[];
 };
 
 export type MockShopHome = {
@@ -33,6 +71,7 @@ export type MockShopHome = {
   textContent?: string;
   imageBlocks: MockImageBlock[];
   products: MockProduct[];
+  bundleTools?: MockBundleTool[];
 };
 
 export function getMockShopHome(

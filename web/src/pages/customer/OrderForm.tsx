@@ -6,7 +6,7 @@ import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { listDeliveryPointsByShopId } from '../../lib/deliveryPointService';
+import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
 import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
@@ -51,6 +51,7 @@ export default function OrderForm() {
   const navigate = useNavigate();
   const incoming = (location.state ?? {}) as CartLocationState;
   const lines = (incoming.lines ?? []).filter(Boolean);
+  const bundleSelections = (incoming.bundleSelections ?? []).filter(Boolean);
   const projectTitleState = incoming.projectTitle ?? '当前项目';
   const returnCartDraft = useMemo(() => {
     if (incoming.cartDraft && Object.keys(incoming.cartDraft).length > 0) {
@@ -122,7 +123,9 @@ export default function OrderForm() {
           }
 
           const allPoints = await withTimeout(
-            listDeliveryPointsByShopId(shopRow.id),
+            listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+              fallbackShopId: shopRow.id,
+            }),
             LOAD_TIMEOUT_MS,
             '配送点加载'
           );
@@ -134,9 +137,8 @@ export default function OrderForm() {
 
           const uiPoints: MockDeliveryPoint[] = filtered.map((p) => ({
             id: p.id,
-            name: p.data.name,
+            name: p.data.shortName ?? p.data.name,
             detailAddress: p.data.detailAddress,
-            deliveryTime: p.data.deliveryTime,
             imageUrl: p.data.imageUrl,
           }));
 
@@ -276,7 +278,7 @@ export default function OrderForm() {
     const customerKey = getOrCreateCustomerKey();
     try {
       setSubmitting(true);
-      const { orderNumber } = await createOrder({
+      const { orderNumber, timedPromoPaymentDueAt } = await createOrder({
         shopSlug,
         projectId,
         customerKey,
@@ -294,9 +296,21 @@ export default function OrderForm() {
             : { name: deliverySnapshot.name, detail: deliverySnapshot.detail },
         isManualMatch,
         lines,
+        bundleSelections,
       });
-      setSubmitHint('提交成功，正在跳转订单详情…');
-      await new Promise((resolve) => window.setTimeout(resolve, 280));
+      if (timedPromoPaymentDueAt) {
+        const dueText = new Date(timedPromoPaymentDueAt).toLocaleString('zh-CN', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        });
+        setSubmitHint(`订单已提交：含限时优惠，请在30分钟内付款（截止 ${dueText}）`);
+      } else {
+        setSubmitHint('提交成功，正在跳转订单详情…');
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, timedPromoPaymentDueAt ? 1200 : 280));
       navigate(`${base}/orders/${encodeURIComponent(orderNumber)}`, {
         replace: true,
       });
@@ -319,7 +333,7 @@ export default function OrderForm() {
     }
   };
 
-  if (lines.length === 0) {
+  if (lines.length === 0 && bundleSelections.length === 0) {
     return (
       <PageShell title="填写订单" subtitle="尚未选择菜品">
         <div className="space-y-3 text-sm text-gray-600">

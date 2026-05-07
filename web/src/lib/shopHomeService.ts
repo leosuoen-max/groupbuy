@@ -1,7 +1,13 @@
 import type { Timestamp } from 'firebase/firestore';
 import { getProject } from './projectService';
 import { getShopBySlug } from './shopService';
-import type { MockImageBlock, MockProduct, MockShopHome, ProjectStatus } from '../data/mockShopHome';
+import type {
+  MockBundleTool,
+  MockImageBlock,
+  MockProduct,
+  MockShopHome,
+  ProjectStatus,
+} from '../data/mockShopHome';
 import type { ProjectDoc, ProjectProduct } from '../types/firestore';
 
 export type ShopHomeLoadError =
@@ -32,6 +38,7 @@ function mapProduct(p: ProjectProduct): MockProduct {
     id: p.id,
     name: p.name,
     note: p.description,
+    sortOrder: p.sortOrder ?? 0,
     price: p.price,
     discountPrice: p.discountPrice,
     discountStart: tsToIso(p.discountStart ?? undefined),
@@ -47,6 +54,46 @@ function mapImageBlocks(
 ): MockImageBlock[] {
   if (!blocks?.length) return [];
   return blocks.map((b) => ({ url: b.url, caption: b.caption }));
+}
+
+function mapBundleTools(tools: ProjectDoc['bundleTools'] | undefined): MockBundleTool[] {
+  if (!tools?.length) return [];
+  return tools.map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    isActive: t.isActive,
+    sortOrder: t.sortOrder ?? 0,
+    series: t.series
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((s) => ({
+        id: s.id,
+        code: s.code,
+        name: s.name,
+        options: s.options
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((o) => ({
+            id: o.id,
+            name: o.name,
+            note: o.note,
+            imageUrl: o.imageUrl,
+            stock: o.stock,
+            isActive: o.isActive,
+          })),
+      })),
+    schemes: t.schemes
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((x) => ({
+        id: x.id,
+        name: x.name,
+        price: x.price,
+        discountPrice: x.discountPrice,
+        discountStart: tsToIso(x.discountStart ?? undefined),
+        discountEnd: tsToIso(x.discountEnd ?? undefined),
+        requirements: x.requirements,
+        isActive: x.isActive,
+      })),
+  }));
 }
 
 function resolveUiStatus(
@@ -119,6 +166,7 @@ export async function loadShopHomeFromFirestore(
     textContent: proj.textContent?.trim() || undefined,
     imageBlocks: mapImageBlocks(proj.imageBlocks),
     products,
+    bundleTools: mapBundleTools(proj.bundleTools),
   };
 
   return { ok: true, data };

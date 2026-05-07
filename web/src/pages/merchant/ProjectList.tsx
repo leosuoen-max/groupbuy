@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Timestamp } from 'firebase/firestore';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
-import { createDraftProject, listProjectsByShopId, type ProjectRow } from '../../lib/projectService';
+import {
+  canDeleteProject,
+  createDraftProject,
+  deleteProjectIfAllowed,
+  listProjectsByShopId,
+  updateProjectDoc,
+  type ProjectRow,
+} from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
 
 function statusLabel(s: ProjectRow['data']['status']) {
@@ -21,6 +29,7 @@ export default function ProjectList() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const slug = decodeURIComponent(shopSlug);
 
@@ -75,6 +84,76 @@ export default function ProjectList() {
       setErr(e instanceof Error ? e.message : '创建失败');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const togglePublish = async (p: ProjectRow) => {
+    if (!p?.id) return;
+    if (busyId) return;
+    const title = p.data.title?.trim() || '未命名项目';
+    const cur = p.data.status;
+
+    // ON：published；OFF：closed（“撤回”以“已截止”提示页呈现）
+    const nextOn = cur !== 'published';
+
+    if (nextOn) {
+      const ok = window.confirm(
+        cur === 'draft'
+          ? `确定发布该草稿项目吗？\n\n${title}\n\n发布后顾客可打开链接下单。`
+          : `确定重新发布该项目吗？\n\n${title}\n\n重新发布后顾客可再次下单。`
+      );
+      if (!ok) return;
+    } else {
+      const ok = window.confirm(
+        `确定撤回该项目吗？\n\n${title}\n\n撤回后顾客打开链接将看到“已截止”，无法下单。`
+      );
+      if (!ok) return;
+    }
+
+    setBusyId(p.id);
+    setErr(null);
+    try {
+      if (nextOn) {
+        await updateProjectDoc(p.id, {
+          status: 'published',
+          publishedAt: p.data.publishedAt ?? Timestamp.now(),
+        });
+      } else {
+        await updateProjectDoc(p.id, { status: 'closed' });
+      }
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const switchLabel = useMemo(() => {
+    return '发布';
+  }, []);
+
+  const handleDeleteProject = async (p: ProjectRow) => {
+    if (busyId) return;
+    const title = p.data.title?.trim() || '未命名项目';
+    setBusyId(p.id);
+    setErr(null);
+    try {
+      const check = await canDeleteProject(p.id);
+      if (!check.allowed) {
+        setErr(check.reason ?? '当前项目不可删除');
+        return;
+      }
+      const ok = window.confirm(
+        `确定删除项目：${title}？\n\n删除后不可恢复。`
+      );
+      if (!ok) return;
+      await deleteProjectIfAllowed(p.id);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '删除失败');
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -135,17 +214,46 @@ export default function ProjectList() {
         <ul className="space-y-2">
           {projects.map((p) => (
             <li key={p.id}>
-              <Link
-                to={`${base}/projects/${encodeURIComponent(p.id)}`}
-                className="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm"
-              >
-                <span className="min-w-0 truncate font-medium text-gray-900">
-                  {p.data.title || '未命名'}
-                </span>
-                <span className="ml-2 shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
-                  {statusLabel(p.data.status)}
-                </span>
-              </Link>
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm">
+                <Link
+                  to={`${base}/projects/${encodeURIComponent(p.id)}`}
+                  className="min-w-0 flex-1"
+                >
+                  <span className="block min-w-0 truncate font-medium text-gray-900">
+                    {p.data.title || '未命名'}
+                  </span>
+                </Link>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
+                    disabled={busyId === p.id}
+                    onClick={() => void handleDeleteProject(p)}
+                  >
+                    删除
+                  </button>
+                  <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                    {statusLabel(p.data.status)}
+                  </span>
+                  <label
+                    className={`relative inline-flex items-center ${
+                      busyId === p.id ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                    }`}
+                    title="发布/撤回"
+                    aria-label={switchLabel}
+                  >
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      disabled={busyId === p.id}
+                      checked={p.data.status === 'published'}
+                      onChange={() => void togglePublish(p)}
+                    />
+                    <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
+                    <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
+                  </label>
+                </div>
+              </div>
             </li>
           ))}
         </ul>

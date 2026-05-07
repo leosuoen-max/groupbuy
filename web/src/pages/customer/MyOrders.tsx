@@ -186,9 +186,28 @@ export default function MyOrders() {
                       {(Number(o.paidAmount) > 0 ||
                         Number(o.pendingAmount) > 0) &&
                       o.status !== 'cancelled' ? (
-                        <p className="mt-0.5 text-[11px] text-gray-600">
-                          已付 {formatMYR(Number(o.paidAmount) || 0)} · 待付{' '}
-                          {formatMYR(Number(o.pendingAmount) || 0)}
+                        o.status === 'pending' ? (
+                          <p className="mt-0.5 text-[11px] text-gray-600">
+                            已支付 {formatMYR(Number(o.pendingAmount) || 0)}，待确认 · 待支付 RM 0
+                          </p>
+                        ) : (
+                          <p className="mt-0.5 text-[11px] text-gray-600">
+                            已付 {formatMYR(Number(o.paidAmount) || 0)} · 待付{' '}
+                            {formatMYR(Number(o.pendingAmount) || 0)}
+                          </p>
+                        )
+                      ) : null}
+                      {o.status === 'unpaid' && o.timedPromoPaymentDueAt ? (
+                        <p className="mt-0.5 text-[11px] text-amber-700">
+                          含限时优惠，请在30分钟内付款（截止{' '}
+                          {o.timedPromoPaymentDueAt.toDate().toLocaleString('zh-CN', {
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false,
+                          })}
+                          ）
                         </p>
                       ) : null}
                     </div>

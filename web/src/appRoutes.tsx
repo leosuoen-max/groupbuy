@@ -19,6 +19,10 @@ import ReconciliationStatement from './pages/merchant/ReconciliationStatement';
 import DeliveryPoints from './pages/merchant/DeliveryPoints';
 import AdminManagement from './pages/merchant/AdminManagement';
 import ShopSettings from './pages/merchant/ShopSettings';
+import CardTemplates from './pages/merchant/CardTemplates';
+import CardTemplateDetail from './pages/merchant/CardTemplateDetail';
+import CustomerCards from './pages/customer/CustomerCards';
+import CustomerCardBuy from './pages/customer/CustomerCardBuy';
 
 export function AppRoutes() {
   return (
@@ -66,6 +70,14 @@ export function AppRoutes() {
         path="/dashboard/:shopSlug/settings"
         element={<ShopSettings />}
       />
+      <Route
+        path="/dashboard/:shopSlug/cards"
+        element={<CardTemplates />}
+      />
+      <Route
+        path="/dashboard/:shopSlug/cards/:templateId"
+        element={<CardTemplateDetail />}
+      />
 
       <Route
         path="/shop/:shopSlug/:projectId/order"
@@ -83,6 +95,16 @@ export function AppRoutes() {
         path="/shop/:shopSlug/:projectId/orders/:orderId"
         element={<OrderDetail />}
       />
+      <Route path="/shop/:shopSlug/cards" element={<CustomerCards />} />
+      <Route
+        path="/shop/:shopSlug/cards/buy/:templateId"
+        element={<CustomerCardBuy mode="purchase" />}
+      />
+      <Route
+        path="/shop/:shopSlug/cards/topup/:cardId"
+        element={<CustomerCardBuy mode="topup" />}
+      />
+
       <Route path="/shop/:shopSlug/:projectId" element={<ShopHome />} />
 
       <Route path="*" element={<NotFound />} />

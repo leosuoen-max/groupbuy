@@ -4,7 +4,7 @@ import { PageShell } from '../../components/PageShell';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
-import { listDeliveryPointsByShopId } from '../../lib/deliveryPointService';
+import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import {
   addressFieldPrefillForContactEdit,
   resolveCustomerAddressForChoice,
@@ -19,6 +19,7 @@ import {
 } from '../../lib/orderService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getProject } from '../../lib/projectService';
+import { getShopBySlug } from '../../lib/shopService';
 import {
   hasPaymentScreenshotForAppendBatch,
   orderHasPaymentScreenshots,
@@ -26,7 +27,12 @@ import {
   type ParsedScreenshotEntry,
 } from '../../lib/paymentScreenshotHelpers';
 import type { MockDeliveryPoint } from '../../types/orderDraft';
-import type { OrderAppendBatchDoc, OrderDoc, ProjectDoc } from '../../types/firestore';
+import type {
+  OrderAppendBatchDoc,
+  OrderDoc,
+  OrderLineDoc,
+  ProjectDoc,
+} from '../../types/firestore';
 
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
@@ -57,6 +63,21 @@ function batchTimeStr(b: OrderAppendBatchDoc): string {
   const d = b.appendedAt?.toDate?.();
   if (!d) return '';
   return d.toLocaleString();
+}
+
+function linePromoTag(line: OrderLineDoc) {
+  if (!line.isDiscount) return null;
+  const isEarlyBird =
+    typeof line.discountEndsAt === 'string' && line.discountEndsAt.trim().length > 0;
+  return (
+    <span
+      className={`ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+        isEarlyBird ? 'bg-amber-100 text-amber-900' : 'bg-rose-100 text-rose-900'
+      }`}
+    >
+      {isEarlyBird ? '早鸟价' : '特惠价'}
+    </span>
+  );
 }
 
 function canCustomerDeleteScreenshot(
@@ -213,15 +234,18 @@ export default function OrderDetail() {
       setDeliveryPointsErr(null);
       try {
         const projectRow = await getProject(projectId);
-        const rows = await listDeliveryPointsByShopId(order.shopId);
+        const shopRow = await getShopBySlug(order.shopSlug);
+        if (!shopRow) throw new Error('店铺不存在');
+        const rows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+          fallbackShopId: shopRow.id,
+        });
         const allowed = new Set(projectRow?.data.deliveryPointIds ?? []);
         const filtered =
           allowed.size > 0 ? rows.filter((r) => allowed.has(r.id)) : rows;
         const ui: MockDeliveryPoint[] = filtered.map((p) => ({
           id: p.id,
-          name: p.data.name,
+          name: p.data.shortName ?? p.data.name,
           detailAddress: p.data.detailAddress,
-          deliveryTime: p.data.deliveryTime,
           imageUrl: p.data.imageUrl,
         }));
         if (!cancelled) setDeliveryPoints(ui);
@@ -515,7 +539,7 @@ export default function OrderDetail() {
       : order.status === 'pending'
         ? '可继续追加截图。上传同一浏览器。'
         : order.status === 'unpaid' && !hasShots
-          ? '请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与订单金额一致即可；上传至少一张截图供商户核对。'
+          ? '请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与订单金额一致即可；上传至少一张截图供商户核对。没有付款凭证，不配送。'
           : order.status === 'unpaid' && hasShots
             ? '尚未核实前仍可追加或更换截图（先删后传）。分笔付款时总额需与应付一致。'
             : '上传后订单进入「待确认」。请使用本机下单时的同一浏览器。';
@@ -605,6 +629,19 @@ export default function OrderDetail() {
               <strong>{formatMYR(pending)}</strong>
             </p>
           ) : null}
+          {order.status === 'unpaid' && order.timedPromoPaymentDueAt ? (
+            <p className="mt-1 text-xs text-amber-700">
+              含限时优惠，请在30分钟内付款（截止{' '}
+              {order.timedPromoPaymentDueAt.toDate().toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              })}
+              ）
+            </p>
+          ) : null}
         </div>
 
         {canAddItems ? (
@@ -631,9 +668,10 @@ export default function OrderDetail() {
                     key={`init-${l.productId}-${idx}`}
                     className="flex justify-between gap-2 px-3 py-2"
                   >
-                    <span>
-                      {l.name} ×{l.quantity}
-                    </span>
+                      <span>
+                        {l.name}
+                        {linePromoTag(l)} ×{l.quantity}
+                      </span>
                     <span className="tabular-nums font-medium">
                       {formatMYR(l.subtotal)}
                     </span>
@@ -666,7 +704,8 @@ export default function OrderDetail() {
                       className="flex justify-between gap-2 px-3 py-2 text-sm"
                     >
                       <span>
-                        {l.name} ×{l.quantity}
+                        {l.name}
+                        {linePromoTag(l)} ×{l.quantity}
                       </span>
                       <span className="tabular-nums font-medium">
                         {formatMYR(l.subtotal)}
@@ -725,7 +764,8 @@ export default function OrderDetail() {
                         className="flex justify-between gap-2 px-3 py-2 text-sm"
                       >
                         <span>
-                          {l.name} ×{l.quantity}
+                          {l.name}
+                          {linePromoTag(l)} ×{l.quantity}
                         </span>
                         <span className="tabular-nums font-medium">
                           {formatMYR(l.subtotal)}
@@ -761,7 +801,8 @@ export default function OrderDetail() {
                   className="flex justify-between gap-2 px-3 py-2"
                 >
                   <span>
-                    {l.name} ×{l.quantity}
+                    {l.name}
+                    {linePromoTag(l)} ×{l.quantity}
                   </span>
                   <span className="tabular-nums font-medium">
                     {formatMYR(l.unitPrice * l.quantity)}

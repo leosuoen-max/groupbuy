@@ -212,6 +212,12 @@ export default function MerchantDashboard() {
           管理员
         </Link>
         <Link
+          to={`${base}/cards`}
+          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+        >
+          优惠卡
+        </Link>
+        <Link
           to="/dashboard"
           className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-dashed border-gray-300 px-2 text-center text-sm font-medium text-gray-700"
         >

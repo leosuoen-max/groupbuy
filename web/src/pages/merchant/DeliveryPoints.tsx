@@ -4,7 +4,10 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import {
   createDeliveryPoint,
-  listDeliveryPointsByShopId,
+  deleteDeliveryPoint,
+  listDeliveryPointsByOwnerId,
+  normalizeDeliveryPointCode,
+  uploadDeliveryPointImage,
   updateDeliveryPoint,
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
@@ -17,22 +20,27 @@ export default function DeliveryPoints() {
 
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [shopId, setShopId] = useState<string | null>(null);
+  const [ownerId, setOwnerId] = useState<string | null>(null);
   const [rows, setRows] = useState<DeliveryPointRow[]>([]);
   const [loadingList, setLoadingList] = useState(true);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [shortName, setShortName] = useState('');
   const [detailAddress, setDetailAddress] = useState('');
-  const [deliveryTime, setDeliveryTime] = useState('');
+  const [mapsUrl, setMapsUrl] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  const loadList = useCallback(async (sid: string) => {
+  const loadList = useCallback(async (oid: string, sid?: string | null) => {
     setLoadingList(true);
     try {
-      const list = await listDeliveryPointsByShopId(sid, {
+      const list = await listDeliveryPointsByOwnerId(oid, {
         includeInactive: true,
+        fallbackShopId: sid ?? undefined,
       });
       setRows(list);
     } finally {
@@ -47,6 +55,7 @@ export default function DeliveryPoints() {
       setBootErr(null);
       if (!user) {
         setShopId(null);
+        setOwnerId(null);
         return;
       }
       try {
@@ -55,19 +64,23 @@ export default function DeliveryPoints() {
         if (!shop) {
           setBootErr('店铺不存在');
           setShopId(null);
+          setOwnerId(null);
           return;
         }
         if (shop.data.ownerId !== user.uid) {
           setBootErr('无权限');
           setShopId(null);
+          setOwnerId(null);
           return;
         }
         setShopId(shop.id);
-        await loadList(shop.id);
+        setOwnerId(shop.data.ownerId);
+        await loadList(shop.data.ownerId, shop.id);
       } catch (e) {
         if (!cancelled) {
           setBootErr(e instanceof Error ? e.message : '加载失败');
           setShopId(null);
+          setOwnerId(null);
         }
       }
     })();
@@ -76,52 +89,65 @@ export default function DeliveryPoints() {
     };
   }, [authLoading, user, slug, loadList]);
 
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreviewUrl);
+      }
+    };
+  }, [imagePreviewUrl]);
+
   const resetForm = () => {
     setEditingId(null);
-    setName('');
+    setCode('');
+    setShortName('');
     setDetailAddress('');
-    setDeliveryTime('');
+    setMapsUrl('');
     setImageUrl('');
+    setImagePreviewUrl('');
   };
 
   const startEdit = (row: DeliveryPointRow) => {
     setEditingId(row.id);
-    setName(row.data.name);
+    setCode(row.data.code ?? '');
+    setShortName(row.data.shortName ?? row.data.name ?? '');
     setDetailAddress(row.data.detailAddress ?? '');
-    setDeliveryTime(row.data.deliveryTime ?? '');
+    setMapsUrl(row.data.mapsUrl ?? '');
     setImageUrl(row.data.imageUrl ?? '');
+    setImagePreviewUrl(row.data.imageUrl ?? '');
     setMsg(null);
   };
 
   const handleSubmit = async () => {
-    if (!shopId) return;
-    const n = name.trim();
-    if (!n) {
-      setMsg('请填写配送点名称');
-      return;
-    }
+    if (!ownerId) return;
     setSaving(true);
     setMsg(null);
     try {
+      const normalizedCode = normalizeDeliveryPointCode(code);
+      const sn = shortName.trim();
+      if (!sn) throw new Error('请填写配送点简称');
       if (editingId) {
         await updateDeliveryPoint(editingId, {
-          name: n,
+          ownerId,
+          code: normalizedCode,
+          shortName: sn,
           detailAddress,
-          deliveryTime,
+          mapsUrl,
           imageUrl,
-        });
+        }, { fallbackShopId: shopId ?? undefined });
         setMsg('已保存修改');
       } else {
-        await createDeliveryPoint(shopId, {
-          name: n,
+        await createDeliveryPoint(ownerId, {
+          code: normalizedCode,
+          shortName: sn,
           detailAddress: detailAddress.trim() || undefined,
-          deliveryTime: deliveryTime.trim() || undefined,
+          mapsUrl: mapsUrl.trim() || undefined,
           imageUrl: imageUrl.trim() || undefined,
-        });
+        }, { fallbackShopId: shopId ?? undefined });
         setMsg('已新增配送点');
         resetForm();
       }
-      await loadList(shopId);
+      await loadList(ownerId, shopId);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -130,14 +156,48 @@ export default function DeliveryPoints() {
   };
 
   const toggleActive = async (row: DeliveryPointRow) => {
-    if (!shopId) return;
+    if (!ownerId) return;
     const currentlyOn = row.data.isActive !== false;
     setMsg(null);
     try {
       await updateDeliveryPoint(row.id, { isActive: !currentlyOn });
-      await loadList(shopId);
+      await loadList(ownerId, shopId);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '操作失败');
+    }
+  };
+
+  const handleDelete = async (row: DeliveryPointRow) => {
+    if (!ownerId) return;
+    const label = `[${row.data.code ?? '—'}] ${row.data.shortName ?? row.data.name}`;
+    const ok = window.confirm(`确定删除配送点：${label}？\n\n删除后所有店铺将不可再选用该配送点。`);
+    if (!ok) return;
+    setMsg(null);
+    try {
+      if (editingId === row.id) resetForm();
+      await deleteDeliveryPoint(row.id);
+      await loadList(ownerId, shopId);
+      setMsg('已删除配送点');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '删除失败');
+    }
+  };
+
+  const handleUploadImage = async (file: File | null) => {
+    if (!ownerId || !file) return;
+    const localPreview = URL.createObjectURL(file);
+    setImagePreviewUrl(localPreview);
+    setUploadingImage(true);
+    setMsg(null);
+    try {
+      const url = await uploadDeliveryPointImage(ownerId, file);
+      setImageUrl(url);
+      setImagePreviewUrl(url);
+      setMsg('图片上传成功，保存后生效');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '图片上传失败');
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -181,7 +241,7 @@ export default function DeliveryPoints() {
   return (
     <PageShell
       title="配送点库"
-      subtitle="保存在店铺层级，编辑项目时勾选本次启用（见 docs/04）。"
+      subtitle="账号级共享库：同账号下多店可共用，项目里按需勾选。"
     >
       {msg ? (
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -194,12 +254,21 @@ export default function DeliveryPoints() {
           {editingId ? '编辑配送点' : '新增配送点'}
         </div>
         <label className="block text-sm text-gray-800">
-          简短名称 <span className="text-red-600">*</span>
+          编号（1-2 位字母 + 1-2 位数字） <span className="text-red-600">*</span>
           <input
             className={input}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="如：A 座大堂"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder="如：A1 / AB12"
+          />
+        </label>
+        <label className="block text-sm text-gray-800">
+          简称 <span className="text-red-600">*</span>
+          <input
+            className={input}
+            value={shortName}
+            onChange={(e) => setShortName(e.target.value)}
+            placeholder="如：A座大堂"
           />
         </label>
         <label className="block text-sm text-gray-800">
@@ -211,22 +280,58 @@ export default function DeliveryPoints() {
           />
         </label>
         <label className="block text-sm text-gray-800">
-          配送时间（选填）
+          谷歌地图链接（选填）
           <input
             className={input}
-            value={deliveryTime}
-            onChange={(e) => setDeliveryTime(e.target.value)}
-            placeholder="如：18:30 - 19:00"
+            value={mapsUrl}
+            onChange={(e) => setMapsUrl(e.target.value)}
+            placeholder="https://maps.google.com/..."
           />
         </label>
         <label className="block text-sm text-gray-800">
-          地点图片 URL（选填）
-          <input
-            className={input}
-            value={imageUrl}
-            onChange={(e) => setImageUrl(e.target.value)}
-            placeholder="https://"
-          />
+          上传地点图片（选填）
+          <div className="mt-2 flex items-start gap-3">
+            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white">
+              {imagePreviewUrl || imageUrl ? (
+                <img
+                  src={imagePreviewUrl || imageUrl}
+                  alt="地点缩略图"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-[11px] text-gray-400">
+                  暂无图片
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <input
+                type="file"
+                accept="image/*"
+                className="block w-full text-sm text-gray-700"
+                disabled={uploadingImage}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  void handleUploadImage(f);
+                  e.currentTarget.value = '';
+                }}
+              />
+              {uploadingImage ? (
+                <p className="mt-1 text-xs text-gray-500">上传中…</p>
+              ) : null}
+              <button
+                type="button"
+                className="mt-2 rounded border border-red-200 px-2 py-1 text-xs text-red-700 disabled:opacity-50"
+                disabled={!(imagePreviewUrl || imageUrl)}
+                onClick={() => {
+                  setImageUrl('');
+                  setImagePreviewUrl('');
+                }}
+              >
+                删除图片
+              </button>
+            </div>
+          </div>
         </label>
         <div className="flex flex-wrap gap-2 pt-1">
           {editingId ? (
@@ -241,7 +346,7 @@ export default function DeliveryPoints() {
           <button
             type="button"
             className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:bg-gray-300"
-            disabled={saving || !shopId}
+            disabled={saving || !ownerId}
             onClick={() => void handleSubmit()}
           >
             {saving ? '保存中…' : editingId ? '保存修改' : '保存新增'}
@@ -264,8 +369,7 @@ export default function DeliveryPoints() {
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <span className="font-medium text-gray-900">
-                    #{row.data.number ?? row.data.sortOrder ?? '—'}{' '}
-                    {row.data.name}
+                    [{row.data.code ?? '—'}] {row.data.shortName ?? row.data.name}
                   </span>
                   {row.data.isActive === false ? (
                     <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
@@ -277,8 +381,25 @@ export default function DeliveryPoints() {
                       {row.data.detailAddress}
                     </p>
                   ) : null}
-                  {row.data.deliveryTime ? (
-                    <p className="text-xs text-gray-500">{row.data.deliveryTime}</p>
+                  {row.data.mapsUrl ? (
+                    <a
+                      href={row.data.mapsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 block text-xs text-indigo-600 hover:underline"
+                    >
+                      打开谷歌地图
+                    </a>
+                  ) : null}
+                  {row.data.imageUrl ? (
+                    <a
+                      href={row.data.imageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-indigo-600 hover:underline"
+                    >
+                      查看图片
+                    </a>
                   ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-1">
@@ -291,11 +412,21 @@ export default function DeliveryPoints() {
                   </button>
                   <button
                     type="button"
-                    className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-800"
-                    onClick={() => void toggleActive(row)}
+                    className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700"
+                    onClick={() => void handleDelete(row)}
                   >
-                    {row.data.isActive === false ? '启用' : '停用'}
+                    删除
                   </button>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={row.data.isActive !== false}
+                      onChange={() => void toggleActive(row)}
+                    />
+                    <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
+                    <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
+                  </label>
                 </div>
               </div>
             </li>
