@@ -11,6 +11,7 @@ import {
   canMerchantConfirmAppendBatchByScreenshots,
   hasPaymentScreenshotForAppendBatch,
 } from '../../lib/paymentScreenshotHelpers';
+import { orderHasNoPaymentActionYet } from '../../lib/paymentGrouping';
 import {
   getOrderByNumber,
   merchantAppendInternalNote,
@@ -80,6 +81,30 @@ function linePromoTag(line: OrderLineDoc) {
   );
 }
 
+function aggregateOrderLines(lines: OrderLineDoc[]): OrderLineDoc[] {
+  const grouped = new Map<string, OrderLineDoc>();
+  for (const line of lines) {
+    const key = [
+      line.productId,
+      line.name,
+      Number(line.unitPrice ?? 0).toFixed(2),
+      line.isDiscount ? '1' : '0',
+      line.discountEndsAt ?? '',
+    ].join('|');
+    const exist = grouped.get(key);
+    if (!exist) {
+      grouped.set(key, { ...line });
+      continue;
+    }
+    grouped.set(key, {
+      ...exist,
+      quantity: Number(exist.quantity ?? 0) + Number(line.quantity ?? 0),
+      subtotal: Number(exist.subtotal ?? 0) + Number(line.subtotal ?? 0),
+    });
+  }
+  return Array.from(grouped.values());
+}
+
 /** 已入账的历史加购（商户曾逐笔确认过的批次） */
 function CardPaymentBreakdown({
   cardPayment,
@@ -140,7 +165,7 @@ function ConfirmedAppendBatchCard({
         </p>
       ) : null}
       <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
-        {batch.lines.map((l, idx) => (
+        {aggregateOrderLines(batch.lines).map((l, idx) => (
           <li
             key={`${batch.id}-${l.productId}-${idx}`}
             className="flex justify-between gap-2 px-3 py-2 text-sm"
@@ -382,6 +407,19 @@ export default function MerchantOrderDetail() {
         (a.appendedAt?.toMillis?.() ?? 0) -
         (b.appendedAt?.toMillis?.() ?? 0)
     );
+  const firstActionMergedBatches =
+    order.initialPaymentConfirmedAt && confirmedBatches.length > 0
+      ? confirmedBatches.filter(
+          (b) =>
+            Math.abs(
+              (b.confirmedAt?.toMillis?.() ?? 0) -
+                (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0)
+            ) <= 1000
+        )
+      : [];
+  const restConfirmedBatches = confirmedBatches.filter(
+    (b) => !firstActionMergedBatches.some((x) => x.id === b.id)
+  );
   const pendingBatches = appendBatches.filter((b) => !b.confirmedAt);
   const pendingIds = pendingBatches.map((b) => b.id);
   const firstGroupHasProof = Array.isArray(order.paymentScreenshots)
@@ -441,10 +479,38 @@ export default function MerchantOrderDetail() {
     pendingBatchGroups.every((g) => g.canConfirm) &&
     (order.status === 'unpaid' || order.status === 'pending' || order.status === 'partial_paid');
 
+  // 还未发生支付动作时（首单+加购都未传图），也应按一个待付款组展示
+  const canShowAllAsSingleUnpaidGroup =
+    orderHasNoPaymentActionYet(order) &&
+    pendingBatches.length > 0 &&
+    pendingBatchGroups.every((g) => !g.canConfirm) &&
+    (order.status === 'unpaid' || order.status === 'pending' || order.status === 'partial_paid');
+
   const allPendingTotal =
-    (canConfirmAllInOneAction
+    (canConfirmAllInOneAction || canShowAllAsSingleUnpaidGroup
       ? initialTotal + pendingBatches.reduce((s, b) => s + (Number(b.deltaAmount) || 0), 0)
       : 0);
+  const allPendingMergedLines = aggregateOrderLines([
+    ...initialLines,
+    ...pendingBatches.flatMap((b) => b.lines),
+  ]);
+  const showSingleConfirmedGroup =
+    Boolean(order.initialPaymentConfirmedAt) &&
+    firstActionMergedBatches.length > 0 &&
+    pendingBatches.length === 0 &&
+    restConfirmedBatches.length === 0;
+  const confirmedGroupLines =
+    firstActionMergedBatches.length > 0
+      ? [...initialLines, ...firstActionMergedBatches.flatMap((b) => b.lines)]
+      : initialLines;
+  const confirmedGroupTotal =
+    firstActionMergedBatches.length > 0
+      ? Number(initialTotal) +
+        firstActionMergedBatches.reduce(
+          (s, b) => s + (Number(b.deltaAmount) || 0),
+          0
+        )
+      : initialTotal;
 
   const pendingGroupPriority = pendingBatchGroups.length > 0
     ? pendingBatchGroups[0]!.groupPriority
@@ -485,7 +551,7 @@ export default function MerchantOrderDetail() {
             </div>
             <p className="mb-2 text-xs text-gray-600">时间：{batchTimeStr(batch)}</p>
             <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
-              {batch.lines.map((l, idx) => (
+              {aggregateOrderLines(batch.lines).map((l, idx) => (
                 <li
                   key={`${batch.id}-${l.productId}-${idx}`}
                   className="flex justify-between gap-2 px-3 py-2 text-sm"
@@ -617,9 +683,9 @@ export default function MerchantOrderDetail() {
               </span>
             </div>
             <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-              {initialLines.map((l, idx) => (
+              {allPendingMergedLines.map((l, idx) => (
                 <li
-                  key={`init-${l.productId}-${idx}`}
+                  key={`pending-all-${l.productId}-${idx}`}
                   className="flex justify-between gap-2 px-3 py-2 text-sm"
                 >
                   <span>
@@ -629,20 +695,6 @@ export default function MerchantOrderDetail() {
                   <span className="tabular-nums font-medium">{formatMYR(l.subtotal)}</span>
                 </li>
               ))}
-              {pendingBatches.map((b) =>
-                b.lines.map((l, idx) => (
-                  <li
-                    key={`${b.id}-${l.productId}-${idx}`}
-                    className="flex justify-between gap-2 px-3 py-2 text-sm"
-                  >
-                    <span>
-                      {l.name}
-                      {linePromoTag(l)} ×{l.quantity}
-                    </span>
-                    <span className="tabular-nums font-medium">{formatMYR(l.subtotal)}</span>
-                  </li>
-                ))
-              )}
             </ul>
             <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
               <span>合计应收</span>
@@ -672,13 +724,64 @@ export default function MerchantOrderDetail() {
               本次付款一张凭证覆盖首单与加购，点击后一次性确认全部。
             </p>
           </div>
+        ) : canShowAllAsSingleUnpaidGroup ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-amber-950">
+                本次待付款明细（首单 + 加购合计）
+              </h2>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
+                待付款（未传图）
+              </span>
+            </div>
+            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
+              {allPendingMergedLines.map((l, idx) => (
+                <li
+                  key={`unpaid-all-${l.productId}-${idx}`}
+                  className="flex justify-between gap-2 px-3 py-2 text-sm"
+                >
+                  <span>
+                    {l.name}
+                    {linePromoTag(l)} ×{l.quantity}
+                  </span>
+                  <span className="tabular-nums font-medium">{formatMYR(l.subtotal)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
+              <span>合计应收</span>
+              <span>{formatMYR(allPendingTotal)}</span>
+            </div>
+            <div className="mt-3 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
+              <p className="font-medium">当前尚未发起支付动作</p>
+              <p className="mt-1">
+                可让顾客上传一张凭证，或使用「免提交付款凭证」一次性覆盖本次首单+加购。
+              </p>
+            </div>
+            {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
+              <ActionButton
+                type="button"
+                variant="secondary"
+                fullWidth
+                disabled={busy !== null}
+                className="mt-3 h-11"
+                onClick={() => void handleWaiveInitialProof()}
+              >
+                {busy === 'waive_initial_proof'
+                  ? '处理中…'
+                  : `本次免提交付款凭证（${formatMYR(allPendingTotal)}）`}
+              </ActionButton>
+            ) : null}
+          </div>
         ) : (
           <>
             {showPendingBeforeFirst ? pendingSection : null}
 
             <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-gray-900">首单（下单时的金额）</h2>
+                <h2 className="text-sm font-semibold text-gray-900">
+                  {showSingleConfirmedGroup ? '支付组 1（已确认）' : '首单（下单时的金额）'}
+                </h2>
                 {firstPaymentAcknowledged ? (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
                     已确认收款
@@ -694,7 +797,7 @@ export default function MerchantOrderDetail() {
                 )}
               </div>
               <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                {initialLines.map((l, idx) => (
+                {aggregateOrderLines(confirmedGroupLines).map((l, idx) => (
                   <li
                     key={`${l.productId}-${idx}`}
                     className="flex justify-between gap-2 px-3 py-2"
@@ -710,8 +813,8 @@ export default function MerchantOrderDetail() {
                 ))}
               </ul>
               <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-                <span>首单小计</span>
-                <span>{formatMYR(initialTotal)}</span>
+                <span>{showSingleConfirmedGroup ? '本笔小计' : '首单小计'}</span>
+                <span>{formatMYR(confirmedGroupTotal)}</span>
               </div>
               <div className="mt-3">
                 <h3 className="mb-1 text-xs font-semibold text-gray-700">
@@ -770,10 +873,10 @@ export default function MerchantOrderDetail() {
           </>
         )}
 
-        {confirmedBatches.length > 0 ? (
+        {!showSingleConfirmedGroup && restConfirmedBatches.length > 0 ? (
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-gray-900">已核实加购（补款已入账）</h2>
-            {confirmedBatches.map((b) => (
+            {restConfirmedBatches.map((b) => (
               <ConfirmedAppendBatchCard
                 key={b.id}
                 batch={b}
@@ -783,14 +886,14 @@ export default function MerchantOrderDetail() {
               />
             ))}
           </div>
-        ) : (
+        ) : !showSingleConfirmedGroup ? (
           <EmptyStateCard title="暂无已确认的加购记录" className="py-4" />
-        )}
+        ) : null}
 
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">订单当前合计</h2>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-            {order.lines.map((l, idx) => (
+            {aggregateOrderLines(order.lines).map((l, idx) => (
               <li
                 key={`${l.productId}-all-${idx}`}
                 className="flex justify-between gap-2 px-3 py-2"

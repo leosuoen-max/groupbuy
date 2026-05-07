@@ -7,6 +7,7 @@ import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   appendBatchHasCustomerUpload,
+  orderHasPaymentProof,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
 } from '../../lib/paymentScreenshotHelpers';
@@ -135,7 +136,7 @@ export default function OrderManagement() {
         isOpen:
           d.status === 'pending' ||
           (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
-        isDone: d.status === 'confirmed' || d.status === 'partial_paid',
+        isDone: d.status === 'confirmed',
         isCancelled: d.status === 'cancelled',
       };
     });
@@ -174,7 +175,7 @@ export default function OrderManagement() {
         isOpen:
           d.status === 'pending' ||
           (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
-        isDone: d.status === 'confirmed' || d.status === 'partial_paid',
+        isDone: d.status === 'confirmed',
         isCancelled: d.status === 'cancelled',
       };
     });
@@ -322,6 +323,8 @@ export default function OrderManagement() {
             const shots = parseScreenshotEntries(d.paymentScreenshots);
             const thumbUrl = shots.find((s) => s.url)?.url ?? null;
             const hasShot = orderHasPaymentScreenshots(d.paymentScreenshots);
+            const hasProofNoImage =
+              !hasShot && orderHasPaymentProof(d.paymentScreenshots);
             return (
               <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm">
                 <div className="flex min-w-0 flex-1 gap-3">
@@ -348,6 +351,8 @@ export default function OrderManagement() {
                       <StatusChip tone={toChipTone(d.status)} label={statusLabel(d.status)} />
                       {hasShot ? (
                         <span className="font-medium text-emerald-700">已传凭证</span>
+                      ) : hasProofNoImage ? (
+                        <span className="font-medium text-amber-700">免凭证</span>
                       ) : (
                         <span className="text-gray-400">未传图</span>
                       )}

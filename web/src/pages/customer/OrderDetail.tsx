@@ -32,6 +32,7 @@ import {
   parseScreenshotEntries,
   type ParsedScreenshotEntry,
 } from '../../lib/paymentScreenshotHelpers';
+import { orderHasNoPaymentActionYet } from '../../lib/paymentGrouping';
 import type { MockDeliveryPoint } from '../../types/orderDraft';
 import type {
   OrderAppendBatchDoc,
@@ -363,12 +364,11 @@ export default function OrderDetail() {
   const canUpload =
     order && uploadAllowedStatuses.has(order.status);
 
-  /** 卡支付能力：未确认且仍有待付金额时均可走自动抵扣（含加购后的 partial_paid/pending） */
+  /** 卡支付仅允许在“待付款”阶段触发；待确认阶段禁止再次支付 */
   const canCardPay =
     !!order &&
     !!projectDoc &&
     (order.status === 'unpaid' ||
-      order.status === 'pending' ||
       order.status === 'partial_paid') &&
     Number(order.pendingAmount ?? 0) > 0;
 
@@ -630,6 +630,7 @@ export default function OrderDetail() {
   const pendingAppendIds = sortedAppendBatches
     .filter((b) => !b.confirmedAt)
     .map((b) => b.id);
+  const noPaymentActionYet = orderHasNoPaymentActionYet(order);
   const firstShots = withUrlShots.filter((s) => {
     const untagged = s.appendBatchId == null || s.appendBatchId === '';
     return untagged;
@@ -652,8 +653,16 @@ export default function OrderDetail() {
       const ua = s.uploadedAt?.toMillis?.() ?? 0;
       return ua >= ms;
     });
+  const initialConfirmedByCardAction =
+    Boolean(order.cardPayment) &&
+    !firstGroupHasPaymentAction &&
+    Boolean(order.initialPaymentConfirmedAt) &&
+    Math.abs(
+      (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0) -
+        (order.cardPayment?.appliedAt?.toMillis?.() ?? 0)
+    ) <= 1000;
   const unifiedCardActionKey =
-    order.cardPayment && firstGroupStatus === 'confirmed'
+    initialConfirmedByCardAction && order.cardPayment && firstGroupStatus === 'confirmed'
       ? `card_auto:${order.cardPayment.appliedAt?.toMillis?.() ?? 'na'}`
       : null;
   const initialConfirmedActionKey =
@@ -684,23 +693,28 @@ export default function OrderDetail() {
       status,
       hasPaymentAction: b.confirmedAt || canConfirm,
       actionKey:
+        noPaymentActionYet && status === 'unpaid'
+          ? null
+          :
         b.confirmedByUserId === 'customer_card_auto' && unifiedCardActionKey
           ? unifiedCardActionKey
           : sameConfirmActionAsInitial && initialConfirmedActionKey
             ? initialConfirmedActionKey
+            : b.confirmedAt
+              ? `append_confirmed:${b.id}`
           : hasPaymentScreenshotForAppendBatch(order.paymentScreenshots, b.id)
-            ? `append_proof:${b.id}`
-            : untaggedPaymentAfter(b.appendedAt?.toMillis?.() ?? 0)
-              ? 'initial'
-          : b.confirmedAt
-            ? `append_confirmed:${b.id}`
-            : canConfirm
-              ? `append_pending:${b.id}`
-              : null,
+                ? `append_proof:${b.id}`
+                : untaggedPaymentAfter(b.appendedAt?.toMillis?.() ?? 0)
+                  ? 'initial'
+                  : canConfirm
+                    ? `append_pending:${b.id}`
+                    : null,
     };
   });
   const firstActionKey = unifiedCardActionKey
     ? unifiedCardActionKey
+    : noPaymentActionYet && firstGroupStatus === 'unpaid'
+      ? null
     : firstGroupStatus !== 'unpaid'
       ? (initialConfirmedActionKey ?? 'initial')
       : appendGroupMeta.find((x) => x.hasPaymentAction)?.batch.id ?? null;
@@ -770,6 +784,10 @@ export default function OrderDetail() {
     pending: '待确认',
     unpaid: '待付款',
   } as const;
+  // “当前待支付”只统计待付款组；待确认代表已发起支付动作，不应继续计入待支付。
+  const currentUnpaidAmount = displayGroups
+    .filter((g) => g.status === 'unpaid')
+    .reduce((s, g) => s + Number(g.subtotal || 0), 0);
 
   const uploadHintTop =
     order.status === 'partial_paid'
@@ -979,7 +997,7 @@ export default function OrderDetail() {
             </div>
             <div className="flex justify-between text-sm font-semibold text-amber-900">
               <span>当前待支付</span>
-              <span>{formatMYR(order.pendingAmount ?? 0)}</span>
+              <span>{formatMYR(currentUnpaidAmount)}</span>
             </div>
           </div>
         ) : (
@@ -1007,7 +1025,7 @@ export default function OrderDetail() {
             </div>
             <div className="mt-1 flex justify-between text-sm font-semibold text-amber-900">
               <span>当前待支付</span>
-              <span>{formatMYR(order.pendingAmount ?? 0)}</span>
+              <span>{formatMYR(currentUnpaidAmount)}</span>
             </div>
           </div>
         )}
@@ -1346,7 +1364,11 @@ export default function OrderDetail() {
                 {displayGroups.map((g, idx) => {
                   const gKey = g.key.startsWith('merge:') ? g.key.slice(6) : g.key;
                   let groupShots: typeof withUrlShots;
-                  if (gKey === 'initial' || gKey.startsWith('card_auto:')) {
+                  if (
+                    gKey === 'initial' ||
+                    gKey.startsWith('card_auto:') ||
+                    gKey.startsWith('confirm_action:')
+                  ) {
                     // 首组或卡支付组：未挂批次的截图
                     groupShots = firstShots;
                   } else if (gKey.startsWith('append_proof:')) {

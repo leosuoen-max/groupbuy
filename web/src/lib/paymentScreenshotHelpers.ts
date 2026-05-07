@@ -97,7 +97,7 @@ function untaggedQualifiesAsAppendProofAfterBatchOpened(
   x: ParsedScreenshotEntry,
   notBeforeMs: number
 ): boolean {
-  if (!x.url) return false;
+  if (!x.url && !x.waivedNoScreenshot) return false;
   if (x.appendBatchId != null && x.appendBatchId !== '') return false;
   if (!x.uploadedAt || typeof x.uploadedAt.toMillis !== 'function') {
     return false;
