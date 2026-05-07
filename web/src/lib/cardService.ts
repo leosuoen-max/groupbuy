@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
+import { appendBatchHasCustomerUpload } from './paymentScreenshotHelpers';
 import type {
   BundleSchemeDoc,
   CardLedgerDoc,
@@ -1003,7 +1004,7 @@ export async function listCustomerCardsByCustomer(
     )
   );
   const now = new Date();
-  let rows = snap.docs.map((d) => {
+  const rows = snap.docs.map((d) => {
     const data = d.data() as CustomerCardDoc;
     const next = autoExpireFlag(data, now);
     return { id: d.id, data: { ...data, status: next } };
@@ -1219,7 +1220,12 @@ export async function planCardPayment(
   project: ProjectDoc,
   customerKey: string
 ): Promise<CardPaymentPlan> {
-  const totalAmount = ROUND2(Number(order.totalAmount ?? 0));
+  const totalAmount = ROUND2(
+    Math.max(
+      0,
+      Math.min(Number(order.pendingAmount ?? 0), Number(order.totalAmount ?? 0))
+    )
+  );
   // 1. 拉取本店该顾客所有 active 卡
   const cards = (
     await listCustomerCardsByCustomer(customerKey, order.shopId)
@@ -1227,8 +1233,38 @@ export async function planCardPayment(
   const passCards = cards.filter((c) => c.data.type === 'pass');
   const wallet = cards.find((c) => c.data.type === 'stored') ?? null;
 
-  // 2. 每行可被哪些 templateId 抵扣
-  const lines = (order.lines ?? []) as OrderLineDoc[];
+  // 2. 仅针对“待支付组”计算可抵扣行：
+  // - 已确认组：confirmedAt 存在，不可再次支付
+  // - 待确认组：已发起支付动作（上传凭证或商户免凭证），不可再次支付
+  // - 待支付组：未发起支付动作，可参与本次支付
+  const fullLines = (order.lines ?? []) as OrderLineDoc[];
+  const initialLines =
+    order.initialLines?.length && order.initialLines.length > 0
+      ? (order.initialLines as OrderLineDoc[])
+      : fullLines;
+  const unpaidGroupLines: OrderLineDoc[] = [];
+  if (
+    !order.initialPaymentConfirmedAt &&
+    (order.status === 'unpaid' || order.status === 'partial_paid')
+  ) {
+    unpaidGroupLines.push(...initialLines);
+  }
+  const pendingBatchIds = (order.appendBatches ?? [])
+    .filter((b) => !b.confirmedAt)
+    .map((b) => b.id);
+  for (const b of order.appendBatches ?? []) {
+    if (b.confirmedAt) continue;
+    const hasPaymentAction = appendBatchHasCustomerUpload(
+      order.paymentScreenshots,
+      b.id,
+      b.appendedAt,
+      pendingBatchIds
+    );
+    if (!hasPaymentAction) {
+      unpaidGroupLines.push(...(b.lines as OrderLineDoc[]));
+    }
+  }
+  const lines = unpaidGroupLines;
   const lineMeta = lines.map((l) => ({
     line: l,
     applicableTemplateIds: resolveApplicableTemplatesForLine(project, l),
@@ -1588,7 +1624,7 @@ export async function applyCardPaymentToOrder(params: {
       lines: nextLines,
       appendBatches: nextAppendBatches,
       cardPayment: cardPaymentDoc,
-      paidAmount: ROUND2(plan.totalAmount),
+      paidAmount: ROUND2(Number(order.paidAmount ?? 0) + plan.totalAmount),
       pendingAmount: 0,
       status: 'confirmed',
       initialPaymentConfirmedAt:

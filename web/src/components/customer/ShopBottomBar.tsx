@@ -19,6 +19,10 @@ type ShopBottomBarProps = {
   isShopOwner?: boolean;
   /** permissions 表角色（被邀请管理员）；未登录则无 */
   invitedRole?: 'normal_admin' | 'high_admin' | null;
+  /** 覆盖主按钮文案（例如加购模式） */
+  submitLabelOverride?: string;
+  /** 额外禁用提交（不影响关闭状态判断） */
+  forceDisableSubmit?: boolean;
 };
 
 export function ShopBottomBar({
@@ -33,17 +37,20 @@ export function ShopBottomBar({
   showMyOrdersInMore = false,
   isShopOwner = false,
   invitedRole = null,
+  submitLabelOverride,
+  forceDisableSubmit = false,
 }: ShopBottomBarProps) {
   const base = '/shop/' + encodeURIComponent(shopSlug) + '/' + encodeURIComponent(projectId);
   const dashboardBase =
     '/dashboard/' + encodeURIComponent(shopSlug);
   const closed = projectStatus === 'closed' || projectStatus === 'full';
-  const canSubmit = !closed && totalQty > 0;
+  const canSubmit = !closed && totalQty > 0 && !forceDisableSubmit;
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
   let primaryLabel = '请先选择商品';
   if (closed) primaryLabel = '已截止';
+  else if (submitLabelOverride) primaryLabel = submitLabelOverride;
   else if (totalQty > 0) {
     primaryLabel = `点此提交 · ${totalQty} 件 · ${formatMYR(totalAmount)}`;
   }

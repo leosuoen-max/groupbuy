@@ -9,6 +9,7 @@ import {
   type MockShopHome,
 } from '../../data/mockShopHome';
 import { getEffectivePrice } from '../../lib/productPrice';
+import { formatMYR } from '../../lib/formatMYR';
 import { formatRemainingShort } from '../../lib/countdown';
 import {
   loadShopHomeFromFirestore,
@@ -16,7 +17,12 @@ import {
 } from '../../lib/shopHomeService';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { useAuthUser } from '../../hooks/useAuthUser';
-import { listOrdersByCustomer } from '../../lib/orderService';
+import {
+  customerAppendLinesToOrder,
+  getOrderByNumber,
+  listOrdersByCustomer,
+  type OrderRow,
+} from '../../lib/orderService';
 import { getProjectPermissionForUser } from '../../lib/permissionService';
 import { getShopBySlug } from '../../lib/shopService';
 import { listCardTemplatesByShop } from '../../lib/cardService';
@@ -65,6 +71,8 @@ export default function ShopHome() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const useMock = searchParams.get('mock') === '1';
+  const appendOrderNumber = searchParams.get('appendOrder')?.trim() ?? '';
+  const isAppendMode = appendOrderNumber.length > 0;
   const navigate = useNavigate();
   const now = useTick(30_000);
 
@@ -239,6 +247,9 @@ export default function ShopHome() {
     url: string;
     name?: string;
   } | null>(null);
+  const [appendTarget, setAppendTarget] = useState<OrderRow | null>(null);
+  const [appendError, setAppendError] = useState<string | null>(null);
+  const [appendSubmitting, setAppendSubmitting] = useState(false);
   const incoming = (location.state ?? {}) as CartLocationState;
 
   useEffect(() => {
@@ -253,6 +264,50 @@ export default function ShopHome() {
       });
     });
   }, [incoming.cartDraft]);
+
+  useEffect(() => {
+    if (!isAppendMode) {
+      setAppendTarget(null);
+      setAppendError(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const row = await getOrderByNumber(
+          decodeURIComponent(projectId),
+          decodeURIComponent(appendOrderNumber)
+        );
+        if (!row) throw new Error('找不到要加购的订单');
+        if (row.data.shopSlug !== decodeURIComponent(shopSlug)) {
+          throw new Error('订单与当前店铺不匹配');
+        }
+        if (row.data.customerKey !== getOrCreateCustomerKey()) {
+          throw new Error('仅下单本人可加购（请使用同一浏览器）');
+        }
+        if (
+          row.data.status !== 'unpaid' &&
+          row.data.status !== 'pending' &&
+          row.data.status !== 'confirmed' &&
+          row.data.status !== 'partial_paid'
+        ) {
+          throw new Error('当前订单状态不可加购');
+        }
+        if (!cancelled) {
+          setAppendTarget(row);
+          setAppendError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAppendTarget(null);
+          setAppendError(e instanceof Error ? e.message : '加购订单校验失败');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAppendMode, projectId, appendOrderNumber, shopSlug]);
 
   const activeProducts = useMemo(
     () => (data ? data.products.filter((p) => p.isActive) : []),
@@ -418,6 +473,7 @@ export default function ShopHome() {
 
   const handleSubmit = () => {
     if (!data || data.status !== 'open' || totalQty <= 0) return;
+    if (isAppendMode && (!appendTarget || appendSubmitting)) return;
     const normalLines = activeProducts
       .map((p) => {
         const q = cart[p.id] ?? 0;
@@ -432,7 +488,7 @@ export default function ShopHome() {
           discountEndsAt: discountEndsAt ?? undefined,
         };
       })
-      .filter(Boolean);
+      .filter((x): x is NonNullable<typeof x> => x !== null);
     const bundleLines = bundleCart.map((x, idx) => ({
       productId: `bundle:${x.bundleToolId}:${x.schemeId}:${idx}`,
       name: x.label,
@@ -442,6 +498,28 @@ export default function ShopHome() {
       discountEndsAt: x.discountEndsAt,
     }));
     const lines = [...normalLines, ...bundleLines];
+    if (isAppendMode && appendTarget) {
+      setAppendSubmitting(true);
+      void customerAppendLinesToOrder({
+        orderFirestoreId: appendTarget.id,
+        projectId: decodeURIComponent(projectId),
+        orderNumber: appendTarget.data.orderNumber,
+        customerKey: getOrCreateCustomerKey(),
+        additionalLines: lines,
+        bundleSelections: bundleCart,
+      })
+        .then(() => {
+          navigate(
+            `${basePath}/orders/${encodeURIComponent(appendTarget.data.orderNumber)}`,
+            { replace: true }
+          );
+        })
+        .catch((e) => {
+          setAppendError(e instanceof Error ? e.message : '提交加购失败');
+        })
+        .finally(() => setAppendSubmitting(false));
+      return;
+    }
     navigate(`${basePath}/order`, {
       state: {
         lines,
@@ -503,6 +581,20 @@ export default function ShopHome() {
             </div>
             <span className="text-[12px] text-slate-500">查看 →</span>
           </Link>
+        </section>
+      ) : null}
+
+      {isAppendMode ? (
+        <section className="px-4 pb-2">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
+            <p className="font-semibold">
+              加购模式 · 订单 #{appendTarget?.data.orderNumber ?? appendOrderNumber}
+            </p>
+            <p className="mt-0.5">
+              本次提交将作为加购补单写回原订单，不会新建订单。
+            </p>
+            {appendError ? <p className="mt-1 text-red-700">{appendError}</p> : null}
+          </div>
         </section>
       ) : null}
 
@@ -923,6 +1015,18 @@ export default function ShopHome() {
         totalQty={totalQty}
         totalAmount={totalAmount}
         onSubmit={handleSubmit}
+        submitLabelOverride={
+          isAppendMode
+            ? appendSubmitting
+              ? '提交加购中…'
+              : totalQty > 0
+                ? `确认加购 · ${totalQty} 件 · ${formatMYR(totalAmount)}`
+                : '请选择加购商品'
+            : undefined
+        }
+        forceDisableSubmit={
+          isAppendMode && (!!appendError || !appendTarget || appendSubmitting)
+        }
         showMyOrdersPrimary={bottomBarMenu.showMyOrdersPrimary}
         showMyOrdersInMore={bottomBarMenu.showMyOrdersInMore}
         isShopOwner={bottomBarMenu.isShopOwner}

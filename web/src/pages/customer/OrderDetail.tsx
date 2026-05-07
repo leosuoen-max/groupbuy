@@ -26,6 +26,7 @@ import {
   type CardPaymentPlan,
 } from '../../lib/cardService';
 import {
+  canMerchantConfirmAppendBatchByScreenshots,
   hasPaymentScreenshotForAppendBatch,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
@@ -82,6 +83,62 @@ function linePromoTag(line: OrderLineDoc) {
     >
       {isEarlyBird ? '早鸟价' : '特惠价'}
     </span>
+  );
+}
+
+function aggregateOrderLines(lines: OrderLineDoc[]): OrderLineDoc[] {
+  const grouped = new Map<string, OrderLineDoc>();
+  for (const line of lines) {
+    const key = [
+      line.productId,
+      line.name,
+      Number(line.unitPrice ?? 0).toFixed(2),
+      line.isDiscount ? '1' : '0',
+      line.discountEndsAt ?? '',
+    ].join('|');
+    const exist = grouped.get(key);
+    if (!exist) {
+      grouped.set(key, { ...line });
+      continue;
+    }
+    grouped.set(key, {
+      ...exist,
+      quantity: Number(exist.quantity ?? 0) + Number(line.quantity ?? 0),
+      subtotal: Number(exist.subtotal ?? 0) + Number(line.subtotal ?? 0),
+    });
+  }
+  return Array.from(grouped.values());
+}
+
+function CardPaymentBreakdown({
+  cardPayment,
+  lines,
+}: {
+  cardPayment: OrderDoc['cardPayment'];
+  lines: OrderLineDoc[];
+}) {
+  if (!cardPayment) return null;
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+      <p className="font-semibold">本组为卡支付自动确认（无需截图）</p>
+      <ul className="mt-1 space-y-0.5">
+        {cardPayment.passCards.map((c) => (
+          <li key={c.customerCardId}>
+            · 次卡 #{c.customerCardId.slice(0, 6)} — 抵扣 {c.uses} 次（
+            {c.appliedLineProductIds
+              .map((pid) => lines.find((l) => l.productId === pid)?.name ?? '行')
+              .join('、')}
+            ）
+          </li>
+        ))}
+        {cardPayment.wallet ? (
+          <li>· 钱包扣减 RM {Number(cardPayment.wallet.deduct ?? 0).toFixed(2)}</li>
+        ) : null}
+        <li className="pt-1 font-semibold">
+          共抵扣 RM {Number(cardPayment.totalDeducted ?? 0).toFixed(2)}
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -567,47 +624,152 @@ export default function OrderDetail() {
       ? order.initialLines.reduce((s, l) => s + l.subtotal, 0)
       : order.totalAmount);
   const withUrlShots = shots.filter((s) => s.url);
-  const confirmedAppendBatches = appendBatches.filter((b) => b.confirmedAt);
-  const pendingAppendBatches = appendBatches.filter((b) => !b.confirmedAt);
-  const pendingAppendIds = pendingAppendBatches.map((b) => b.id);
-  const includeUntaggedForAppendShots =
-    pendingAppendIds.length > 1 ||
-    (pendingAppendIds.length === 1 &&
-      !hasPaymentScreenshotForAppendBatch(
-        order.paymentScreenshots,
-        pendingAppendIds[0]!
-      ));
-  const minPendingAppendMs =
-    pendingAppendBatches.length > 0
-      ? Math.min(...pendingAppendBatches.map((b) => b.appendedAt.toMillis()))
-      : 0;
-  const lumpAppendShots = withUrlShots.filter((s) => {
-    if (!pendingAppendIds.length) return false;
-    const bid = s.appendBatchId;
-    if (bid && pendingAppendIds.includes(bid)) return true;
-    if (
-      order.status === 'partial_paid' &&
-      includeUntaggedForAppendShots &&
-      (bid == null || bid === '')
-    ) {
-      const ua = s.uploadedAt?.toMillis?.() ?? 0;
-      if (ua < minPendingAppendMs) return false;
-      return true;
-    }
-    return false;
-  });
+  const sortedAppendBatches = [...appendBatches].sort(
+    (a, b) => (a.appendedAt?.toMillis?.() ?? 0) - (b.appendedAt?.toMillis?.() ?? 0)
+  );
+  const pendingAppendIds = sortedAppendBatches
+    .filter((b) => !b.confirmedAt)
+    .map((b) => b.id);
   const firstShots = withUrlShots.filter((s) => {
     const untagged = s.appendBatchId == null || s.appendBatchId === '';
-    if (!untagged) return false;
-    if (
-      order.status === 'partial_paid' &&
-      pendingAppendIds.length &&
-      includeUntaggedForAppendShots
-    ) {
-      return false;
-    }
-    return true;
+    return untagged;
   });
+  const firstGroupHasPaymentAction = shots.some((s) => {
+    const untagged = s.appendBatchId == null || s.appendBatchId === '';
+    return untagged && (Boolean(s.url) || s.waivedNoScreenshot);
+  });
+  const firstGroupStatus: 'confirmed' | 'pending' | 'unpaid' =
+    order.initialPaymentConfirmedAt
+      ? 'confirmed'
+      : firstGroupHasPaymentAction
+        ? 'pending'
+        : 'unpaid';
+  const untaggedPaymentAfter = (ms: number) =>
+    shots.some((s) => {
+      const untagged = s.appendBatchId == null || s.appendBatchId === '';
+      if (!untagged) return false;
+      if (!s.url && !s.waivedNoScreenshot) return false;
+      const ua = s.uploadedAt?.toMillis?.() ?? 0;
+      return ua >= ms;
+    });
+  const unifiedCardActionKey =
+    order.cardPayment && firstGroupStatus === 'confirmed'
+      ? `card_auto:${order.cardPayment.appliedAt?.toMillis?.() ?? 'na'}`
+      : null;
+  const initialConfirmedActionKey =
+    firstGroupStatus === 'confirmed' && order.initialPaymentConfirmedAt
+      ? `confirm_action:${order.initialPaymentConfirmedAt.toMillis()}`
+      : null;
+  const appendGroupMeta = sortedAppendBatches.map((b) => {
+    const canConfirm = canMerchantConfirmAppendBatchByScreenshots(
+      order.paymentScreenshots,
+      b.id,
+      pendingAppendIds,
+      b.appendedAt
+    );
+    const status: 'confirmed' | 'pending' | 'unpaid' = b.confirmedAt
+      ? 'confirmed'
+      : canConfirm
+        ? 'pending'
+        : 'unpaid';
+    const sameConfirmActionAsInitial =
+      Boolean(initialConfirmedActionKey) &&
+      Boolean(b.confirmedAt) &&
+      Math.abs(
+        (b.confirmedAt?.toMillis?.() ?? 0) -
+          (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0)
+      ) <= 1000;
+    return {
+      batch: b,
+      status,
+      hasPaymentAction: b.confirmedAt || canConfirm,
+      actionKey:
+        b.confirmedByUserId === 'customer_card_auto' && unifiedCardActionKey
+          ? unifiedCardActionKey
+          : sameConfirmActionAsInitial && initialConfirmedActionKey
+            ? initialConfirmedActionKey
+          : hasPaymentScreenshotForAppendBatch(order.paymentScreenshots, b.id)
+            ? `append_proof:${b.id}`
+            : untaggedPaymentAfter(b.appendedAt?.toMillis?.() ?? 0)
+              ? 'initial'
+          : b.confirmedAt
+            ? `append_confirmed:${b.id}`
+            : canConfirm
+              ? `append_pending:${b.id}`
+              : null,
+    };
+  });
+  const firstActionKey = unifiedCardActionKey
+    ? unifiedCardActionKey
+    : firstGroupStatus !== 'unpaid'
+      ? (initialConfirmedActionKey ?? 'initial')
+      : appendGroupMeta.find((x) => x.hasPaymentAction)?.batch.id ?? null;
+  const segments: Array<{
+    key: string;
+    status: 'confirmed' | 'pending' | 'unpaid';
+    actionKey: string | null;
+    timeMs: number;
+    timeLabel?: string;
+    lines: OrderLineDoc[];
+    subtotal: number;
+    titleHint?: string;
+  }> = [
+    {
+      key: 'initial',
+      status: firstGroupStatus,
+      actionKey: firstActionKey,
+      timeMs: order.createdAt?.toMillis?.() ?? 0,
+      timeLabel: timeStr,
+      lines: initialLines,
+      subtotal: initialTotal,
+      titleHint: '首笔',
+    },
+    ...appendGroupMeta.map((m) => ({
+      key: `append-${m.batch.id}`,
+      status: m.status,
+      actionKey: m.actionKey,
+      timeMs: m.batch.appendedAt?.toMillis?.() ?? 0,
+      timeLabel: batchTimeStr(m.batch),
+      lines: m.batch.lines,
+      subtotal: Number(m.batch.deltaAmount) || 0,
+    })),
+  ];
+  const displayGroups = segments.reduce<
+    Array<{
+      key: string;
+      status: 'confirmed' | 'pending' | 'unpaid';
+      timeLabel?: string;
+      lines: OrderLineDoc[];
+      subtotal: number;
+      titleHint?: string;
+    }>
+  >((acc, seg) => {
+    const last = acc[acc.length - 1];
+    const canMerge =
+      !!last &&
+      last.status === seg.status &&
+      ((last.key.startsWith('merge:') ? last.key.slice(6) : null) === seg.actionKey ||
+        (seg.actionKey == null && last.status === 'unpaid'));
+    if (canMerge && last) {
+      last.lines = [...last.lines, ...seg.lines];
+      last.subtotal += seg.subtotal;
+      return acc;
+    }
+    acc.push({
+      key: `merge:${seg.actionKey ?? `${seg.key}:${seg.timeMs}`}`,
+      status: seg.status,
+      timeLabel: seg.timeLabel,
+      lines: [...seg.lines],
+      subtotal: seg.subtotal,
+      titleHint: seg.titleHint,
+    });
+    return acc;
+  }, []);
+  const statusText = {
+    confirmed: '已确认',
+    pending: '待确认',
+    unpaid: '待付款',
+  } as const;
 
   const uploadHintTop =
     order.status === 'partial_paid'
@@ -747,7 +909,7 @@ export default function OrderDetail() {
         {canAddItems ? (
           <div>
             <Link
-              to={`${base}/orders/${encodeURIComponent(order.orderNumber)}/add-items`}
+              to={`${base}?appendOrder=${encodeURIComponent(order.orderNumber)}`}
               className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-dashed border-emerald-400 bg-emerald-50/80 text-sm font-semibold text-emerald-900"
             >
               ＋ 加菜 / 补购商品
@@ -760,47 +922,39 @@ export default function OrderDetail() {
 
         {useSplitLayout ? (
           <div className="space-y-4">
-            <div>
-              <h2 className="mb-2 text-sm font-semibold text-gray-900">首单</h2>
-              <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
-                {initialLines.map((l, idx) => (
-                  <li
-                    key={`init-${l.productId}-${idx}`}
-                    className="flex justify-between gap-2 px-3 py-2"
-                  >
-                      <span>
-                        {l.name}
-                        {linePromoTag(l)} ×{l.quantity}
-                      </span>
-                    <span className="tabular-nums font-medium">
-                      {formatMYR(l.subtotal)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-                <span>首单小计</span>
-                <span>{formatMYR(initialTotal)}</span>
-              </div>
-            </div>
-            {confirmedAppendBatches.map((b) => (
+            {displayGroups.map((g, idx) => (
               <div
-                key={b.id}
-                className="rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-3"
+                key={g.key}
+                className={`rounded-xl px-3 py-3 ${
+                  g.status === 'confirmed'
+                    ? 'border border-gray-200 bg-gray-50/80'
+                    : 'border border-indigo-100 bg-indigo-50/40'
+                }`}
               >
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-gray-900">
-                    加购（补款已确认）
+                    支付组 {idx + 1}
+                    {idx === 0 && g.titleHint ? `（${g.titleHint}）` : ''}
                   </h3>
-                  <span className="text-xs font-medium text-emerald-800">
-                    已入账
+                  <span
+                    className={`text-xs font-medium ${
+                      g.status === 'confirmed'
+                        ? 'text-emerald-800'
+                        : g.status === 'pending'
+                          ? 'text-sky-800'
+                          : 'text-amber-900'
+                    }`}
+                  >
+                    {statusText[g.status]}
                   </span>
                 </div>
-                <p className="mb-2 text-xs text-gray-600">{batchTimeStr(b)}</p>
+                {g.timeLabel ? (
+                  <p className="mb-2 text-xs text-gray-600">{g.timeLabel}</p>
+                ) : null}
                 <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                  {b.lines.map((l, idx) => (
+                  {aggregateOrderLines(g.lines).map((l, idx2) => (
                     <li
-                      key={`${b.id}-${l.productId}-${idx}`}
+                      key={`${g.key}-${l.productId}-${idx2}`}
                       className="flex justify-between gap-2 px-3 py-2 text-sm"
                     >
                       <span>
@@ -815,80 +969,17 @@ export default function OrderDetail() {
                 </ul>
                 <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
                   <span>本笔小计</span>
-                  <span>{formatMYR(b.deltaAmount)}</span>
+                  <span>{formatMYR(g.subtotal)}</span>
                 </div>
               </div>
             ))}
-            {pendingAppendBatches.length > 0 ? (
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold text-indigo-950">加购</h3>
-                  <span className="text-xs font-medium text-amber-900">
-                    待商户确认 · 待付{' '}
-                    {formatMYR(
-                      pendingAppendBatches.reduce(
-                        (s, b) => s + (Number(b.deltaAmount) || 0),
-                        0
-                      )
-                    )}
-                  </span>
-                </div>
-                <p className="mb-2 text-xs text-gray-600">
-                  {(() => {
-                    const sorted = [...pendingAppendBatches].sort(
-                      (a, b) =>
-                        (a.appendedAt?.toMillis?.() ?? 0) -
-                        (b.appendedAt?.toMillis?.() ?? 0)
-                    );
-                    const t0 = sorted[0]?.appendedAt;
-                    const t1 = sorted[sorted.length - 1]?.appendedAt;
-                    return sorted.length > 1 &&
-                      t0 &&
-                      t1 &&
-                      t0.toMillis() !== t1.toMillis()
-                      ? `${t0.toDate().toLocaleString()} — ${t1.toDate().toLocaleString()}`
-                      : batchTimeStr(sorted[0]!);
-                  })()}
-                </p>
-                <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                  {[...pendingAppendBatches]
-                    .sort(
-                      (a, b) =>
-                        (a.appendedAt?.toMillis?.() ?? 0) -
-                        (b.appendedAt?.toMillis?.() ?? 0)
-                    )
-                    .flatMap((b) => b.lines)
-                    .map((l, idx) => (
-                      <li
-                        key={`pend-${l.productId}-${idx}`}
-                        className="flex justify-between gap-2 px-3 py-2 text-sm"
-                      >
-                        <span>
-                          {l.name}
-                          {linePromoTag(l)} ×{l.quantity}
-                        </span>
-                        <span className="tabular-nums font-medium">
-                          {formatMYR(l.subtotal)}
-                        </span>
-                      </li>
-                    ))}
-                </ul>
-                <div className="mt-2 flex justify-between text-sm font-semibold text-indigo-950">
-                  <span>加购小计</span>
-                  <span>
-                    {formatMYR(
-                      pendingAppendBatches.reduce(
-                        (s, b) => s + (Number(b.deltaAmount) || 0),
-                        0
-                      )
-                    )}
-                  </span>
-                </div>
-              </div>
-            ) : null}
             <div className="flex justify-between border-t border-gray-200 pt-3 text-sm font-semibold text-gray-900">
-              <span>应付合计</span>
+              <span>订单总额</span>
               <span>{formatMYR(order.totalAmount)}</span>
+            </div>
+            <div className="flex justify-between text-sm font-semibold text-amber-900">
+              <span>当前待支付</span>
+              <span>{formatMYR(order.pendingAmount ?? 0)}</span>
             </div>
           </div>
         ) : (
@@ -911,8 +1002,12 @@ export default function OrderDetail() {
               ))}
             </ul>
             <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-              <span>应付合计</span>
+              <span>订单总额</span>
               <span>{formatMYR(order.totalAmount)}</span>
+            </div>
+            <div className="mt-1 flex justify-between text-sm font-semibold text-amber-900">
+              <span>当前待支付</span>
+              <span>{formatMYR(order.pendingAmount ?? 0)}</span>
             </div>
           </div>
         )}
@@ -1248,50 +1343,40 @@ export default function OrderDetail() {
           {withUrlShots.length > 0 ? (
             useSplitLayout ? (
               <div className="space-y-4">
-                <div>
-                  <p className="mb-2 text-xs font-semibold text-gray-800">
-                    首单 / 未归类截图
-                  </p>
-                  {firstShots.length > 0 ? (
-                    <ul className="space-y-2">{firstShots.map(renderPaymentShot)}</ul>
-                  ) : (
-                    <p className="text-xs text-gray-500">暂无（补款截图可能在下方对应加购）</p>
-                  )}
-                </div>
-                {pendingAppendIds.length > 0 ? (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold text-indigo-900">
-                      加购补款截图（整笔待付{' '}
-                      {formatMYR(
-                        pendingAppendBatches.reduce(
-                          (s, b) => s + (Number(b.deltaAmount) || 0),
-                          0
-                        )
-                      )}
-                      ）
-                    </p>
-                    {lumpAppendShots.length > 0 ? (
-                      <ul className="space-y-2">
-                        {lumpAppendShots.map((s, i) =>
-                          renderPaymentShot(s, i)
-                        )}
-                      </ul>
-                    ) : (
-                      <p className="text-xs text-gray-500">
-                        尚未上传补款截图
-                      </p>
-                    )}
-                  </div>
-                ) : null}
-                {confirmedAppendBatches.map((b) => {
-                  const bs = withUrlShots.filter((x) => x.appendBatchId === b.id);
-                  if (bs.length === 0) return null;
+                {displayGroups.map((g, idx) => {
+                  const gKey = g.key.startsWith('merge:') ? g.key.slice(6) : g.key;
+                  let groupShots: typeof withUrlShots;
+                  if (gKey === 'initial' || gKey.startsWith('card_auto:')) {
+                    // 首组或卡支付组：未挂批次的截图
+                    groupShots = firstShots;
+                  } else if (gKey.startsWith('append_proof:')) {
+                    const bid = gKey.slice('append_proof:'.length);
+                    groupShots = withUrlShots.filter((x) => x.appendBatchId === bid);
+                  } else {
+                    groupShots = [];
+                  }
+                  const isCardGroup =
+                    gKey.startsWith('card_auto:') ||
+                    (g.status === 'confirmed' && order.cardPayment && groupShots.length === 0);
                   return (
-                    <div key={`shots-${b.id}`}>
-                      <p className="mb-2 text-xs font-semibold text-gray-700">
-                        历史加购截图 · {batchTimeStr(b)}
+                    <div key={`shots-${g.key}`}>
+                      <p
+                        className={`mb-2 text-xs font-semibold ${
+                          g.status === 'confirmed' ? 'text-gray-700' : 'text-indigo-900'
+                        }`}
+                      >
+                        支付组 {idx + 1}{g.timeLabel ? ` · ${g.timeLabel}` : ''}
                       </p>
-                      <ul className="space-y-2">{bs.map(renderPaymentShot)}</ul>
+                      {isCardGroup && groupShots.length === 0 ? (
+                        <CardPaymentBreakdown
+                          cardPayment={order.cardPayment!}
+                          lines={g.lines}
+                        />
+                      ) : groupShots.length > 0 ? (
+                        <ul className="space-y-2">{groupShots.map(renderPaymentShot)}</ul>
+                      ) : (
+                        <p className="text-xs text-gray-500">暂无截图</p>
+                      )}
                     </div>
                   );
                 })}
@@ -1301,6 +1386,13 @@ export default function OrderDetail() {
                 {withUrlShots.map((s, i) => renderPaymentShot(s, i))}
               </ul>
             )
+          ) : order.cardPayment &&
+            (order.initialPaymentConfirmedAt ||
+              (order.appendBatches ?? []).some((b) => b.confirmedAt)) ? (
+            <div>
+              <p className="mb-2 text-xs text-gray-500">卡扣款明细（无截图）</p>
+              <CardPaymentBreakdown cardPayment={order.cardPayment} lines={order.lines} />
+            </div>
           ) : (
             <p className="text-xs text-gray-500">尚未上传付款截图。</p>
           )}

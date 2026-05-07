@@ -412,6 +412,9 @@ async function md5DuplicateInShopOtherOrders(
  * 而不是固定 appendBatches 数组的第一项（否则多笔都会挤在同一档，后续加购永远缺图）。
  */
 function pickPendingAppendBatchIdForNewScreenshot(order: OrderDoc): string | undefined {
+  // 首笔尚未确认前，顾客提交的付款动作默认视为“覆盖当前待付总额”，
+  // 不强绑到某个 appendBatch，避免把同一次支付错误拆成两组。
+  if (!order.initialPaymentConfirmedAt) return undefined;
   const pendingBatches = (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
   if (pendingBatches.length === 0) return undefined;
   /**
@@ -1283,26 +1286,39 @@ export async function merchantConfirmAppendBatch(
 
     const supplement = Number(batch.deltaAmount) || 0;
     if (supplement <= 0) throw new Error('该笔加购金额无效');
+    const now = Timestamp.now();
+    const confirmInitialInSameAction = !o.initialPaymentConfirmedAt;
+    const initialSupplement = confirmInitialInSameAction
+      ? Math.max(0, computeFirstTrancheAmount(o))
+      : 0;
 
     const paidBefore = Number(o.paidAmount) || 0;
-    const newPaid = paidBefore + supplement;
+    const newPaid = paidBefore + supplement + initialSupplement;
     const newPending = Math.max(0, (Number(o.totalAmount) || 0) - newPaid);
     const nextStatus: OrderStatus =
       newPending <= 0.001 ? 'confirmed' : 'partial_paid';
 
     batches[idx] = {
       ...batch,
-      confirmedAt: Timestamp.now(),
+      confirmedAt: now,
       confirmedByUserId: actorUserId,
     };
 
     const history = [...(o.statusHistory ?? [])];
     history.push({
       action: 'confirm_append_batch',
-      timestamp: Timestamp.now(),
+      timestamp: now,
       userId: actorUserId,
       note: appendBatchId,
     });
+    if (confirmInitialInSameAction && initialSupplement > 0.001) {
+      history.push({
+        action: 'confirm_initial_payment',
+        timestamp: now,
+        userId: actorUserId,
+        note: `merged_with_append=${appendBatchId};initial=${initialSupplement.toFixed(2)}`,
+      });
+    }
 
     const prevStats = project.stats ?? {
       totalOrders: 0,
@@ -1318,6 +1334,9 @@ export async function merchantConfirmAppendBatch(
       paidAmount: newPaid,
       pendingAmount: newPending,
       status: nextStatus,
+      ...(confirmInitialInSameAction
+        ? { initialPaymentConfirmedAt: now }
+        : {}),
       statusHistory: history,
       updatedAt: serverTimestamp(),
     });
@@ -1325,7 +1344,11 @@ export async function merchantConfirmAppendBatch(
     tx.update(projectRef, {
       stats: {
         ...prevStats,
-        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+        confirmedRevenue:
+          (prevStats.confirmedRevenue ?? 0) + supplement + initialSupplement,
+        ...(confirmInitialInSameAction
+          ? { unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1) }
+          : {}),
         ...(nextStatus === 'confirmed'
           ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
           : {}),
@@ -1417,7 +1440,11 @@ export async function merchantConfirmPendingAppendBatches(
   const pre = preSnap.data() as OrderDoc;
   await assertMerchantCanManageOrder(actorUserId, pre);
 
-  if (pre.status !== 'partial_paid') {
+  if (
+    pre.status !== 'partial_paid' &&
+    pre.status !== 'pending' &&
+    pre.status !== 'unpaid'
+  ) {
     throw new Error('当前没有待确认的加购补款');
   }
 
@@ -1425,7 +1452,11 @@ export async function merchantConfirmPendingAppendBatches(
     const oSnap = await tx.get(orderRef);
     if (!oSnap.exists()) throw new Error('订单不存在');
     const o = oSnap.data() as OrderDoc;
-    if (o.status !== 'partial_paid') {
+    if (
+      o.status !== 'partial_paid' &&
+      o.status !== 'pending' &&
+      o.status !== 'unpaid'
+    ) {
       throw new Error('订单状态已变更，请刷新后重试');
     }
 
@@ -1458,6 +1489,10 @@ export async function merchantConfirmPendingAppendBatches(
     if (supplement <= 0) throw new Error('加购金额无效');
 
     const now = Timestamp.now();
+    const confirmInitialInSameAction = !o.initialPaymentConfirmedAt;
+    const initialSupplement = confirmInitialInSameAction
+      ? Math.max(0, computeFirstTrancheAmount(o))
+      : 0;
     const newBatches = batches.map((b) => {
       if (!b.confirmedAt && pendingIds.includes(b.id)) {
         return {
@@ -1470,7 +1505,7 @@ export async function merchantConfirmPendingAppendBatches(
     });
 
     const paidBefore = Number(o.paidAmount) || 0;
-    const newPaid = paidBefore + supplement;
+    const newPaid = paidBefore + supplement + initialSupplement;
     const newPending = Math.max(0, (Number(o.totalAmount) || 0) - newPaid);
     const nextStatus: OrderStatus =
       newPending <= 0.001 ? 'confirmed' : 'partial_paid';
@@ -1478,10 +1513,18 @@ export async function merchantConfirmPendingAppendBatches(
     const history = [...(o.statusHistory ?? [])];
     history.push({
       action: 'confirm_pending_append_batches',
-      timestamp: Timestamp.now(),
+      timestamp: now,
       userId: actorUserId,
       note: pendingIds.join(','),
     });
+    if (confirmInitialInSameAction && initialSupplement > 0.001) {
+      history.push({
+        action: 'confirm_initial_payment',
+        timestamp: now,
+        userId: actorUserId,
+        note: `merged_with_pending_append=${pendingIds.join(',')};initial=${initialSupplement.toFixed(2)}`,
+      });
+    }
 
     const prevStats = project.stats ?? {
       totalOrders: 0,
@@ -1497,6 +1540,9 @@ export async function merchantConfirmPendingAppendBatches(
       paidAmount: newPaid,
       pendingAmount: newPending,
       status: nextStatus,
+      ...(confirmInitialInSameAction
+        ? { initialPaymentConfirmedAt: now }
+        : {}),
       statusHistory: history,
       updatedAt: serverTimestamp(),
     });
@@ -1504,7 +1550,11 @@ export async function merchantConfirmPendingAppendBatches(
     tx.update(projectRef, {
       stats: {
         ...prevStats,
-        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+        confirmedRevenue:
+          (prevStats.confirmedRevenue ?? 0) + supplement + initialSupplement,
+        ...(confirmInitialInSameAction
+          ? { unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1) }
+          : {}),
         ...(nextStatus === 'confirmed'
           ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
           : {}),
