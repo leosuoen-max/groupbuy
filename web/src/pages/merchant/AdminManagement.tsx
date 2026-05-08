@@ -2,12 +2,24 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
-import { createProjectInvitation } from '../../lib/invitationService';
+import { createShopInvitation } from '../../lib/invitationService';
+import {
+  listShopAdminPermissions,
+  removeProjectPermission,
+  updateProjectPermissionRole,
+  type PermissionRow,
+} from '../../lib/permissionService';
 import {
   listProjectsByShopId,
   type ProjectRow,
 } from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
+
+function resolveInviteOrigin(): string {
+  const envOrigin = (import.meta.env.VITE_PUBLIC_APP_ORIGIN as string | undefined)?.trim();
+  if (envOrigin) return envOrigin.replace(/\/+$/, '');
+  return window.location.origin;
+}
 
 export default function AdminManagement() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
@@ -19,11 +31,12 @@ export default function AdminManagement() {
   const [shopName, setShopName] = useState('');
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [projectId, setProjectId] = useState('');
   const [role, setRole] = useState<'high_admin' | 'normal_admin'>(
     'normal_admin'
   );
   const [busy, setBusy] = useState(false);
+  const [permBusyId, setPermBusyId] = useState<string | null>(null);
+  const [shopAdmins, setShopAdmins] = useState<PermissionRow[]>([]);
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -47,10 +60,6 @@ export default function AdminManagement() {
       setShopName(shop.data.name);
       const list = await listProjectsByShopId(shop.id);
       setProjects(list);
-      setProjectId((prev) => {
-        if (prev && list.some((p) => p.id === prev)) return prev;
-        return list[0]?.id ?? '';
-      });
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -68,23 +77,43 @@ export default function AdminManagement() {
     });
   }, [authLoading, user, refresh]);
 
+  useEffect(() => {
+    if (!shopId) {
+      setShopAdmins([]);
+      return;
+    }
+    let cancelled = false;
+    void listShopAdminPermissions(shopId)
+      .then((rows) => {
+        if (!cancelled) setShopAdmins(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setShopAdmins([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shopId, busy]);
+
   const handleGenerate = async () => {
-    if (!user || !shopId || !projectId) {
-      setErr('请选择项目');
+    if (!user || !shopId) {
+      setErr('店铺未加载完成');
       return;
     }
     setBusy(true);
     setErr(null);
     setInviteUrl(null);
     try {
-      const code = await createProjectInvitation({
-        projectId,
+      const code = await createShopInvitation({
         shopId,
         role,
         invitedBy: user.uid,
       });
-      const url = `${window.location.origin}/invite/${encodeURIComponent(code)}`;
+      const url = `${resolveInviteOrigin()}/invite/${encodeURIComponent(code)}`;
       setInviteUrl(url);
+      if (/localhost|127\.0\.0\.1/.test(resolveInviteOrigin())) {
+        setErr('当前生成的是本机地址（localhost），外部设备无法访问。请配置 VITE_PUBLIC_APP_ORIGIN 为可访问域名/IP。');
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : '生成失败');
     } finally {
@@ -100,6 +129,46 @@ export default function AdminManagement() {
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const handleChangeRole = async (
+    p: PermissionRow,
+    nextRole: 'normal_admin' | 'high_admin'
+  ) => {
+    if (p.data.role === nextRole) return;
+    const roleLabel = nextRole === 'high_admin' ? '高级管理员' : '普通管理员';
+    if (!confirm(`确认将该管理员改为「${roleLabel}」？`)) return;
+    setPermBusyId(p.id);
+    setErr(null);
+    try {
+      await updateProjectPermissionRole({
+        permissionId: p.id,
+        role: nextRole,
+      });
+      if (!shopId) return;
+      const rows = await listShopAdminPermissions(shopId);
+      setShopAdmins(rows);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '修改角色失败');
+    } finally {
+      setPermBusyId(null);
+    }
+  };
+
+  const handleRemovePermission = async (p: PermissionRow) => {
+    if (!confirm('确认移除该管理员的项目权限？')) return;
+    setPermBusyId(p.id);
+    setErr(null);
+    try {
+      await removeProjectPermission(p.id);
+      if (!shopId) return;
+      const rows = await listShopAdminPermissions(shopId);
+      setShopAdmins(rows);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '移除失败');
+    } finally {
+      setPermBusyId(null);
     }
   };
 
@@ -149,32 +218,10 @@ export default function AdminManagement() {
         <p className="mb-3 text-sm text-amber-800">{err}</p>
       ) : null}
 
-      {projects.length === 0 ? (
-        <p className="text-sm text-gray-600">
-          暂无项目，请先到「项目列表」创建一个草稿或已发布项目。
-        </p>
-      ) : (
-        <>
-          <label className="mb-3 block text-sm text-gray-800">
-            选择项目（链接）
-            <select
-              className={input}
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.data.title?.trim() || '未命名'}（
-                  {p.data.status === 'draft'
-                    ? '草稿'
-                    : p.data.status === 'published'
-                      ? '已发布'
-                      : '已截止'}
-                  ）
-                </option>
-              ))}
-            </select>
-          </label>
+      <>
+          <p className="mb-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+            先邀请加入店铺管理员列表；项目权限请在项目创建/编辑页分配。
+          </p>
 
           <fieldset className="mb-4 text-sm text-gray-800">
             <legend className="mb-2 font-medium">权限级别</legend>
@@ -202,11 +249,11 @@ export default function AdminManagement() {
 
           <button
             type="button"
-            disabled={busy || !projectId}
+            disabled={busy}
             className="mb-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300"
             onClick={() => void handleGenerate()}
           >
-            {busy ? '生成中…' : '生成邀请链接'}
+            {busy ? '生成中…' : '邀请加入店铺管理员'}
           </button>
 
           {inviteUrl ? (
@@ -226,8 +273,63 @@ export default function AdminManagement() {
               </button>
             </div>
           ) : null}
-        </>
-      )}
+
+          <section className="mt-4">
+            <h3 className="mb-2 text-sm font-semibold text-gray-900">
+              店铺管理员列表 <span className="text-xs text-gray-500">{shopAdmins.length} 人</span>
+            </h3>
+            {shopAdmins.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-gray-300 px-3 py-4 text-center text-xs text-gray-500">
+                当前店铺暂无受邀管理员。
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {shopAdmins.map((p) => (
+                  <div
+                    key={p.id}
+                    className="rounded-xl border border-gray-200 bg-white p-3 text-xs text-gray-800"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-semibold text-gray-900">
+                          用户 {p.data.userId.slice(-8)}
+                        </p>
+                        <p className="text-[11px] text-gray-500">
+                          授权时间：
+                          {p.data.grantedAt?.toDate?.().toLocaleString?.() ?? '—'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="h-8 rounded-lg border border-gray-200 bg-white px-2 text-xs"
+                          value={p.data.role}
+                          disabled={permBusyId === p.id}
+                          onChange={(e) =>
+                            void handleChangeRole(
+                              p,
+                              e.target.value as 'normal_admin' | 'high_admin'
+                            )
+                          }
+                        >
+                          <option value="normal_admin">普通管理员</option>
+                          <option value="high_admin">高级管理员</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="h-8 rounded-lg border border-rose-200 bg-rose-50 px-2 text-xs font-medium text-rose-700 disabled:opacity-50"
+                          disabled={permBusyId === p.id}
+                          onClick={() => void handleRemovePermission(p)}
+                        >
+                          {permBusyId === p.id ? '处理中…' : '移出店铺'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+      </>
 
       <div className="mt-6 flex flex-wrap gap-2">
         <Link

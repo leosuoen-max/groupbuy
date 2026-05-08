@@ -90,7 +90,7 @@ export default function Home() {
           </li>
           <li>
             <Link className={link} to="/register">
-              注册（占位）
+              注册（手机号验证码）
             </Link>
           </li>
           <li>

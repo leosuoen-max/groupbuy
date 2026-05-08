@@ -230,6 +230,10 @@ export default function OrderDetail() {
   const [deliveryPoints, setDeliveryPoints] = useState<MockDeliveryPoint[]>([]);
   const [deliveryPointsLoading, setDeliveryPointsLoading] = useState(false);
   const [deliveryPointsErr, setDeliveryPointsErr] = useState<string | null>(null);
+  const [shopPaymentMethods, setShopPaymentMethods] = useState<
+    { id: string; name: string; qrCodeUrl: string }[]
+  >([]);
+  const [qrPreview, setQrPreview] = useState<{ name: string; url: string } | null>(null);
   const [deliveryReadonlyDetailOpen, setDeliveryReadonlyDetailOpen] =
     useState(false);
   const orphanPointMigratedRef = useRef(false);
@@ -338,6 +342,32 @@ export default function OrderDetail() {
   }, [editingContact, order, projectId]);
 
   useEffect(() => {
+    if (!order?.shopSlug) {
+      setShopPaymentMethods([]);
+      return;
+    }
+    let cancelled = false;
+    void getShopBySlug(order.shopSlug)
+      .then((shopRow) => {
+        if (cancelled) return;
+        const methods = (shopRow?.data.paymentMethods ?? [])
+          .map((x) => ({
+            id: x.id,
+            name: (x.name ?? '').trim() || '收款码',
+            qrCodeUrl: (x.qrCodeUrl ?? '').trim(),
+          }))
+          .filter((x) => Boolean(x.qrCodeUrl));
+        setShopPaymentMethods(methods);
+      })
+      .catch(() => {
+        if (!cancelled) setShopPaymentMethods([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [order?.shopSlug]);
+
+  useEffect(() => {
     if (!editingContact) orphanPointMigratedRef.current = false;
   }, [editingContact]);
 
@@ -366,6 +396,7 @@ export default function OrderDetail() {
   const canCardPay =
     !!order &&
     !!projectDoc &&
+    order.status !== 'cancelled' &&
     hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
 
@@ -393,6 +424,10 @@ export default function OrderDetail() {
 
   const handleCardPay = useCallback(async () => {
     if (!order || !projectDoc) return;
+    if (order.status === 'cancelled') {
+      setCardError('订单已取消，无法继续钱包/次卡支付');
+      return;
+    }
     if (!cardPlan?.ok) return;
     if (!confirm(`将使用 ${cardPlan.summary.passUseCount > 0 ? `次卡 ${cardPlan.summary.passUseCount} 次` : ''}${cardPlan.summary.passUseCount > 0 && cardPlan.walletDeduct > 0 ? ' + ' : ''}${cardPlan.walletDeduct > 0 ? `钱包 RM ${cardPlan.walletDeduct.toFixed(2)}` : ''} 付清本订单。\n确认抵扣并自动确认订单？`)) {
       return;
@@ -651,6 +686,8 @@ export default function OrderDetail() {
     order.status === 'partial_paid'
       ? '上传补款截图'
       : '选择图片上传';
+  const primaryPaymentMethod = shopPaymentMethods[0] ?? null;
+  const extraPaymentMethods = shopPaymentMethods.slice(1);
 
   const renderPaymentShot = (s: ParsedScreenshotEntry, i: number) => (
     <li
@@ -1171,13 +1208,91 @@ export default function OrderDetail() {
           </div>
         ) : null}
 
-        <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">
+          <h2 className="mb-2 text-sm font-semibold text-indigo-900">
             支付方法二：转账、上传付款截图
           </h2>
-          <p className="mb-3 text-xs leading-relaxed text-gray-600">
-            {uploadHintTop}
-          </p>
+          <div className="flex gap-3">
+            <div className="w-[6.5rem] shrink-0">
+              {primaryPaymentMethod ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setQrPreview({
+                        name: primaryPaymentMethod.name,
+                        url: primaryPaymentMethod.qrCodeUrl,
+                      })
+                    }
+                    className="overflow-hidden rounded-xl border border-indigo-100 bg-white shadow-sm"
+                  >
+                    <img
+                      src={primaryPaymentMethod.qrCodeUrl}
+                      alt={primaryPaymentMethod.name}
+                      className="aspect-square w-[6.5rem] object-cover"
+                      loading="lazy"
+                    />
+                  </button>
+                  <p className="mt-1 text-center text-[11px] text-indigo-900/80">
+                    {primaryPaymentMethod.name}
+                  </p>
+                </>
+              ) : (
+                <div className="flex aspect-square w-[6.5rem] items-center justify-center rounded-xl border border-dashed border-indigo-200 bg-white text-[11px] text-indigo-500">
+                  暂无收款码
+                </div>
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="mb-2 text-xs leading-relaxed text-indigo-900/80">
+                请按「应付合计」转账。可一笔付清或分多笔支付，到账总额与订单金额一致即可。
+              </p>
+              {canUpload ? (
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={onPickFile}
+                  className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-3 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {uploading ? '上传中…' : uploadButtonLabel}
+                </button>
+              ) : (
+                <div className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-indigo-100 bg-white px-2 text-xs text-gray-500">
+                  {order.status === 'cancelled'
+                    ? '订单已取消'
+                    : order.status === 'confirmed'
+                      ? '已全部确认'
+                      : '当前不可上传'}
+                </div>
+              )}
+              <p className="mt-1 truncate text-[11px] text-indigo-900/70" title={uploadHintTop}>
+                {uploadHintTop}
+              </p>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              {extraPaymentMethods.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {extraPaymentMethods.map((x) => (
+                    <button
+                      key={x.id}
+                      type="button"
+                      onClick={() => setQrPreview({ name: x.name, url: x.qrCodeUrl })}
+                      className="rounded-full border border-indigo-200 bg-white px-2 py-0.5 text-[10px] text-indigo-700"
+                    >
+                      {x.name}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-[11px] text-indigo-900/70">点击收款码可放大 / 下载</span>
+              )}
+            </div>
+            <span className="shrink-0 text-[11px] text-amber-700">没有付款凭证，不配送。</span>
+          </div>
+        </div>
 
           <input
             ref={fileRef}
@@ -1186,25 +1301,6 @@ export default function OrderDetail() {
             className="hidden"
             onChange={onFileChange}
           />
-
-          {canUpload ? (
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={onPickFile}
-              className="mb-3 inline-flex h-10 items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {uploading ? '上传中…' : uploadButtonLabel}
-            </button>
-          ) : (
-            <p className="mb-3 text-xs text-amber-800">
-              {order.status === 'cancelled'
-                ? '订单已取消，无法上传。'
-                : order.status === 'confirmed'
-                  ? '订单已全部确认收款，无需再上传。若刚加菜变为待付款，请刷新页面。'
-                  : '当前状态不可上传。'}
-            </p>
-          )}
 
           {uploadError ? (
             <p className="mb-2 text-xs text-red-600">{uploadError}</p>
@@ -1253,10 +1349,7 @@ export default function OrderDetail() {
               <p className="mb-2 text-xs text-gray-500">卡扣款明细（无截图）</p>
               <CardPaymentBreakdown cardPayment={order.cardPayment} lines={order.lines} />
             </div>
-          ) : (
-            <p className="text-xs text-gray-500">尚未上传付款截图。</p>
-          )}
-        </div>
+          ) : null}
 
         <div className="flex flex-wrap gap-2">
           <Link
@@ -1273,6 +1366,44 @@ export default function OrderDetail() {
           </Link>
         </div>
       </div>
+      {qrPreview ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4"
+          onClick={() => setQrPreview(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="mb-2 text-center text-sm font-semibold text-gray-900">
+              {qrPreview.name}
+            </p>
+            <img
+              src={qrPreview.url}
+              alt={qrPreview.name}
+              className="aspect-square w-full rounded-xl border border-gray-100 object-contain"
+            />
+            <div className="mt-3 flex gap-2">
+              <a
+                href={qrPreview.url}
+                download={`${qrPreview.name || '收款码'}.png`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-indigo-600 px-3 text-sm font-semibold text-white"
+              >
+                下载收款码
+              </a>
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 px-4 text-sm text-gray-700"
+                onClick={() => setQrPreview(null)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageShell>
   );
 }

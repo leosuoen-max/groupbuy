@@ -4,7 +4,6 @@ import type {
   OrderLineDoc,
 } from '../types/firestore';
 import {
-  orderHasPaymentProof,
   parseScreenshotEntries,
 } from './paymentScreenshotHelpers';
 import { buildPaymentGroups } from './paymentGroups';

@@ -56,6 +56,33 @@ export async function createProjectInvitation(input: {
   throw new Error('无法生成唯一邀请码，请重试');
 }
 
+/** 店铺级管理员邀请：先进入店铺管理员池，再由项目编辑分配项目权限 */
+export async function createShopInvitation(input: {
+  shopId: string;
+  role: 'high_admin' | 'normal_admin';
+  invitedBy: string;
+}): Promise<string> {
+  const db = getDb();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = randomCode();
+    const ref = doc(db, 'invitations', code);
+    const snap = await getDoc(ref);
+    if (snap.exists()) continue;
+    const expiresAt = Timestamp.fromMillis(Date.now() + INV_TTL_MS);
+    await setDoc(ref, {
+      code,
+      shopId: input.shopId,
+      scope: 'shop',
+      role: input.role,
+      invitedBy: input.invitedBy,
+      expiresAt,
+      createdAt: serverTimestamp(),
+    });
+    return code;
+  }
+  throw new Error('无法生成唯一邀请码，请重试');
+}
+
 export async function getInvitationByCode(
   code: string
 ): Promise<{ id: string; data: InvitationDoc } | null> {
@@ -88,30 +115,25 @@ export async function acceptProjectInvitation(
   if (invRow.data.expiresAt.toMillis() < Date.now()) {
     throw new Error('邀请已过期');
   }
-  if (invRow.data.scope !== 'project' || !invRow.data.projectId) {
-    throw new Error('邀请类型不支持');
-  }
-
-  const project = await getProject(invRow.data.projectId);
-  if (!project) throw new Error('项目不存在');
-
-  const shopRow = await getShopById(project.data.shopId);
+  const shopRow = invRow.data.shopId ? await getShopById(invRow.data.shopId) : null;
   if (!shopRow) throw new Error('店铺不存在');
 
   if (shopRow.data.ownerId === userId) {
     throw new Error('你是店铺创建人，无需通过邀请加入');
   }
 
-  if (invRow.data.shopId && invRow.data.shopId !== shopRow.id) {
-    throw new Error('邀请与店铺不匹配');
-  }
-  if (project.data.shopId !== shopRow.id) {
-    throw new Error('项目与店铺不匹配');
-  }
-
   const db = getDb();
   const invRef = doc(db, 'invitations', c);
-  const permRef = doc(db, 'permissions', permissionDocId(userId, project.id));
+  const project = invRow.data.projectId ? await getProject(invRow.data.projectId) : null;
+  if (invRow.data.scope === 'project') {
+    if (!project) throw new Error('项目不存在');
+    if (project.data.shopId !== shopRow.id) {
+      throw new Error('项目与店铺不匹配');
+    }
+  }
+  const targetProjectId =
+    invRow.data.scope === 'project' ? invRow.data.projectId ?? '' : '__shop__';
+  const permRef = doc(db, 'permissions', permissionDocId(userId, targetProjectId));
 
   await runTransaction(db, async (tx) => {
     const invSnap = await tx.get(invRef);
@@ -126,9 +148,9 @@ export async function acceptProjectInvitation(
       permRef,
       {
         userId,
-        projectId: project.id,
-        scope: 'project',
-        scopeId: project.id,
+        projectId: targetProjectId,
+        scope: invData.scope,
+        scopeId: invData.scope === 'shop' ? shopRow.id : invData.projectId,
         role: invData.role,
         grantedBy: invData.invitedBy,
         invitationId: invRef.id,

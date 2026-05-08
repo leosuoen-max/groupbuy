@@ -9,6 +9,8 @@ import {
   listCardLedger,
   listCardRequestsByTemplate,
   listCustomerCardsByTemplate,
+  merchantToggleCustomerCardActive,
+  merchantZeroCustomerCardRemaining,
   rejectCardPurchaseRequest,
   type CardLedgerRow,
   type CardPurchaseRequestRow,
@@ -172,6 +174,51 @@ export default function CardTemplateDetail() {
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '拒绝失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleToggleHolder = async (h: CustomerCardRow, enable: boolean) => {
+    const action = enable ? '启用' : '停用';
+    if (!confirm(`确认${action}该持卡用户？`)) return;
+    const key = `holder-toggle-${h.id}`;
+    setBusyId(key);
+    setMsg(null);
+    try {
+      await merchantToggleCustomerCardActive({ cardId: h.id, enable });
+      setMsg(enable ? '已启用该卡，可继续使用' : '已停用该卡');
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : `${action}失败`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleZeroHolder = async (h: CustomerCardRow) => {
+    const unit = isStored ? '余额' : '次数';
+    const remain = Number(h.data.remaining ?? 0);
+    if (remain <= 0) {
+      setMsg(`该卡${unit}已为 0，无需清零`);
+      return;
+    }
+    if (
+      !confirm(
+        `确认将该卡${unit}清零？\n当前剩余：${isStored ? `RM ${remain.toFixed(2)}` : `${remain} 次`}\n清零后只能重新购买或充值恢复。`
+      )
+    ) {
+      return;
+    }
+    const key = `holder-zero-${h.id}`;
+    setBusyId(key);
+    setMsg(null);
+    try {
+      await merchantZeroCustomerCardRemaining({ cardId: h.id });
+      setMsg(`已清零该卡${unit}`);
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '清零失败');
     } finally {
       setBusyId(null);
     }
@@ -377,43 +424,79 @@ export default function CardTemplateDetail() {
           <div className="space-y-2">
             {holders.map((h) => (
               <div key={h.id} className="rounded-xl border border-gray-200 bg-white p-3 text-xs text-gray-800">
-                <div className="flex flex-wrap items-baseline justify-between gap-1">
-                  <span className="font-semibold">
-                    {h.data.customerName ?? '（未填姓名）'}
-                    {h.data.customerPhone ? ` · ${h.data.customerPhone}` : ''}
-                    <span className="ml-1 font-normal text-gray-500">
-                      ({h.data.customerKey.slice(-6)})
-                    </span>
-                  </span>
-                  <span
-                    className={`rounded-md px-1.5 py-0.5 text-[11px] leading-none ${
-                      h.data.status === 'active'
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : h.data.status === 'pending'
-                          ? 'bg-amber-50 text-amber-800'
-                          : 'bg-slate-100 text-slate-500'
-                    }`}
-                  >
-                    {cardStatusLabel[h.data.status]}
-                  </span>
-                </div>
-                <div className="mt-0.5 text-gray-700">
-                  剩余{' '}
-                  {isStored
-                    ? `RM ${Number(h.data.remaining ?? 0).toFixed(2)}`
-                    : `${Number(h.data.remaining ?? 0)} 次`}{' '}
-                  · 累计入{' '}
-                  {isStored
-                    ? `RM ${Number(h.data.totalIn ?? 0).toFixed(2)}`
-                    : `${Number(h.data.totalIn ?? 0)} 次`}{' '}
-                  · 累计出{' '}
-                  {isStored
-                    ? `RM ${Number(h.data.totalOut ?? 0).toFixed(2)}`
-                    : `${Number(h.data.totalOut ?? 0)} 次`}
-                </div>
-                <div className="mt-0.5 text-gray-500">
-                  激活：{fmtTs(h.data.activatedAt)} · 到期：
-                  {h.data.validUntil ? fmtTs(h.data.validUntil) : '永久'}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline justify-between gap-1">
+                      <span className="font-semibold">
+                        {h.data.customerName ?? '（未填姓名）'}
+                        {h.data.customerPhone ? ` · ${h.data.customerPhone}` : ''}
+                        <span className="ml-1 font-normal text-gray-500">
+                          ({h.data.customerKey.slice(-6)})
+                        </span>
+                      </span>
+                      <span
+                        className={`rounded-md px-1.5 py-0.5 text-[11px] leading-none ${
+                          h.data.status === 'active'
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : h.data.status === 'pending'
+                              ? 'bg-amber-50 text-amber-800'
+                              : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {cardStatusLabel[h.data.status]}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-gray-700">
+                      剩余{' '}
+                      {isStored
+                        ? `RM ${Number(h.data.remaining ?? 0).toFixed(2)}`
+                        : `${Number(h.data.remaining ?? 0)} 次`}{' '}
+                      · 累计入{' '}
+                      {isStored
+                        ? `RM ${Number(h.data.totalIn ?? 0).toFixed(2)}`
+                        : `${Number(h.data.totalIn ?? 0)} 次`}{' '}
+                      · 累计出{' '}
+                      {isStored
+                        ? `RM ${Number(h.data.totalOut ?? 0).toFixed(2)}`
+                        : `${Number(h.data.totalOut ?? 0)} 次`}
+                    </div>
+                    <div className="mt-0.5 text-gray-500">
+                      激活：{fmtTs(h.data.activatedAt)} · 到期：
+                      {h.data.validUntil ? fmtTs(h.data.validUntil) : '永久'}
+                    </div>
+                  </div>
+                  <div className="flex w-[4.25rem] shrink-0 flex-col gap-1.5">
+                    {h.data.status === 'cancelled' ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 disabled:opacity-50"
+                        disabled={busyId === `holder-toggle-${h.id}`}
+                        onClick={() => void handleToggleHolder(h, true)}
+                      >
+                        {busyId === `holder-toggle-${h.id}` ? '处理中…' : '启用'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 disabled:opacity-50"
+                        disabled={busyId === `holder-toggle-${h.id}`}
+                        onClick={() => void handleToggleHolder(h, false)}
+                      >
+                        {busyId === `holder-toggle-${h.id}` ? '处理中…' : '停用'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700 disabled:opacity-50"
+                      disabled={
+                        busyId === `holder-zero-${h.id}` ||
+                        Number(h.data.remaining ?? 0) <= 0
+                      }
+                      onClick={() => void handleZeroHolder(h)}
+                    >
+                      {busyId === `holder-zero-${h.id}` ? '处理中…' : '清零'}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

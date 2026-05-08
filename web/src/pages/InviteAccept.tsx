@@ -10,11 +10,12 @@ import { getProject } from '../lib/projectService';
 import { getShopById } from '../lib/shopService';
 
 type InviteMeta = {
-  projectId: string;
+  projectId?: string;
   shopSlug: string;
   roleLabel: string;
   projectTitle: string;
   shopName: string;
+  scope: 'shop' | 'project';
 };
 
 export default function InviteAccept() {
@@ -48,26 +49,29 @@ export default function InviteAccept() {
         setErr('邀请已过期（24 小时内有效）');
         return;
       }
-      if (!row.data.projectId) {
-        setBoot('bad');
-        setErr('邀请数据不完整');
-        return;
-      }
-      const proj = await getProject(row.data.projectId);
-      const shop = proj ? await getShopById(proj.data.shopId) : null;
+      const proj = row.data.projectId ? await getProject(row.data.projectId) : null;
+      const shop = row.data.shopId
+        ? await getShopById(row.data.shopId)
+        : proj
+          ? await getShopById(proj.data.shopId)
+          : null;
       if (cancelled) return;
-      if (!proj || !shop) {
+      if (!shop || (row.data.scope === 'project' && !proj)) {
         setBoot('bad');
         setErr('项目或店铺不存在');
         return;
       }
       setMeta({
-        projectId: proj.id,
+        projectId: proj?.id,
         shopSlug: shop.data.slug,
         roleLabel:
           row.data.role === 'high_admin' ? '高级管理员' : '普通管理员',
-        projectTitle: proj.data.title?.trim() || '（项目）',
+        projectTitle:
+          row.data.scope === 'shop'
+            ? '店铺管理员邀请'
+            : proj?.data.title?.trim() || '（项目）',
         shopName: shop.data.name,
+        scope: row.data.scope,
       });
       setBoot('ready');
     })();
@@ -82,10 +86,14 @@ export default function InviteAccept() {
     setErr(null);
     try {
       await acceptProjectInvitation(code, user.uid);
-      navigate(
-        `/shop/${encodeURIComponent(meta.shopSlug)}/${encodeURIComponent(meta.projectId)}`,
-        { replace: true }
-      );
+      if (meta.scope === 'project' && meta.projectId) {
+        navigate(
+          `/shop/${encodeURIComponent(meta.shopSlug)}/${encodeURIComponent(meta.projectId)}`,
+          { replace: true }
+        );
+        return;
+      }
+      navigate(`/dashboard/${encodeURIComponent(meta.shopSlug)}`, { replace: true });
     } catch (e) {
       setErr(e instanceof Error ? e.message : '接受失败');
     } finally {

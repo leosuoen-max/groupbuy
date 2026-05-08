@@ -53,6 +53,26 @@ function getEffectiveSchemePrice(
   return { unit: scheme.price, isDiscount: false };
 }
 
+function getSeriesRequiredCount(
+  requirements: Record<string, number> | undefined,
+  series: { id: string; code?: string; name?: string }
+): number {
+  if (!requirements) return 0;
+  const byId = Number(requirements[series.id] ?? 0);
+  if (byId > 0) return byId;
+  const code = (series.code ?? '').trim();
+  if (code) {
+    const byCode = Number(requirements[code] ?? 0);
+    if (byCode > 0) return byCode;
+  }
+  const name = (series.name ?? '').trim();
+  if (name) {
+    const byName = Number(requirements[name] ?? 0);
+    if (byName > 0) return byName;
+  }
+  return 0;
+}
+
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -412,7 +432,7 @@ export default function ShopHome() {
     const effective = getEffectiveSchemePrice(scheme, now);
 
     for (const s of tool.series) {
-      const required = Number(scheme.requirements?.[s.id] ?? 0);
+      const required = getSeriesRequiredCount(scheme.requirements, s);
       const picked = draft.selectedBySeries[s.id] ?? [];
       if (picked.length !== required) return;
     }
@@ -635,51 +655,64 @@ export default function ShopHome() {
             const previewOptions = tool.series
               .flatMap((s) => s.options)
               .filter((o) => o.isActive && o.imageUrl);
+            const activeSchemes = tool.schemes.filter((x) => x.isActive);
+            const compactPreviewOptions = previewOptions.slice(0, 4);
+            const hiddenPreviewCount = Math.max(
+              0,
+              previewOptions.length - compactPreviewOptions.length
+            );
             return (
-              <article key={item.key} className="py-4">
-                <div className="rounded-2xl bg-white p-3 ring-1 ring-slate-100">
+              <article key={item.key} className="py-2.5">
+                <div className="rounded-2xl bg-white p-2.5 ring-1 ring-slate-100">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[17px] font-semibold leading-tight text-slate-900">
                       {tool.name}
                     </span>
-                    {tool.schemes
-                      .filter((x) => x.isActive)
-                      .map((s) => {
-                        const ep = getEffectiveSchemePrice(s, now);
-                        const isEarlyBird = Boolean(ep.discountEndsAt);
-                        return (
-                          <span
-                            key={s.id}
-                            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[12px] text-slate-700"
-                          >
-                            <span className="font-medium">{s.name}</span>
-                            <span>· RM {ep.unit.toFixed(2)}</span>
-                            {ep.isDiscount ? (
-                              <span
-                                className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
-                                  isEarlyBird
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-rose-100 text-rose-700'
-                                }`}
-                              >
-                                {isEarlyBird ? '早鸟价' : '特惠'}
-                              </span>
-                            ) : null}
-                          </span>
-                        );
-                      })}
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <div className="flex w-max items-center gap-2">
+                        {activeSchemes.map((s) => {
+                          const ep = getEffectiveSchemePrice(s, now);
+                          const isEarlyBird = Boolean(ep.discountEndsAt);
+                          return (
+                            <span
+                              key={s.id}
+                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[12px] text-slate-700"
+                            >
+                              <span className="font-medium">{s.name}</span>
+                              <span>· RM {ep.unit.toFixed(2)}</span>
+                              {ep.isDiscount ? (
+                                <span
+                                  className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                                    isEarlyBird
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-700'
+                                  }`}
+                                >
+                                  {isEarlyBird ? '早鸟价' : '特惠'}
+                                </span>
+                              ) : null}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      className="ml-auto rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                      className={`ml-auto ${
+                        openBundleToolId === tool.id
+                          ? 'rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700'
+                          : 'inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-400 text-2xl leading-none text-white shadow-sm'
+                      }`}
                       onClick={() =>
                         setOpenBundleToolId((prev) => (prev === tool.id ? null : tool.id))
                       }
+                      aria-label={openBundleToolId === tool.id ? '折叠套餐' : '展开套餐'}
                     >
-                      {openBundleToolId === tool.id ? '收起' : '去搭配'}
+                      {openBundleToolId === tool.id ? '折叠' : '+'}
                     </button>
                   </div>
                   {tool.description?.trim() ? (
-                    <p className="mt-1 whitespace-pre-line text-[12px] leading-snug text-slate-500">
+                    <p className="mt-1 truncate text-[12px] leading-snug text-slate-500">
                       {tool.description.trim()}
                     </p>
                   ) : null}
@@ -728,14 +761,30 @@ export default function ShopHome() {
                     );
                   })()}
                   {previewOptions.length > 0 ? (
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {previewOptions.map((o) => {
+                    <div
+                      className={`${
+                        openBundleToolId === tool.id
+                          ? 'mt-3 grid grid-cols-3 gap-2'
+                          : 'mt-2 grid grid-cols-4 gap-1.5'
+                      }`}
+                    >
+                      {(openBundleToolId === tool.id ? previewOptions : compactPreviewOptions).map(
+                        (o, idx) => {
                         const oSoldOut = o.stock <= 0;
+                        const isLast =
+                          idx ===
+                          (openBundleToolId === tool.id
+                            ? previewOptions.length - 1
+                            : compactPreviewOptions.length - 1);
+                        const showMoreOnThisTile =
+                          openBundleToolId !== tool.id && isLast && hiddenPreviewCount > 0;
                         return (
                           <div key={o.id} className="flex flex-col gap-1">
                             <button
                               type="button"
-                              className="relative aspect-square overflow-hidden rounded-2xl bg-slate-50 ring-1 ring-slate-100"
+                              className={`relative aspect-square overflow-hidden bg-slate-50 ring-1 ring-slate-100 ${
+                                openBundleToolId === tool.id ? 'rounded-2xl' : 'rounded-xl'
+                              }`}
                               onClick={() =>
                                 setBundleImagePreview({ url: o.imageUrl as string, name: o.name })
                               }
@@ -752,13 +801,23 @@ export default function ShopHome() {
                                   已售罄
                                 </span>
                               ) : null}
+                              {showMoreOnThisTile ? (
+                                <span className="absolute right-1 top-1 rounded-full bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                  +{hiddenPreviewCount}
+                                </span>
+                              ) : null}
                             </button>
-                            <div className="truncate px-0.5 text-center text-[12px] font-medium text-slate-800">
+                            <div
+                              className={`truncate px-0.5 text-center font-medium text-slate-700 ${
+                                openBundleToolId === tool.id ? 'text-[12px]' : 'text-[10px]'
+                              }`}
+                            >
                               {o.name}
                             </div>
                           </div>
                         );
-                      })}
+                      }
+                      )}
                     </div>
                   ) : null}
                   {openBundleToolId === tool.id ? (
@@ -802,15 +861,23 @@ export default function ShopHome() {
                                 <span>RM {ep.unit.toFixed(2)}</span>
                                 {ep.isDiscount ? (
                                   <span
-                                    className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                                    className={`inline-flex items-center gap-1 text-[11px] leading-none ${
                                       isEarlyBird
-                                        ? 'bg-amber-200 text-amber-900'
-                                        : 'bg-rose-200 text-rose-800'
+                                        ? 'text-amber-800'
+                                        : 'rounded-md bg-rose-200 px-1.5 py-0.5 font-semibold text-rose-800'
                                     }`}
                                   >
-                                    <span>{isEarlyBird ? '早鸟价' : '特惠'}</span>
+                                    <span
+                                      className={
+                                        isEarlyBird
+                                          ? 'rounded-md bg-amber-200 px-1.5 py-0.5 font-semibold text-amber-900'
+                                          : ''
+                                      }
+                                    >
+                                      {isEarlyBird ? '早鸟价' : '特惠'}
+                                    </span>
                                     {isEarlyBird && ep.discountEndsAt ? (
-                                      <span className="font-normal opacity-90">
+                                      <span className="font-medium text-amber-700">
                                         截止 {new Date(ep.discountEndsAt).toLocaleString('zh-CN', {
                                           month: '2-digit',
                                           day: '2-digit',
@@ -855,7 +922,10 @@ export default function ShopHome() {
                       {scheme ? (
                         <div className="space-y-3 pt-3">
                           {tool.series.map((series, sIdx) => {
-                            const required = Number(scheme.requirements?.[series.id] ?? 0);
+                            const required = getSeriesRequiredCount(
+                              scheme.requirements,
+                              series
+                            );
                             if (required <= 0) return null;
                             const selected = draft.selectedBySeries[series.id] ?? [];
                             const filled = selected.length === required;
@@ -943,7 +1013,10 @@ export default function ShopHome() {
                               type="button"
                               className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:bg-gray-300"
                               disabled={tool.series.some((series) => {
-                                const required = Number(scheme.requirements?.[series.id] ?? 0);
+                                const required = getSeriesRequiredCount(
+                                  scheme.requirements,
+                                  series
+                                );
                                 if (required <= 0) return false;
                                 const selected = draft.selectedBySeries[series.id] ?? [];
                                 return selected.length !== required;

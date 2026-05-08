@@ -5,6 +5,7 @@ type ShopContentBlocksProps = {
 };
 
 type MixedLine =
+  | { type: 'heading'; text: string }
   | { type: 'text'; text: string }
   | { type: 'image-large'; url: string }
   | { type: 'image-small'; urls: string[] }
@@ -58,6 +59,20 @@ function parseMixedText(raw: string): MixedLine[] {
       const name = parts.join(' ').trim() || '文件';
       if (url) out.push({ type: 'file', name, url });
       continue;
+    }
+    if (line.startsWith('# ')) {
+      const text = line.slice(2).trim();
+      if (text) {
+        out.push({ type: 'heading', text });
+        continue;
+      }
+    }
+    if (line.startsWith('【标题】')) {
+      const text = line.replace('【标题】', '').trim();
+      if (text) {
+        out.push({ type: 'heading', text });
+        continue;
+      }
     }
     out.push({ type: 'text', text: lineRaw });
   }
@@ -183,29 +198,40 @@ export function ShopContentBlocks({ data }: ShopContentBlocksProps) {
   if (!hasText && !hasImages) return null;
 
   return (
-    <section className="space-y-4 px-4 py-4">
+    <section className="space-y-5 px-4 py-4">
       {hasText ? (
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">说明</h2>
-          <div className="rounded-xl bg-gray-50 px-3 py-3 text-[15px] leading-relaxed text-gray-800">
-            <div className="space-y-2">
+          <h2 className="mb-2 text-sm font-semibold tracking-wide text-gray-900">说明</h2>
+          <div className="rounded-xl bg-gray-50 px-3 py-3.5 text-[16px] leading-7 text-gray-800">
+            <div className="space-y-2.5">
               {mixedLines.map((line, idx) => {
+                if (line.type === 'heading') {
+                  return (
+                    <h3
+                      key={idx}
+                      className="mb-1 border-l-4 border-amber-400 pl-3 text-[22px] font-semibold leading-tight tracking-wide text-gray-900"
+                    >
+                      {line.text}
+                    </h3>
+                  );
+                }
                 if (line.type === 'text') {
                   return (
-                    <p key={idx} className="whitespace-pre-wrap break-words">
+                    <p key={idx} className="whitespace-pre-wrap break-words text-[16px] leading-7">
                       {line.text || '\u00A0'}
                     </p>
                   );
                 }
                 if (line.type === 'image-large') {
                   return (
-                    <img
-                      key={idx}
-                      src={line.url}
-                      alt=""
-                      className="w-full rounded-lg object-cover"
-                      loading="lazy"
-                    />
+                    <div key={idx} className="overflow-hidden rounded-lg bg-white">
+                      <img
+                        src={line.url}
+                        alt=""
+                        className="w-full object-contain"
+                        loading="lazy"
+                      />
+                    </div>
                   );
                 }
                 if (line.type === 'image-small') {

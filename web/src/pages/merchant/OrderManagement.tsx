@@ -133,11 +133,11 @@ export default function OrderManagement() {
     list.sort((a, b) => {
       const ta = a.data.createdAt?.toMillis?.() ?? 0;
       const tb = b.data.createdAt?.toMillis?.() ?? 0;
-      if (ta !== tb) return tab === 'all' ? tb - ta : ta - tb;
+      if (ta !== tb) return tb - ta;
       return a.data.orderNumber.localeCompare(b.data.orderNumber);
     });
     return list;
-  }, [filtered, tab]);
+  }, [filtered]);
 
   const counts = useMemo(() => {
     const derived = orders.map((r) => {

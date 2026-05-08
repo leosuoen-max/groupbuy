@@ -1064,6 +1064,82 @@ export async function getCustomerCard(
   return { id: snap.id, data: { ...data, status: autoExpireFlag(data, new Date()) } };
 }
 
+/** 商户手动停用/启用持有卡（停用可恢复） */
+export async function merchantToggleCustomerCardActive(params: {
+  cardId: string;
+  enable: boolean;
+}): Promise<void> {
+  const db = getDb();
+  await runTransaction(db, async (tx) => {
+    const cardRef = doc(db, CUSTOMER_CARDS_COLL, params.cardId);
+    const snap = await tx.get(cardRef);
+    if (!snap.exists()) throw new Error('卡实例不存在');
+    const cur = snap.data() as CustomerCardDoc;
+    const now = new Date();
+    const auto = autoExpireFlag(cur, now);
+
+    if (!params.enable) {
+      if (auto === 'cancelled') return;
+      tx.update(cardRef, {
+        status: 'cancelled' satisfies CustomerCardStatus,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    // 启用：仅允许从 cancelled 恢复；若已过期则不可恢复
+    if (auto === 'expired') throw new Error('该卡已过期，无法重新启用');
+    if (auto !== 'cancelled') return;
+    const remain = Number(cur.remaining ?? 0);
+    tx.update(cardRef, {
+      status: (remain > 0 ? 'active' : 'used_up') satisfies CustomerCardStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 商户手动清零卡余额/次数（不可恢复；需重新购卡或充值） */
+export async function merchantZeroCustomerCardRemaining(params: {
+  cardId: string;
+}): Promise<void> {
+  const db = getDb();
+  await runTransaction(db, async (tx) => {
+    const cardRef = doc(db, CUSTOMER_CARDS_COLL, params.cardId);
+    const cardSnap = await tx.get(cardRef);
+    if (!cardSnap.exists()) throw new Error('卡实例不存在');
+    const cur = cardSnap.data() as CustomerCardDoc;
+    const remain = Number(cur.remaining ?? 0);
+    if (remain <= 0) return;
+    const nextOut = Number(cur.totalOut ?? 0) + remain;
+    const nextStatus =
+      cur.status === 'cancelled' || cur.status === 'expired'
+        ? cur.status
+        : ('used_up' satisfies CustomerCardStatus);
+
+    tx.update(cardRef, {
+      remaining: 0,
+      totalOut: nextOut,
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
+
+    const ledgerRef = doc(collection(db, CARD_LEDGER_COLL));
+    const now = Timestamp.now();
+    const delta = -Math.abs(remain);
+    tx.set(ledgerRef, {
+      shopId: cur.shopId,
+      customerCardId: params.cardId,
+      templateId: cur.templateId,
+      customerKey: cur.customerKey,
+      type: 'refund' satisfies CardLedgerType,
+      delta,
+      remainingAfter: 0,
+      note: '商户手动清零',
+      createdAt: now,
+    } satisfies CardLedgerDoc);
+  });
+}
+
 export async function listCardLedger(opts: {
   customerCardId?: string;
   templateId?: string;

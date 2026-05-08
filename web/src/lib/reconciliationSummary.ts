@@ -1,6 +1,7 @@
 import type { OrderRow } from './orderService';
 import { orderHasPaymentProof } from './paymentScreenshotHelpers';
 import type { OrderDoc } from '../types/firestore';
+import { buildPaymentGroups } from './paymentGroups';
 import {
   deliveryPointReconciliationLabel,
   proofRiskDisplayTone,
@@ -29,6 +30,12 @@ export type ReconciliationTotals = {
   /** 声称已付：已上传截图，或状态为待确认/已确认/部分付款（与收款流水对账时参考） */
   claimedPaidAmount: number;
   claimedPaidCount: number;
+  /** 已确认构成：钱包支付金额 */
+  confirmedWalletAmount: number;
+  /** 已确认构成：次卡代扣金额 */
+  confirmedPassDeductAmount: number;
+  /** 已确认构成：商户免凭证金额 */
+  confirmedWaivedNoProofAmount: number;
   /** 有效订单率：已确认单数 / 非取消单数（订单状态口径） */
   effectiveRatePercent: number | null;
 };
@@ -64,12 +71,16 @@ export function buildReconciliationTotals(rows: OrderRow[]): ReconciliationTotal
   let activeCount = 0;
   let claimedPaidAmount = 0;
   let claimedPaidCount = 0;
+  let confirmedWalletAmount = 0;
+  let confirmedPassDeductAmount = 0;
+  let confirmedWaivedNoProofAmount = 0;
 
   const confirmedOrders = new Set<string>();
   const pendingOrders = new Set<string>();
   const unpaidOrders = new Set<string>();
 
   let orderLevelConfirmedForRate = 0;
+  const cardComponentAdded = new Set<string>();
 
   for (const row of rows) {
     const o = row.data;
@@ -84,6 +95,23 @@ export function buildReconciliationTotals(rows: OrderRow[]): ReconciliationTotal
     if (groups.length > 0 && groups.every((g) => g.bucket === 'confirmed')) {
       orderLevelConfirmedForRate += 1;
     }
+    const paymentGroups = buildPaymentGroups(o);
+    const hasConfirmedWaive = paymentGroups.some(
+      (g) => g.status === 'confirmed' && g.proofs.some((p) => p.waivedNoScreenshot)
+    );
+    if (hasConfirmedWaive) {
+      confirmedWaivedNoProofAmount += paymentGroups
+        .filter((g) => g.status === 'confirmed' && g.proofs.some((p) => p.waivedNoScreenshot))
+        .reduce((s, g) => s + (Number(g.subtotal) || 0), 0);
+    }
+    if (!cardComponentAdded.has(row.id) && o.cardPayment?.totalDeducted) {
+      const wallet = Number(o.cardPayment.wallet?.deduct ?? 0) || 0;
+      const totalDeducted = Number(o.cardPayment.totalDeducted ?? 0) || 0;
+      confirmedWalletAmount += wallet;
+      confirmedPassDeductAmount += Math.max(0, totalDeducted - wallet);
+      cardComponentAdded.add(row.id);
+    }
+
     let cAmt = 0;
     let pAmt = 0;
     let uAmt = 0;
@@ -128,6 +156,9 @@ export function buildReconciliationTotals(rows: OrderRow[]): ReconciliationTotal
     activeCount,
     claimedPaidAmount,
     claimedPaidCount,
+    confirmedWalletAmount,
+    confirmedPassDeductAmount,
+    confirmedWaivedNoProofAmount,
     effectiveRatePercent,
   };
 }

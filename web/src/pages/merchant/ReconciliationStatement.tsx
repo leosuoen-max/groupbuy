@@ -188,10 +188,6 @@ export default function ReconciliationStatement() {
     [scopedOrders, bucketSelection]
   );
 
-  const fullCaliberAmount =
-    totals.confirmedAmount + totals.pendingAmount + totals.unpaidAmount;
-  const fullCaliberDiff = totals.totalActiveAmount - fullCaliberAmount;
-
   const projectOptions = useMemo(() => {
     const m = new Map<string, string>();
     for (const r of orders) {
@@ -470,13 +466,30 @@ export default function ReconciliationStatement() {
             </div>
           </div>
 
-          <div className="mb-4 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 shadow-sm">
-            <div className="font-medium">全口径核对（组金额之和）</div>
-            <p className="mt-1 tabular-nums">
-              已确认 + 待确认 + 待付款 = {formatMYR(fullCaliberAmount)}
-            </p>
-            <p className="mt-1 tabular-nums text-xs text-gray-600">
-              与订单总额差值：{formatMYR(fullCaliberDiff)}
+          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
+            <div className="font-medium">已确认构成（组口径）</div>
+            <div className="mt-2 space-y-1.5 tabular-nums">
+              <p className="flex items-center justify-between gap-3">
+                <span className="text-indigo-900/90">钱包支付金额</span>
+                <strong className="text-base text-indigo-950">
+                  {formatMYR(totals.confirmedWalletAmount)}
+                </strong>
+              </p>
+              <p className="flex items-center justify-between gap-3">
+                <span className="text-indigo-900/90">次卡代扣金额</span>
+                <strong className="text-base text-indigo-950">
+                  {formatMYR(totals.confirmedPassDeductAmount)}
+                </strong>
+              </p>
+              <p className="flex items-center justify-between gap-3">
+                <span className="text-indigo-900/90">免凭证金额</span>
+                <strong className="text-base text-indigo-950">
+                  {formatMYR(totals.confirmedWaivedNoProofAmount)}
+                </strong>
+              </p>
+            </div>
+            <p className="mt-2 text-xs text-indigo-900/80">
+              仅统计已确认组中的钱包/次卡/商户免凭证三类构成。
             </p>
           </div>
 
