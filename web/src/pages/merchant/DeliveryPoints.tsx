@@ -62,7 +62,7 @@ export default function DeliveryPoints() {
         const shop = await getShopBySlug(slug);
         if (cancelled) return;
         if (!shop) {
-          setBootErr('店铺不存在');
+          setBootErr('未找到该商户链接');
           setShopId(null);
           setOwnerId(null);
           return;
@@ -215,7 +215,7 @@ export default function DeliveryPoints() {
     return (
       <PageShell title="配送点库" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );

@@ -99,7 +99,7 @@ export default function CardTemplateDetail() {
       }
       try {
         const row = await getShopBySlug(slug);
-        if (!row) throw new Error('店铺不存在');
+        if (!row) throw new Error('未找到该商户链接');
         if (row.data.ownerId !== user.uid) throw new Error('无权限');
         if (cancelled) return;
         setShopId(row.id);

@@ -124,7 +124,7 @@ export default function CardTemplates() {
       }
       try {
         const row = await getShopBySlug(slug);
-        if (!row) throw new Error('店铺不存在');
+        if (!row) throw new Error('未找到该商户链接');
         if (row.data.ownerId !== user.uid) throw new Error('无权限');
         if (cancelled) return;
         setShopId(row.id);
@@ -239,7 +239,7 @@ export default function CardTemplates() {
 
       <div className="mb-4">
         <Link to={back} className="text-sm text-indigo-600 underline-offset-2 hover:underline">
-          ← 返回店铺后台
+          ← 返回概览
         </Link>
       </div>
 

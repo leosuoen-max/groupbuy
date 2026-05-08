@@ -1,13 +1,13 @@
 import type {
   DeliveryPointDoc,
-  OrderAppendBatchDoc,
   OrderDoc,
   OrderLineDoc,
 } from '../types/firestore';
 import {
-  canMerchantConfirmAppendBatchByScreenshots,
+  orderHasPaymentProof,
   parseScreenshotEntries,
 } from './paymentScreenshotHelpers';
+import { buildPaymentGroups } from './paymentGroups';
 
 /** 与对账单、订单详情一致的「付款组」分类 */
 export type GroupBucket = 'confirmed' | 'pending' | 'unpaid';
@@ -20,8 +20,6 @@ export type OrderPaymentGroup = {
   amount: number;
   lines: OrderLineDoc[];
 };
-
-const EPS = 0.001;
 
 /** 配送点展示：无则统一文案 */
 export function deliveryPointLabel(o: OrderDoc): string {
@@ -67,96 +65,14 @@ export function deliveryPointReconciliationLabel(
  */
 export function listOrderPaymentGroups(o: OrderDoc): OrderPaymentGroup[] {
   if (o.status === 'cancelled') return [];
-
-  const appendBatches = o.appendBatches ?? [];
-  const legacyNoSplit =
-    appendBatches.length > 0 && !(o.initialLines?.length ?? 0);
-  const initialLines: OrderLineDoc[] = legacyNoSplit
-    ? o.lines
-    : o.initialLines?.length
-      ? o.initialLines
-      : o.lines;
-
-  const initialTotal =
-    o.initialTotalAmount ??
-    initialLines.reduce((s, l) => s + l.subtotal, 0);
-
-  const firstPaymentAcknowledged =
-    !!o.initialPaymentConfirmedAt ||
-    (initialTotal > EPS &&
-      Number(o.paidAmount) + EPS >= initialTotal &&
-      (o.status === 'confirmed' || o.status === 'partial_paid'));
-
-  const pendingIds = appendBatches.filter((b) => !b.confirmedAt).map((b) => b.id);
-
-  const out: OrderPaymentGroup[] = [];
-
-  const initialAmt =
-    initialTotal > EPS
-      ? initialTotal
-      : initialLines.reduce((s, l) => s + l.subtotal, 0);
-
-  if (initialAmt > EPS || initialLines.length > 0) {
-    let bucket: GroupBucket;
-    if (firstPaymentAcknowledged) {
-      bucket = 'confirmed';
-    } else if (o.status === 'pending') {
-      bucket = 'pending';
-    } else if (o.status === 'unpaid') {
-      bucket = 'unpaid';
-    } else if (o.status === 'partial_paid' && !firstPaymentAcknowledged) {
-      bucket = Number(o.paidAmount) > EPS ? 'pending' : 'unpaid';
-    } else if (o.status === 'confirmed') {
-      bucket = 'confirmed';
-    } else {
-      bucket = 'unpaid';
-    }
-    out.push({
-      key: 'initial',
-      kind: 'initial',
-      bucket,
-      amount: initialAmt,
-      lines: initialLines,
-    });
-  }
-
-  for (const b of appendBatches) {
-    out.push(appendGroupFromBatch(o, b, pendingIds));
-  }
-
-  return out;
-}
-
-function appendGroupFromBatch(
-  o: OrderDoc,
-  b: OrderAppendBatchDoc,
-  pendingIds: string[]
-): OrderPaymentGroup {
-  const amt = Number(b.deltaAmount) || 0;
-  if (b.confirmedAt) {
-    return {
-      key: `append:${b.id}`,
-      kind: 'append',
-      batchId: b.id,
-      bucket: 'confirmed',
-      amount: amt,
-      lines: b.lines,
-    };
-  }
-  const canConfirm = canMerchantConfirmAppendBatchByScreenshots(
-    o.paymentScreenshots,
-    b.id,
-    pendingIds,
-    b.appendedAt
-  );
-  return {
-    key: `append:${b.id}`,
-    kind: 'append',
-    batchId: b.id,
-    bucket: canConfirm ? 'pending' : 'unpaid',
-    amount: amt,
-    lines: b.lines,
-  };
+  return buildPaymentGroups(o).map((g) => ({
+    key: g.id,
+    kind: g.includesInitial ? 'initial' : 'append',
+    ...(g.appendBatchIds.length === 1 ? { batchId: g.appendBatchIds[0] } : {}),
+    bucket: g.status,
+    amount: Number(g.subtotal) || 0,
+    lines: g.lines,
+  }));
 }
 
 export type BucketSelection = Record<GroupBucket, boolean>;
@@ -205,8 +121,7 @@ export function linesInSelectedBuckets(
 export function orderNeedsMissingProofLabel(o: OrderDoc): boolean {
   const entries = parseScreenshotEntries(o.paymentScreenshots);
   if (entries.some((e) => e.waivedNoScreenshot)) return true;
-  if (o.status === 'unpaid') return true;
-  if ((Number(o.pendingAmount) || 0) > EPS) return true;
+  if (buildPaymentGroups(o).some((g) => g.status === 'unpaid')) return true;
   return false;
 }
 

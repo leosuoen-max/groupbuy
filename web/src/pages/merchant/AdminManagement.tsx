@@ -35,7 +35,7 @@ export default function AdminManagement() {
       const shop = await getShopBySlug(slug);
       if (!shop) {
         setShopId(null);
-        setErr('店铺不存在');
+        setErr('未找到该商户链接');
         return;
       }
       if (shop.data.ownerId !== user.uid) {
@@ -117,7 +117,7 @@ export default function AdminManagement() {
     return (
       <PageShell title="管理员管理" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );

@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
-import { appendBatchHasCustomerUpload } from './paymentScreenshotHelpers';
+import { buildPaymentGroups } from './paymentGroups';
 import type {
   BundleSchemeDoc,
   CardLedgerDoc,
@@ -1220,11 +1220,13 @@ export async function planCardPayment(
   project: ProjectDoc,
   customerKey: string
 ): Promise<CardPaymentPlan> {
-  const totalAmount = ROUND2(
-    Math.max(
-      0,
-      Math.min(Number(order.pendingAmount ?? 0), Number(order.totalAmount ?? 0))
-    )
+  const groups = buildPaymentGroups(order);
+  const unpaidGroups = groups.filter((g) => g.status === 'unpaid');
+  const unpaidTotal = ROUND2(
+    unpaidGroups.reduce((s, g) => s + (Number(g.subtotal) || 0), 0)
+  );
+  const requestedAmount = ROUND2(
+    Math.max(0, Math.min(unpaidTotal, Number(order.totalAmount ?? 0)))
   );
   // 1. 拉取本店该顾客所有 active 卡
   const cards = (
@@ -1233,38 +1235,17 @@ export async function planCardPayment(
   const passCards = cards.filter((c) => c.data.type === 'pass');
   const wallet = cards.find((c) => c.data.type === 'stored') ?? null;
 
-  // 2. 仅针对“待支付组”计算可抵扣行：
-  // - 已确认组：confirmedAt 存在，不可再次支付
-  // - 待确认组：已发起支付动作（上传凭证或商户免凭证），不可再次支付
-  // - 待支付组：未发起支付动作，可参与本次支付
-  const fullLines = (order.lines ?? []) as OrderLineDoc[];
-  const initialLines =
-    order.initialLines?.length && order.initialLines.length > 0
-      ? (order.initialLines as OrderLineDoc[])
-      : fullLines;
-  const unpaidGroupLines: OrderLineDoc[] = [];
-  if (
-    !order.initialPaymentConfirmedAt &&
-    (order.status === 'unpaid' || order.status === 'partial_paid')
-  ) {
-    unpaidGroupLines.push(...initialLines);
-  }
-  const pendingBatchIds = (order.appendBatches ?? [])
-    .filter((b) => !b.confirmedAt)
-    .map((b) => b.id);
-  for (const b of order.appendBatches ?? []) {
-    if (b.confirmedAt) continue;
-    const hasPaymentAction = appendBatchHasCustomerUpload(
-      order.paymentScreenshots,
-      b.id,
-      b.appendedAt,
-      pendingBatchIds
-    );
-    if (!hasPaymentAction) {
-      unpaidGroupLines.push(...(b.lines as OrderLineDoc[]));
-    }
-  }
-  const lines = unpaidGroupLines;
+  // 2. 仅针对“待付款支付组”计算可抵扣行（不覆盖待确认组）
+  const lines = unpaidGroups.flatMap((g) => g.lines as OrderLineDoc[]);
+  const totalAmount = ROUND2(
+    Math.max(
+      0,
+      Math.min(
+        requestedAmount,
+        lines.reduce((s, l) => s + (Number(l.subtotal) || 0), 0)
+      )
+    )
+  );
   const lineMeta = lines.map((l) => ({
     line: l,
     applicableTemplateIds: resolveApplicableTemplatesForLine(project, l),
@@ -1430,7 +1411,8 @@ export async function applyCardPaymentToOrder(params: {
   }
   const plan = await planCardPayment(orderPre, projectPre, params.customerKey);
   if (!plan.ok) {
-    throw new Error(plan.message);
+    const failedPlan = plan as Extract<CardPaymentPlan, { ok: false }>;
+    throw new Error(failedPlan.message);
   }
 
   // 准备事务里要 get 的所有 doc
@@ -1561,6 +1543,13 @@ export async function applyCardPaymentToOrder(params: {
     }
 
     // 6. 更新订单：line.cardCoveredQuantity + cardPayment + 状态/金额
+    const groupsBefore = buildPaymentGroups(order);
+    const unpaidGroups = groupsBefore.filter((g) => g.status === 'unpaid');
+    const autoConfirmAppendIds = new Set(
+      unpaidGroups.flatMap((g) => g.appendBatchIds)
+    );
+    const autoConfirmInitial = unpaidGroups.some((g) => g.includesInitial);
+    const hasPendingProofBefore = groupsBefore.some((g) => g.status === 'pending');
     const allocByPid = new Map<string, number>();
     for (const a of plan.lineAllocations) {
       allocByPid.set(a.lineProductId, a.passCovered);
@@ -1602,9 +1591,9 @@ export async function applyCardPaymentToOrder(params: {
       appliedAt: now,
     };
 
-    // 卡支付是自动确认：把尚未确认的加购档一并标记为已确认，避免 UI 仍显示「待商户确认」
+    // 卡支付是自动确认：仅把本次卡支付覆盖到的「待付款组」标记为已确认。
     const nextAppendBatches = (order.appendBatches ?? []).map((b) =>
-      b.confirmedAt
+      b.confirmedAt || !autoConfirmAppendIds.has(b.id)
         ? b
         : {
             ...b,
@@ -1620,15 +1609,26 @@ export async function applyCardPaymentToOrder(params: {
       note: `卡支付：钱包 RM ${plan.walletDeduct.toFixed(2)} + 次卡 ${plan.summary.passUseCount} 次`,
     });
 
+    const nextPendingAmount = ROUND2(
+      Math.max(0, Number(order.pendingAmount ?? 0) - plan.totalAmount)
+    );
+    const nextStatus: OrderDoc['status'] =
+      nextPendingAmount <= 0.0001
+        ? 'confirmed'
+        : hasPendingProofBefore
+          ? 'pending'
+          : 'partial_paid';
+
     tx.update(orderRef, {
       lines: nextLines,
       appendBatches: nextAppendBatches,
       cardPayment: cardPaymentDoc,
       paidAmount: ROUND2(Number(order.paidAmount ?? 0) + plan.totalAmount),
-      pendingAmount: 0,
-      status: 'confirmed',
-      initialPaymentConfirmedAt:
-        order.initialPaymentConfirmedAt ?? serverTimestamp(),
+      pendingAmount: nextPendingAmount,
+      status: nextStatus,
+      ...(autoConfirmInitial && !order.initialPaymentConfirmedAt
+        ? { initialPaymentConfirmedAt: now }
+        : {}),
       statusHistory: hist,
       updatedAt: serverTimestamp(),
     });
@@ -1643,8 +1643,9 @@ export async function applyCardPaymentToOrder(params: {
       confirmedRevenue: 0,
     };
     const wasUnpaid = order.status === 'unpaid';
-    const wasPending =
-      order.status === 'pending' || order.status === 'partial_paid';
+    const wasPending = order.status === 'pending' || order.status === 'partial_paid';
+    const becomesConfirmed = nextStatus === 'confirmed';
+    const confirmedInc = becomesConfirmed ? 1 : 0;
     const nextStats = {
       ...stats,
       unpaidOrders: Math.max(0, (stats.unpaidOrders ?? 0) - (wasUnpaid ? 1 : 0)),
@@ -1652,7 +1653,7 @@ export async function applyCardPaymentToOrder(params: {
         0,
         (stats.pendingOrders ?? 0) - (wasPending ? 1 : 0)
       ),
-      confirmedOrders: (stats.confirmedOrders ?? 0) + 1,
+      confirmedOrders: (stats.confirmedOrders ?? 0) + confirmedInc,
       confirmedRevenue:
         ROUND2(Number(stats.confirmedRevenue ?? 0)) +
         ROUND2(plan.totalAmount),

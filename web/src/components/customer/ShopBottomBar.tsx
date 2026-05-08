@@ -202,7 +202,7 @@ export function ShopBottomBar({
                       onClick={() => setMenuOpen(false)}
                       className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
                     >
-                      ⚙️ 店铺设置
+                      ⚙️ 基本设置
                     </Link>
                   ) : null}
                   {isShopOwner ? (

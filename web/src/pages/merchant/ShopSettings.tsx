@@ -40,7 +40,7 @@ export default function ShopSettings() {
         setBootErr(null);
         try {
           const row = await getShopBySlug(slug);
-          if (!row) throw new Error('店铺不存在');
+          if (!row) throw new Error('未找到该商户链接');
           if (row.data.ownerId !== user.uid) throw new Error('无权限');
           if (cancelled) return;
           setShopId(row.id);
@@ -83,7 +83,7 @@ export default function ShopSettings() {
           }))
           .filter((x) => x.name && x.qrCodeUrl),
       });
-      setMsg('店铺设置已保存');
+      setMsg('已保存');
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '保存失败');
     } finally {
@@ -131,7 +131,7 @@ export default function ShopSettings() {
 
   if (authLoading || loading) {
     return (
-      <PageShell title="店铺设置" subtitle="加载中…">
+      <PageShell title="基本设置" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
       </PageShell>
     );
@@ -139,7 +139,7 @@ export default function ShopSettings() {
 
   if (bootErr) {
     return (
-      <PageShell title="店铺设置" subtitle="错误">
+      <PageShell title="基本设置" subtitle="错误">
         <p className="text-sm text-red-600">{bootErr}</p>
         <Link
           to="/dashboard"
@@ -152,7 +152,7 @@ export default function ShopSettings() {
   }
 
   return (
-    <PageShell title="店铺设置" subtitle={`/${slug}`}>
+    <PageShell title="基本设置" subtitle={`/${slug}`}>
       {msg ? (
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {msg}

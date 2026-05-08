@@ -17,6 +17,18 @@ import type { ShopDoc } from '../types/firestore';
 
 export type ShopRow = { id: string; data: ShopDoc };
 
+/** 同一 owner 下按创建时间排序；用于「一账号一商户」时稳定选取主商户（兼容历史多文档）。 */
+export function sortShopsByCreatedAt(shops: ShopRow[]): ShopRow[] {
+  return [...shops].sort(
+    (a, b) => a.data.createdAt.toMillis() - b.data.createdAt.toMillis()
+  );
+}
+
+export function getPrimaryShop(shops: ShopRow[]): ShopRow | null {
+  if (shops.length === 0) return null;
+  return sortShopsByCreatedAt(shops)[0] ?? null;
+}
+
 export async function listShopsByOwner(ownerId: string): Promise<ShopRow[]> {
   const db = getDb();
   const q = query(collection(db, 'shops'), where('ownerId', '==', ownerId));
@@ -57,6 +69,10 @@ export async function createShop(
   const db = getDb();
   const slug = input.slug.trim().toLowerCase();
   const name = input.name.trim();
+  const existing = await listShopsByOwner(ownerId);
+  if (existing.length > 0) {
+    throw new Error('OWNER_ALREADY_HAS_SHOP');
+  }
   if (await isSlugTaken(slug)) {
     throw new Error('SLUG_TAKEN');
   }

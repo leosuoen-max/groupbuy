@@ -113,7 +113,7 @@ export default function MerchantDashboard() {
 
   if (authLoading || shop === undefined) {
     return (
-      <PageShell title="店铺后台" subtitle="加载中…">
+      <PageShell title="商户后台" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
       </PageShell>
     );
@@ -121,9 +121,9 @@ export default function MerchantDashboard() {
 
   if (!user) {
     return (
-      <PageShell title="店铺后台" subtitle="未登录">
+      <PageShell title="商户后台" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -131,12 +131,12 @@ export default function MerchantDashboard() {
 
   if (err || !shop) {
     return (
-      <PageShell title="店铺后台" subtitle="未找到店铺">
+      <PageShell title="商户后台" subtitle="未找到链接">
         <p className="text-sm text-gray-600">
           {err ?? '链接不存在或已被删除。'}
         </p>
         <Link className="mt-3 inline-block text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -144,12 +144,12 @@ export default function MerchantDashboard() {
 
   if (shop.data.ownerId !== user.uid) {
     return (
-      <PageShell title="店铺后台" subtitle="无权限">
+      <PageShell title="商户后台" subtitle="无权限">
         <p className="text-sm text-gray-600">
-          你不是该店铺的创建人，无法查看此后台首页。
+          你不是该商户的创建人，无法查看此后台首页。
         </p>
         <Link className="mt-3 inline-block text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -158,7 +158,7 @@ export default function MerchantDashboard() {
   const base = `/dashboard/${encodeURIComponent(shop.data.slug)}`;
 
   return (
-    <PageShell title={shop.data.name} subtitle={`/${shop.data.slug}`}>
+    <PageShell title={shop.data.name}>
       <section className="mb-5">
         <h2 className="mb-2 text-sm font-semibold text-gray-900">
           今日数据 <span className="font-normal text-gray-500">（{dateLabel} · 按本机时区统计创建日）</span>
@@ -199,11 +199,6 @@ export default function MerchantDashboard() {
             </div>
           </div>
         )}
-        {!ordersLoading && !ordersErr ? (
-          <p className="mt-2 text-xs text-gray-500">
-            今日有效单共 {todayStats.todayOpenOrdersCount} 笔（已排除已取消；待确认含待付款等需跟进的单）。
-          </p>
-        ) : null}
       </section>
 
       <h2 className="mb-2 text-sm font-semibold text-gray-900">快捷入口</h2>
@@ -239,7 +234,7 @@ export default function MerchantDashboard() {
           to={`${base}/settings`}
           className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
         >
-          店铺设置
+          基本设置
         </Link>
         <Link
           to={`${base}/delivery-points`}
@@ -272,12 +267,6 @@ export default function MerchantDashboard() {
               </span>
             </>
           ) : null}
-        </Link>
-        <Link
-          to="/dashboard"
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-dashed border-gray-300 px-2 text-center text-sm font-medium text-gray-700"
-        >
-          切换店铺
         </Link>
       </div>
     </PageShell>

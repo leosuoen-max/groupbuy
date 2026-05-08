@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { listProjectsByShopId } from '../lib/projectService';
-import { listShopsByOwner } from '../lib/shopService';
+import { listShopsByOwner, sortShopsByCreatedAt } from '../lib/shopService';
 
 const link = 'text-indigo-600 underline-offset-2 hover:underline';
 
@@ -36,9 +36,10 @@ export default function Home() {
       setLoadErr(null);
       try {
         const shops = await listShopsByOwner(user.uid);
-        const slugs = shops.map((s) => s.data.slug).filter(Boolean);
+        const sorted = sortShopsByCreatedAt(shops);
+        const slugs = sorted.map((s) => s.data.slug).filter(Boolean);
         const entries: CustomerEntry[] = [];
-        for (const s of shops) {
+        for (const s of sorted) {
           const projects = await listProjectsByShopId(s.id);
           for (const p of projects) {
             if (p.data.status === 'draft') continue;
@@ -56,7 +57,7 @@ export default function Home() {
         }
       } catch (e) {
         if (!cancelled) {
-          setLoadErr(e instanceof Error ? e.message : '加载店铺/项目失败');
+          setLoadErr(e instanceof Error ? e.message : '加载商户/项目失败');
           setCustomerEntries([]);
           setShopSlugs([]);
         }
@@ -70,7 +71,7 @@ export default function Home() {
 
   const hint = useMemo(
     () =>
-      '顾客端地址格式为 /shop/{店铺 slug}/{项目 ID}，其中项目 ID 是 Firestore 文档 id（在项目列表里对应每个项目）。首页曾用的 demo-shop / demo-project 只是示例字符串，若数据库里没有这条店铺，就会提示「找不到该店铺链接」。',
+      '顾客端地址格式为 /shop/{公开链接 slug}/{项目 ID}，其中项目 ID 是 Firestore 文档 id（在项目列表里对应每个项目）。首页曾用的 demo-shop / demo-project 只是示例字符串，若数据库里没有对应商户，就会提示「找不到该店铺链接」。',
     []
   );
 
@@ -109,8 +110,8 @@ export default function Home() {
             请先{' '}
             <Link className={link} to="/login">
               登录
-            </Link>{' '}
-            ，以便从云端读取你名下的<strong>店铺与项目</strong>并生成下方链接；或用商户后台里复制到的{' '}
+            </Link>
+            ，以便从云端读取你名下的<strong>商户与项目</strong>并生成下方链接；或用商户后台里复制到的{' '}
             <code className="rounded bg-white px-1 text-xs">slug</code> 与{' '}
             <code className="rounded bg-white px-1 text-xs">projectId</code>{' '}
             手动拼路径。
@@ -121,7 +122,7 @@ export default function Home() {
           <p className="text-sm text-gray-700">
             当前账号下还没有<strong>已发布或已截止</strong>的项目（草稿不会出现在这里）。请先到{' '}
             <Link className={link} to="/dashboard">
-              我的店铺
+              商户后台
             </Link>{' '}
             → 创建项目 → <strong>发布</strong>，再回到本页刷新。
           </p>
@@ -161,14 +162,14 @@ export default function Home() {
         <ul className="list-disc space-y-1 pl-5 text-gray-800">
           <li>
             <Link className={link} to="/dashboard">
-              我的店铺列表
+              进入商户后台
             </Link>
           </li>
           {primarySlug ? (
             <>
               <li>
                 <Link className={link} to={`/dashboard/${encodeURIComponent(primarySlug)}`}>
-                  店铺 Dashboard（{primarySlug}）
+                  后台概览（{primarySlug}）
                 </Link>
               </li>
               <li>
@@ -207,13 +208,13 @@ export default function Home() {
               </li>
               <li>
                 <Link className={link} to={`/dashboard/${encodeURIComponent(primarySlug)}/settings`}>
-                  店铺设置
+                  基本设置
                 </Link>
               </li>
             </>
           ) : (
             <li className="list-none pl-0 text-sm text-gray-600">
-              登录并在「我的店铺」里创建店铺后，这里会出现该店铺的快捷入口。
+              登录并完成商户初始化后，这里会出现快捷入口。
             </li>
           )}
         </ul>

@@ -26,16 +26,17 @@ import {
   type CardPaymentPlan,
 } from '../../lib/cardService';
 import {
-  canMerchantConfirmAppendBatchByScreenshots,
-  hasPaymentScreenshotForAppendBatch,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
   type ParsedScreenshotEntry,
 } from '../../lib/paymentScreenshotHelpers';
-import { orderHasNoPaymentActionYet } from '../../lib/paymentGrouping';
+import { buildPaymentGroups } from '../../lib/paymentGroups';
+import {
+  deriveDisplayOrderStatus,
+  sumGroupAmountByStatus,
+} from '../../lib/paymentGroupView';
 import type { MockDeliveryPoint } from '../../types/orderDraft';
 import type {
-  OrderAppendBatchDoc,
   OrderDoc,
   OrderLineDoc,
   ProjectDoc,
@@ -64,12 +65,6 @@ function projectAllowsCustomerEdit(p: ProjectDoc | null): boolean {
   const c = p.closesAt?.toDate?.();
   if (c && c.getTime() <= Date.now()) return false;
   return true;
-}
-
-function batchTimeStr(b: OrderAppendBatchDoc): string {
-  const d = b.appendedAt?.toDate?.();
-  if (!d) return '';
-  return d.toLocaleString();
 }
 
 function linePromoTag(line: OrderLineDoc) {
@@ -251,6 +246,9 @@ export default function OrderDetail() {
   );
 
   const order: OrderDoc | null = orderRow?.data ?? null;
+  const hasUnpaidGroupForCardPay = order
+    ? buildPaymentGroups(order).some((g) => g.status === 'unpaid')
+    : false;
 
   useEffect(() => {
     let cancelled = false;
@@ -364,12 +362,11 @@ export default function OrderDetail() {
   const canUpload =
     order && uploadAllowedStatuses.has(order.status);
 
-  /** 卡支付仅允许在“待付款”阶段触发；待确认阶段禁止再次支付 */
+  /** 卡支付允许在订单存在“待付款支付组”时触发（即使同时有待确认组）。 */
   const canCardPay =
     !!order &&
     !!projectDoc &&
-    (order.status === 'unpaid' ||
-      order.status === 'partial_paid') &&
+    hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
 
   useEffect(() => {
@@ -610,175 +607,25 @@ export default function OrderDetail() {
 
   const shots = parseScreenshotEntries(order.paymentScreenshots);
   const hasShots = orderHasPaymentScreenshots(order.paymentScreenshots);
-  const paid = Number(order.paidAmount) || 0;
-  const pending = Number(order.pendingAmount) || 0;
-  const appendBatches = order.appendBatches ?? [];
-  const useSplitLayout =
-    appendBatches.length > 0 && (order.initialLines?.length ?? 0) > 0;
-  const initialLines = order.initialLines?.length
-    ? order.initialLines
-    : order.lines;
-  const initialTotal =
-    order.initialTotalAmount ??
-    (order.initialLines?.length
-      ? order.initialLines.reduce((s, l) => s + l.subtotal, 0)
-      : order.totalAmount);
+  const paymentGroups = buildPaymentGroups(order);
+  const displayStatus = deriveDisplayOrderStatus(order, paymentGroups);
+  const confirmedAmount = sumGroupAmountByStatus(paymentGroups, 'confirmed');
+  const unpaidAmount = sumGroupAmountByStatus(paymentGroups, 'unpaid');
+  const useSplitLayout = paymentGroups.length > 0;
   const withUrlShots = shots.filter((s) => s.url);
-  const sortedAppendBatches = [...appendBatches].sort(
-    (a, b) => (a.appendedAt?.toMillis?.() ?? 0) - (b.appendedAt?.toMillis?.() ?? 0)
-  );
-  const pendingAppendIds = sortedAppendBatches
-    .filter((b) => !b.confirmedAt)
-    .map((b) => b.id);
-  const noPaymentActionYet = orderHasNoPaymentActionYet(order);
-  const firstShots = withUrlShots.filter((s) => {
-    const untagged = s.appendBatchId == null || s.appendBatchId === '';
-    return untagged;
-  });
-  const firstGroupHasPaymentAction = shots.some((s) => {
-    const untagged = s.appendBatchId == null || s.appendBatchId === '';
-    return untagged && (Boolean(s.url) || s.waivedNoScreenshot);
-  });
-  const firstGroupStatus: 'confirmed' | 'pending' | 'unpaid' =
-    order.initialPaymentConfirmedAt
-      ? 'confirmed'
-      : firstGroupHasPaymentAction
-        ? 'pending'
-        : 'unpaid';
-  const untaggedPaymentAfter = (ms: number) =>
-    shots.some((s) => {
-      const untagged = s.appendBatchId == null || s.appendBatchId === '';
-      if (!untagged) return false;
-      if (!s.url && !s.waivedNoScreenshot) return false;
-      const ua = s.uploadedAt?.toMillis?.() ?? 0;
-      return ua >= ms;
-    });
-  const initialConfirmedByCardAction =
-    Boolean(order.cardPayment) &&
-    !firstGroupHasPaymentAction &&
-    Boolean(order.initialPaymentConfirmedAt) &&
-    Math.abs(
-      (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0) -
-        (order.cardPayment?.appliedAt?.toMillis?.() ?? 0)
-    ) <= 1000;
-  const unifiedCardActionKey =
-    initialConfirmedByCardAction && order.cardPayment && firstGroupStatus === 'confirmed'
-      ? `card_auto:${order.cardPayment.appliedAt?.toMillis?.() ?? 'na'}`
-      : null;
-  const initialConfirmedActionKey =
-    firstGroupStatus === 'confirmed' && order.initialPaymentConfirmedAt
-      ? `confirm_action:${order.initialPaymentConfirmedAt.toMillis()}`
-      : null;
-  const appendGroupMeta = sortedAppendBatches.map((b) => {
-    const canConfirm = canMerchantConfirmAppendBatchByScreenshots(
-      order.paymentScreenshots,
-      b.id,
-      pendingAppendIds,
-      b.appendedAt
-    );
-    const status: 'confirmed' | 'pending' | 'unpaid' = b.confirmedAt
-      ? 'confirmed'
-      : canConfirm
-        ? 'pending'
-        : 'unpaid';
-    const sameConfirmActionAsInitial =
-      Boolean(initialConfirmedActionKey) &&
-      Boolean(b.confirmedAt) &&
-      Math.abs(
-        (b.confirmedAt?.toMillis?.() ?? 0) -
-          (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0)
-      ) <= 1000;
+  const displayGroups = paymentGroups.map((g) => {
+    const t = new Date(g.timeMs);
+    const timeLabel = `${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
     return {
-      batch: b,
-      status,
-      hasPaymentAction: b.confirmedAt || canConfirm,
-      actionKey:
-        noPaymentActionYet && status === 'unpaid'
-          ? null
-          :
-        b.confirmedByUserId === 'customer_card_auto' && unifiedCardActionKey
-          ? unifiedCardActionKey
-          : sameConfirmActionAsInitial && initialConfirmedActionKey
-            ? initialConfirmedActionKey
-            : b.confirmedAt
-              ? `append_confirmed:${b.id}`
-          : hasPaymentScreenshotForAppendBatch(order.paymentScreenshots, b.id)
-                ? `append_proof:${b.id}`
-                : untaggedPaymentAfter(b.appendedAt?.toMillis?.() ?? 0)
-                  ? 'initial'
-                  : canConfirm
-                    ? `append_pending:${b.id}`
-                    : null,
+      key: g.id,
+      status: g.status,
+      timeLabel,
+      lines: g.lines,
+      subtotal: g.subtotal,
+      proofs: g.proofs,
+      hasCardAuto: g.hasCardAuto,
     };
   });
-  const firstActionKey = unifiedCardActionKey
-    ? unifiedCardActionKey
-    : noPaymentActionYet && firstGroupStatus === 'unpaid'
-      ? null
-    : firstGroupStatus !== 'unpaid'
-      ? (initialConfirmedActionKey ?? 'initial')
-      : appendGroupMeta.find((x) => x.hasPaymentAction)?.batch.id ?? null;
-  const segments: Array<{
-    key: string;
-    status: 'confirmed' | 'pending' | 'unpaid';
-    actionKey: string | null;
-    timeMs: number;
-    timeLabel?: string;
-    lines: OrderLineDoc[];
-    subtotal: number;
-    titleHint?: string;
-  }> = [
-    {
-      key: 'initial',
-      status: firstGroupStatus,
-      actionKey: firstActionKey,
-      timeMs: order.createdAt?.toMillis?.() ?? 0,
-      timeLabel: timeStr,
-      lines: initialLines,
-      subtotal: initialTotal,
-      titleHint: '首笔',
-    },
-    ...appendGroupMeta.map((m) => ({
-      key: `append-${m.batch.id}`,
-      status: m.status,
-      actionKey: m.actionKey,
-      timeMs: m.batch.appendedAt?.toMillis?.() ?? 0,
-      timeLabel: batchTimeStr(m.batch),
-      lines: m.batch.lines,
-      subtotal: Number(m.batch.deltaAmount) || 0,
-    })),
-  ];
-  const displayGroups = segments.reduce<
-    Array<{
-      key: string;
-      status: 'confirmed' | 'pending' | 'unpaid';
-      timeLabel?: string;
-      lines: OrderLineDoc[];
-      subtotal: number;
-      titleHint?: string;
-    }>
-  >((acc, seg) => {
-    const last = acc[acc.length - 1];
-    const canMerge =
-      !!last &&
-      last.status === seg.status &&
-      ((last.key.startsWith('merge:') ? last.key.slice(6) : null) === seg.actionKey ||
-        (seg.actionKey == null && last.status === 'unpaid'));
-    if (canMerge && last) {
-      last.lines = [...last.lines, ...seg.lines];
-      last.subtotal += seg.subtotal;
-      return acc;
-    }
-    acc.push({
-      key: `merge:${seg.actionKey ?? `${seg.key}:${seg.timeMs}`}`,
-      status: seg.status,
-      timeLabel: seg.timeLabel,
-      lines: [...seg.lines],
-      subtotal: seg.subtotal,
-      titleHint: seg.titleHint,
-    });
-    return acc;
-  }, []);
   const statusText = {
     confirmed: '已确认',
     pending: '待确认',
@@ -876,13 +723,13 @@ export default function OrderDetail() {
           <p>
             状态：
             <span className="font-medium text-red-700">
-              {statusLabel[order.status] ?? order.status}
+              {statusLabel[displayStatus] ?? displayStatus}
             </span>
           </p>
-          {(paid > 0 || pending > 0) && order.status !== 'cancelled' ? (
+          {(confirmedAmount > 0 || unpaidAmount > 0) && order.status !== 'cancelled' ? (
             <p className="mt-2 text-xs text-emerald-950">
-              已付（商户已确认部分）：{formatMYR(paid)} · 待付：{' '}
-              <strong>{formatMYR(pending)}</strong>
+              已付（商户已确认部分）：{formatMYR(confirmedAmount)} · 待付：{' '}
+              <strong>{formatMYR(unpaidAmount)}</strong>
             </p>
           ) : null}
           {order.cardPayment ? (
@@ -952,7 +799,6 @@ export default function OrderDetail() {
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-gray-900">
                     支付组 {idx + 1}
-                    {idx === 0 && g.titleHint ? `（${g.titleHint}）` : ''}
                   </h3>
                   <span
                     className={`text-xs font-medium ${
@@ -1234,7 +1080,7 @@ export default function OrderDetail() {
         {canCardPay ? (
           <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">
             <h2 className="mb-1 text-sm font-semibold text-indigo-900">
-              钱包 / 优惠卡支付
+              支付方法一：钱包 / 优惠卡支付
             </h2>
             <p className="mb-2 text-xs leading-relaxed text-indigo-900/80">
               一键自动抵扣：先扣可用次卡，再用钱包补齐。
@@ -1275,27 +1121,33 @@ export default function OrderDetail() {
                     {cardPaying ? '处理中…' : '立即抵扣并确认订单'}
                   </button>
                 </>
-              ) : (
-                <div className="space-y-2 rounded-lg bg-white px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-100">
-                  <p className="font-medium">{cardPlan.message}</p>
-                  <p>
-                    已可抵扣：次卡覆盖 RM {cardPlan.passCovered.toFixed(2)} ·
-                    钱包余额 RM {cardPlan.walletAvailable.toFixed(2)} · 合计差{' '}
-                    RM {cardPlan.gap.toFixed(2)}
-                  </p>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <Link
-                      to={`/shop/${encodeURIComponent(order.shopSlug)}/cards?from=${encodeURIComponent(order.projectId)}`}
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white"
-                    >
-                      去充值 / 购买
-                    </Link>
-                    <span className="text-[11px] text-amber-700">
-                      或在下方上传付款凭证
-                    </span>
-                  </div>
-                </div>
-              )
+              ) : (() => {
+                  const failedPlan = cardPlan as Extract<
+                    CardPaymentPlan,
+                    { ok: false }
+                  >;
+                  return (
+                    <div className="space-y-2 rounded-lg bg-white px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-100">
+                      <p className="font-medium">{failedPlan.message}</p>
+                      <p>
+                        已可抵扣：次卡覆盖 RM {failedPlan.passCovered.toFixed(2)} ·
+                        钱包余额 RM {failedPlan.walletAvailable.toFixed(2)} · 合计差{' '}
+                        RM {failedPlan.gap.toFixed(2)}
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Link
+                          to={`/shop/${encodeURIComponent(order.shopSlug)}/cards?from=${encodeURIComponent(order.projectId)}`}
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white"
+                        >
+                          去充值 / 购买
+                        </Link>
+                        <span className="text-[11px] text-amber-700">
+                          或在下方上传付款凭证
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()
             ) : !cardPlanLoading ? (
               <p className="text-xs text-indigo-700">
                 <Link
@@ -1321,7 +1173,7 @@ export default function OrderDetail() {
 
         <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
           <h2 className="mb-2 text-sm font-semibold text-gray-900">
-            付款截图
+            支付方法二：转账、上传付款截图
           </h2>
           <p className="mb-3 text-xs leading-relaxed text-gray-600">
             {uploadHintTop}
@@ -1362,23 +1214,9 @@ export default function OrderDetail() {
             useSplitLayout ? (
               <div className="space-y-4">
                 {displayGroups.map((g, idx) => {
-                  const gKey = g.key.startsWith('merge:') ? g.key.slice(6) : g.key;
-                  let groupShots: typeof withUrlShots;
-                  if (
-                    gKey === 'initial' ||
-                    gKey.startsWith('card_auto:') ||
-                    gKey.startsWith('confirm_action:')
-                  ) {
-                    // 首组或卡支付组：未挂批次的截图
-                    groupShots = firstShots;
-                  } else if (gKey.startsWith('append_proof:')) {
-                    const bid = gKey.slice('append_proof:'.length);
-                    groupShots = withUrlShots.filter((x) => x.appendBatchId === bid);
-                  } else {
-                    groupShots = [];
-                  }
+                  const groupShots = g.proofs.filter((x) => Boolean(x.url));
                   const isCardGroup =
-                    gKey.startsWith('card_auto:') ||
+                    g.hasCardAuto ||
                     (g.status === 'confirmed' && order.cardPayment && groupShots.length === 0);
                   return (
                     <div key={`shots-${g.key}`}>

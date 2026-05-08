@@ -42,7 +42,7 @@ export default function ProjectList() {
       if (!shop) {
         setShopId(null);
         setProjects([]);
-        setErr('店铺不存在');
+        setErr('未找到该商户链接');
         return;
       }
       if (shop.data.ownerId !== user.uid) {
@@ -169,7 +169,7 @@ export default function ProjectList() {
     return (
       <PageShell title="项目列表" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -180,7 +180,7 @@ export default function ProjectList() {
       <PageShell title="项目列表" subtitle="错误">
         <p className="text-sm text-red-600">{err}</p>
         <Link className="mt-3 inline-block text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );

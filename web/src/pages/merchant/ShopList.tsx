@@ -3,11 +3,27 @@ import { Link, useNavigate } from 'react-router-dom';
 import { signInAnonymously } from 'firebase/auth';
 import { PageShell } from '../../components/PageShell';
 import { getAuthClient } from '../../lib/firebase';
-import { createShop, listShopsByOwner, type ShopRow } from '../../lib/shopService';
+import {
+  createShop,
+  getPrimaryShop,
+  listShopsByOwner,
+  type ShopRow,
+} from '../../lib/shopService';
 import { useAuthUser } from '../../hooks/useAuthUser';
 
-/** 6–20 位：小写字母/数字/横线，不以横线开头或结尾 */
-const slugHint = /^[a-z0-9][a-z0-9-]{4,18}[a-z0-9]$/;
+function randomBase36(len: number): string {
+  return Math.random()
+    .toString(36)
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, len);
+}
+
+/** 短链接：固定前缀 + 时间片 + 随机片段，长度约 9-11 */
+function genShortSlug(): string {
+  const ts = Date.now().toString(36).slice(-4);
+  const rand = randomBase36(5).padEnd(5, 'x');
+  return `s${ts}${rand}`;
+}
 
 export default function ShopList() {
   const { user, loading } = useAuthUser();
@@ -15,7 +31,6 @@ export default function ShopList() {
   const [shops, setShops] = useState<ShopRow[]>([]);
   const [listLoading, setListLoading] = useState(false);
   const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
   const [busy, setBusy] = useState(false);
   const [anonBusy, setAnonBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -27,7 +42,7 @@ export default function ShopList() {
     try {
       setShops(await listShopsByOwner(user.uid));
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : '加载店铺失败');
+      setMsg(e instanceof Error ? e.message : '加载失败');
     } finally {
       setListLoading(false);
     }
@@ -38,6 +53,16 @@ export default function ShopList() {
       void refresh();
     });
   }, [refresh]);
+
+  useEffect(() => {
+    if (!user || listLoading) return;
+    const primary = getPrimaryShop(shops);
+    if (primary) {
+      navigate(`/dashboard/${encodeURIComponent(primary.data.slug)}`, {
+        replace: true,
+      });
+    }
+  }, [user, listLoading, shops, navigate]);
 
   const handleAnon = async () => {
     setAnonBusy(true);
@@ -58,26 +83,36 @@ export default function ShopList() {
 
   const handleCreate = async () => {
     if (!user) return;
-    const s = slug.trim().toLowerCase();
     const n = name.trim();
     if (!n) {
-      setMsg('请填写店名');
-      return;
-    }
-    if (!slugHint.test(s)) {
-      setMsg('链接只能用小写字母、数字、横线，6–20 位，且不能以横线开头或结尾。');
+      setMsg('请填写商户名称');
       return;
     }
     setBusy(true);
     setMsg(null);
     try {
-      await createShop(user.uid, { name: n, slug: s });
+      let created = false;
+      for (let i = 0; i < 6; i++) {
+        const slug = genShortSlug();
+        try {
+          await createShop(user.uid, { name: n, slug });
+          created = true;
+          break;
+        } catch (err) {
+          if (!(err instanceof Error) || err.message !== 'SLUG_TAKEN') {
+            throw err;
+          }
+        }
+      }
+      if (!created) {
+        throw new Error('自动生成链接失败，请重试');
+      }
       setName('');
-      setSlug('');
       await refresh();
     } catch (e) {
-      if (e instanceof Error && e.message === 'SLUG_TAKEN') {
-        setMsg('该链接已被占用，请换一个。');
+      if (e instanceof Error && e.message === 'OWNER_ALREADY_HAS_SHOP') {
+        setMsg('当前账号已有商户资料，正在跳转…');
+        await refresh();
       } else {
         setMsg(e instanceof Error ? e.message : '创建失败');
       }
@@ -88,7 +123,7 @@ export default function ShopList() {
 
   if (loading) {
     return (
-      <PageShell title="我的店铺" subtitle="加载中…">
+      <PageShell title="商户后台" subtitle="加载中…">
         <p className="text-sm text-gray-600">正在检查登录状态…</p>
       </PageShell>
     );
@@ -96,9 +131,10 @@ export default function ShopList() {
 
   if (!user) {
     return (
-      <PageShell title="我的店铺" subtitle="需要登录">
+      <PageShell title="商户后台" subtitle="需要登录">
         <p className="mb-4 text-sm text-gray-600">
-          商户后台需要先登录。开发阶段可使用 Firebase「匿名登录」；正式环境将改为手机号验证码（见 docs/05）。
+          商户后台需要先登录。开发阶段可使用 Firebase「匿名登录」；正式环境将改为手机号验证码（见
+          docs/05）。
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -121,32 +157,43 @@ export default function ShopList() {
     );
   }
 
+  if (listLoading) {
+    return (
+      <PageShell title="商户后台" subtitle="加载中…">
+        <p className="text-sm text-gray-600">请稍候…</p>
+      </PageShell>
+    );
+  }
+
+  if (getPrimaryShop(shops)) {
+    return (
+      <PageShell title="商户后台" subtitle="正在进入…">
+        <p className="text-sm text-gray-600">正在打开后台…</p>
+      </PageShell>
+    );
+  }
+
   return (
-    <PageShell title="我的店铺" subtitle="选择店铺进入后台，或新建一家店">
+    <PageShell title="商户后台" subtitle="每个账号对应一个商户；首次使用请设置名称">
       {msg ? <p className="mb-3 text-sm text-red-600">{msg}</p> : null}
 
       <section className="mb-6 rounded-2xl border border-gray-100 bg-gray-50 p-4">
-        <h2 className="mb-3 text-sm font-semibold text-gray-900">新建店铺</h2>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">完成初始化</h2>
+        <p className="mb-3 text-xs leading-relaxed text-gray-600">
+          系统会自动生成公开链接（短链接），形如{' '}
+          <code className="rounded bg-white px-1">
+            /shop/<span className="text-emerald-700">s8k2ab9x</span>/项目…
+          </code>
+          ，与具体卖什么无关；不同品类请创建不同<strong>项目</strong>即可。
+        </p>
         <label className="mb-2 block text-sm text-gray-700">
-          店名
+          商户名称（对内展示）
           <input
             className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px]"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="例如：辉姐家常小厨"
+            placeholder="例如：辉姐团购组"
           />
-        </label>
-        <label className="mb-3 block text-sm text-gray-700">
-          店铺链接（小写、横线）
-          <div className="mt-1 flex items-center gap-1 text-[16px]">
-            <span className="shrink-0 text-gray-500">/shop/</span>
-            <input
-              className="w-full rounded-lg border border-gray-200 px-3 py-2"
-              value={slug}
-              onChange={(e) => setSlug(e.target.value.toLowerCase())}
-              placeholder="huijie"
-            />
-          </div>
         </label>
         <button
           type="button"
@@ -154,31 +201,8 @@ export default function ShopList() {
           disabled={busy}
           onClick={() => void handleCreate()}
         >
-          {busy ? '创建中…' : '创建店铺'}
+          {busy ? '创建中…' : '创建并进入后台'}
         </button>
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-semibold text-gray-900">我的店铺</h2>
-        {listLoading ? (
-          <p className="text-sm text-gray-600">加载中…</p>
-        ) : shops.length === 0 ? (
-          <p className="text-sm text-gray-600">还没有店铺，先在上面创建一个。</p>
-        ) : (
-          <ul className="space-y-2">
-            {shops.map((s) => (
-              <li key={s.id}>
-                <Link
-                  to={`/dashboard/${encodeURIComponent(s.data.slug)}`}
-                  className="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm active:bg-gray-50"
-                >
-                  <span className="font-medium text-gray-900">{s.data.name}</span>
-                  <span className="text-xs text-gray-500">/{s.data.slug}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
     </PageShell>
   );

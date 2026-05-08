@@ -6,14 +6,15 @@ import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
-  appendBatchHasCustomerUpload,
   orderHasPaymentProof,
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
 } from '../../lib/paymentScreenshotHelpers';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
 import { getShopBySlug } from '../../lib/shopService';
-import type { OrderAppendBatchDoc, OrderDoc, OrderStatus } from '../../types/firestore';
+import { buildPaymentGroups } from '../../lib/paymentGroups';
+import { deriveDisplayOrderStatus } from '../../lib/paymentGroupView';
+import type { OrderDoc, OrderStatus } from '../../types/firestore';
 
 type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
 
@@ -33,43 +34,17 @@ function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cance
   return 'cancelled';
 }
 
-function pendingUnconfirmedBatches(order: OrderDoc): OrderAppendBatchDoc[] {
-  return (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
+/** 只要订单里已有任一支付组被确认入账，就应计入“已确认”视图（含部分已确认）。 */
+function orderHasAnyConfirmedPayment(order: OrderDoc): boolean {
+  return buildPaymentGroups(order).some((g) => g.status === 'confirmed');
 }
 
-/**
- * 存在未确认的加购档，且顾客尚未为该档上传有效凭证。
- * 含：`partial_paid`，以及「首单仍待确认(pending)时又加购」——此时仍为 pending，但同样要在「待付款」里盯住加购应收。
- */
-function orderNeedsAppendPaymentUpload(order: OrderDoc): boolean {
-  const batches = pendingUnconfirmedBatches(order);
-  if (batches.length === 0) return false;
-  const ids = batches.map((b) => b.id);
-  return batches.some(
-    (b) =>
-      !appendBatchHasCustomerUpload(
-        order.paymentScreenshots,
-        b.id,
-        b.appendedAt,
-        ids
-      )
-  );
+function orderHasAnyPendingPayment(order: OrderDoc): boolean {
+  return buildPaymentGroups(order).some((g) => g.status === 'pending');
 }
 
-/** partial_paid：存在未确认的加购档，且已有凭证待商户核实/确认补款 */
-function orderHasAppendAwaitingMerchant(order: OrderDoc): boolean {
-  if (order.status !== 'partial_paid') return false;
-  const batches = pendingUnconfirmedBatches(order);
-  if (batches.length === 0) return false;
-  const ids = batches.map((b) => b.id);
-  return batches.some((b) =>
-    appendBatchHasCustomerUpload(
-      order.paymentScreenshots,
-      b.id,
-      b.appendedAt,
-      ids
-    )
-  );
+function orderHasAnyUnpaidPayment(order: OrderDoc): boolean {
+  return buildPaymentGroups(order).some((g) => g.status === 'unpaid');
 }
 
 export default function OrderManagement() {
@@ -97,13 +72,13 @@ export default function OrderManagement() {
       if (!shop) {
         setShopRow(null);
         setOrders([]);
-        setErr('店铺不存在');
+        setErr('未找到该商户链接');
         return;
       }
       if (shop.data.ownerId !== user.uid) {
         setShopRow(null);
         setOrders([]);
-        setErr('无权限访问该店铺');
+        setErr('无权限访问该商户');
         return;
       }
       setShopRow({
@@ -132,11 +107,9 @@ export default function OrderManagement() {
       const d = r.data;
       return {
         row: r,
-        isUnpaid: d.status === 'unpaid' || orderNeedsAppendPaymentUpload(d),
-        isOpen:
-          d.status === 'pending' ||
-          (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
-        isDone: d.status === 'confirmed',
+        isUnpaid: orderHasAnyUnpaidPayment(d),
+        isOpen: orderHasAnyPendingPayment(d),
+        isDone: orderHasAnyConfirmedPayment(d),
         isCancelled: d.status === 'cancelled',
       };
     });
@@ -171,11 +144,9 @@ export default function OrderManagement() {
       const d = r.data;
       return {
         row: r,
-        isUnpaid: d.status === 'unpaid' || orderNeedsAppendPaymentUpload(d),
-        isOpen:
-          d.status === 'pending' ||
-          (d.status === 'partial_paid' && orderHasAppendAwaitingMerchant(d)),
-        isDone: d.status === 'confirmed',
+        isUnpaid: orderHasAnyUnpaidPayment(d),
+        isOpen: orderHasAnyPendingPayment(d),
+        isDone: orderHasAnyConfirmedPayment(d),
         isCancelled: d.status === 'cancelled',
       };
     });
@@ -216,7 +187,7 @@ export default function OrderManagement() {
     return (
       <PageShell title="订单管理" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -325,6 +296,7 @@ export default function OrderManagement() {
             const hasShot = orderHasPaymentScreenshots(d.paymentScreenshots);
             const hasProofNoImage =
               !hasShot && orderHasPaymentProof(d.paymentScreenshots);
+            const displayStatus = deriveDisplayOrderStatus(d);
             return (
               <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm">
                 <div className="flex min-w-0 flex-1 gap-3">
@@ -348,7 +320,10 @@ export default function OrderManagement() {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                       <span className="truncate">{d.projectTitle}</span>
-                      <StatusChip tone={toChipTone(d.status)} label={statusLabel(d.status)} />
+                      <StatusChip
+                        tone={toChipTone(displayStatus)}
+                        label={statusLabel(displayStatus)}
+                      />
                       {hasShot ? (
                         <span className="font-medium text-emerald-700">已传凭证</span>
                       ) : hasProofNoImage ? (

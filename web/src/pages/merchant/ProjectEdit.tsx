@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { FirebaseError } from 'firebase/app';
 import { Timestamp } from 'firebase/firestore';
@@ -19,7 +19,7 @@ import {
   listCardTemplatesByShop,
   type CardTemplateRow,
 } from '../../lib/cardService';
-import type { BundleToolDoc, ProjectProduct } from '../../types/firestore';
+import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
 
 function toDatetimeLocalValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -102,6 +102,90 @@ function newProduct(sortOrder: number): ProjectProduct {
   };
 }
 
+function splitDescription(raw: string): { heading: string; body: string } {
+  const text = raw.trim();
+  if (!text) return { heading: '', body: '' };
+  const lines = text.split('\n');
+  const first = lines[0]?.trim() ?? '';
+  if (!first.startsWith('# ')) return { heading: '', body: raw };
+  const heading = first.replace(/^#\s+/, '').trim();
+  const body = lines.slice(1).join('\n').trim();
+  return { heading, body };
+}
+
+type ProjectImageBlock = NonNullable<ProjectDoc['imageBlocks']>[number];
+type DescriptionAsset =
+  | { id: string; type: 'image-large'; url: string }
+  | { id: string; type: 'image-small'; urls: string[] }
+  | { id: string; type: 'file'; name: string; url: string }
+  | { id: string; type: 'video'; url: string }
+  | { id: string; type: 'audio'; url: string }
+  | { id: string; type: 'location'; url: string };
+
+type NewDescriptionAsset =
+  | { type: 'image-large'; url: string }
+  | { type: 'image-small'; urls: string[] }
+  | { type: 'file'; name: string; url: string }
+  | { type: 'video'; url: string }
+  | { type: 'audio'; url: string }
+  | { type: 'location'; url: string };
+
+function parseDescriptionAssets(raw: string): {
+  plain: string;
+  assets: DescriptionAsset[];
+} {
+  const plainLines: string[] = [];
+  const assets: DescriptionAsset[] = [];
+  for (const lineRaw of raw.split('\n')) {
+    const line = lineRaw.trim();
+    if (!line) {
+      plainLines.push('');
+      continue;
+    }
+    if (line.startsWith('【大图】')) {
+      const url = line.replace('【大图】', '').trim();
+      if (url) assets.push({ id: crypto.randomUUID(), type: 'image-large', url });
+      continue;
+    }
+    if (line.startsWith('【小图】')) {
+      const urls = line
+        .replace('【小图】', '')
+        .split('|')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 3);
+      if (urls.length) assets.push({ id: crypto.randomUUID(), type: 'image-small', urls });
+      continue;
+    }
+    if (line.startsWith('【文件】')) {
+      const rest = line.replace('【文件】', '').trim();
+      const parts = rest.split(' ');
+      const url = parts.pop() ?? '';
+      const name = parts.join(' ').trim() || '文件';
+      if (url) assets.push({ id: crypto.randomUUID(), type: 'file', name, url });
+      continue;
+    }
+    if (line.startsWith('【视频】')) {
+      const url = line.replace('【视频】', '').trim();
+      if (url) assets.push({ id: crypto.randomUUID(), type: 'video', url });
+      continue;
+    }
+    if (line.startsWith('【录音】')) {
+      const url = line.replace('【录音】', '').trim();
+      if (url) assets.push({ id: crypto.randomUUID(), type: 'audio', url });
+      continue;
+    }
+    if (line.startsWith('【定位】')) {
+      const url = line.replace('【定位】', '').trim();
+      if (url) assets.push({ id: crypto.randomUUID(), type: 'location', url });
+      continue;
+    }
+    plainLines.push(lineRaw);
+  }
+  return { plain: plainLines.join('\n').trim(), assets };
+}
+
+
 export default function ProjectEdit() {
   const { shopSlug = '', projectId = '' } = useParams<{
     shopSlug: string;
@@ -121,6 +205,8 @@ export default function ProjectEdit() {
     toDatetimeLocalValue(new Date(Date.now() + 24 * 60 * 60 * 1000))
   );
   const [textContent, setTextContent] = useState('');
+  const [descriptionAssets, setDescriptionAssets] = useState<DescriptionAsset[]>([]);
+  const [imageBlocks, setImageBlocks] = useState<ProjectImageBlock[]>([]);
   const [products, setProducts] = useState<ProjectProduct[]>([newProduct(0)]);
   const [bundleTools, setBundleTools] = useState<BundleToolDoc[]>([]);
   const [status, setStatus] = useState<'draft' | 'published' | 'closed'>('draft');
@@ -139,6 +225,15 @@ export default function ProjectEdit() {
   );
   const [selectedDpIds, setSelectedDpIds] = useState<string[]>([]);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const descriptionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const bigImageInputRef = useRef<HTMLInputElement | null>(null);
+  const smallImageInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordChunksRef = useRef<BlobPart[]>([]);
+  const recordStreamRef = useRef<MediaStream | null>(null);
 
   const resolvedPid = isNew ? '' : pid;
   const draftStorageKey = resolvedPid
@@ -150,6 +245,8 @@ export default function ProjectEdit() {
     title: string;
     closesAt: string;
     textContent: string;
+    descriptionAssets?: DescriptionAsset[];
+    imageBlocks?: ProjectImageBlock[];
     products: ProjectProduct[];
     bundleTools: BundleToolDoc[];
     selectedDpIds: string[];
@@ -212,7 +309,14 @@ export default function ProjectEdit() {
       }
       if (typeof d.title === 'string') setTitle(d.title);
       if (typeof d.closesAt === 'string') setClosesAt(d.closesAt);
-      if (typeof d.textContent === 'string') setTextContent(d.textContent);
+      if (typeof d.textContent === 'string') {
+        const parsed = splitDescription(d.textContent);
+        const parsedAssets = parseDescriptionAssets(parsed.body);
+        setTextContent(parsedAssets.plain);
+        setDescriptionAssets(parsedAssets.assets);
+      }
+      if (Array.isArray(d.descriptionAssets)) setDescriptionAssets(d.descriptionAssets);
+      if (Array.isArray(d.imageBlocks)) setImageBlocks(d.imageBlocks);
       if (Array.isArray(d.products) && d.products.length > 0) {
         setProducts(normalizeDraftProducts(d.products));
       }
@@ -234,7 +338,11 @@ export default function ProjectEdit() {
       return;
     }
     setTitle(row.data.title);
-    setTextContent(row.data.textContent ?? '');
+    const parsedDesc = splitDescription(row.data.textContent ?? '');
+    const parsedAssets = parseDescriptionAssets(parsedDesc.body);
+    setTextContent(parsedAssets.plain);
+    setDescriptionAssets(parsedAssets.assets);
+    setImageBlocks(row.data.imageBlocks ?? []);
     setStatus(row.data.status);
     setClosesAt(
       toDatetimeLocalValue(row.data.closesAt?.toDate?.() ?? new Date())
@@ -282,7 +390,7 @@ export default function ProjectEdit() {
         const shop = await getShopBySlug(slug);
         if (!shop) {
           if (!cancelled) {
-            setBootErr('店铺不存在');
+            setBootErr('未找到该商户链接');
             setShopRow(null);
           }
           return;
@@ -337,6 +445,8 @@ export default function ProjectEdit() {
       title,
       closesAt,
       textContent,
+      descriptionAssets,
+      imageBlocks,
       products,
       bundleTools,
       selectedDpIds,
@@ -349,6 +459,8 @@ export default function ProjectEdit() {
     title,
     closesAt,
     textContent,
+    descriptionAssets,
+    imageBlocks,
     products,
     bundleTools,
     selectedDpIds,
@@ -578,6 +690,113 @@ export default function ProjectEdit() {
     );
   };
 
+  const composeDescription = () => {
+    const lines: string[] = [];
+    if (textContent.trim()) lines.push(textContent.trim());
+    for (const a of descriptionAssets) {
+      if (a.type === 'image-large') lines.push(`【大图】${a.url}`);
+      if (a.type === 'image-small') lines.push(`【小图】${a.urls.join(' | ')}`);
+      if (a.type === 'file') lines.push(`【文件】${a.name} ${a.url}`);
+      if (a.type === 'video') lines.push(`【视频】${a.url}`);
+      if (a.type === 'audio') lines.push(`【录音】${a.url}`);
+      if (a.type === 'location') lines.push(`【定位】${a.url}`);
+    }
+    const body = lines.join('\n').trim();
+    if (!body) return '';
+    return title.trim() ? `# ${title.trim()}\n\n${body}` : body;
+  };
+
+  const addAsset = (asset: NewDescriptionAsset) => {
+    setDescriptionAssets((prev) => [...prev, { id: crypto.randomUUID(), ...asset }]);
+  };
+
+  const removeAsset = (id: string) => {
+    setDescriptionAssets((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  const uploadDescriptionAsset = async (file: File) => {
+    if (!shopRow) throw new Error('商户信息未加载完成');
+    return uploadProjectAsset(shopRow.data.ownerId, file, 'description');
+  };
+
+  const appendUploadedLine = async (
+    file: File,
+    label: string,
+    onUploaded: (url: string, f: File) => void
+  ) => {
+    try {
+      const url = await uploadDescriptionAsset(file);
+      onUploaded(url, file);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : `${label}上传失败`);
+    }
+  };
+
+  const startAudioRecord = async () => {
+    if (recording) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMsg('当前浏览器不支持录音');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recordChunksRef.current = [];
+      recordStreamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (ev) => {
+        if (ev.data?.size) recordChunksRef.current.push(ev.data);
+      };
+      recorder.start();
+      setRecording(true);
+      setMsg('录音中…再次点击「停止录音」保存到说明区');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '无法开始录音');
+    }
+  };
+
+  const stopAudioRecord = async () => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+    await new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+      recorder.stop();
+    });
+    setRecording(false);
+    recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    const type = recorder.mimeType || 'audio/webm';
+    const blob = new Blob(recordChunksRef.current, { type });
+    const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'm4a' : 'webm';
+    const file = new File([blob], `record-${Date.now()}.${ext}`, { type });
+    await appendUploadedLine(file, '录音', (url) => addAsset({ type: 'audio', url }));
+  };
+
+  const coverBlock = useMemo(
+    () => imageBlocks.find((b) => b.isCoverImage),
+    [imageBlocks]
+  );
+
+  const upsertCoverImage = (url: string) => {
+    setImageBlocks((prev) => {
+      const rest = prev.filter((x) => !x.isCoverImage);
+      return [{ url, caption: '项目头图', isCoverImage: true }, ...rest];
+    });
+  };
+
+  useEffect(() => {
+    const el = descriptionTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.max(140, el.scrollHeight)}px`;
+  }, [textContent]);
+
+  useEffect(
+    () => () => {
+      recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    },
+    []
+  );
+
   const handleSaveDraft = async () => {
     if (!resolvedPid) return;
     if (promotionValidation) {
@@ -593,7 +812,8 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: title.trim() || '未命名项目',
         closesAt: Timestamp.fromDate(d),
-        textContent,
+        textContent: composeDescription(),
+        imageBlocks,
         products: normalizedProducts.length ? normalizedProducts : [],
         bundleTools: normalizedBundleTools,
         deliveryPointIds: sanitizedDeliveryPointIds,
@@ -637,7 +857,8 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: t,
         closesAt: Timestamp.fromDate(d),
-        textContent,
+        textContent: composeDescription(),
+        imageBlocks,
         products: normalizedProducts,
         bundleTools: normalizedBundleTools,
         deliveryPointIds: sanitizedDeliveryPointIds,
@@ -672,7 +893,7 @@ export default function ProjectEdit() {
     return (
       <PageShell title="编辑项目" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );
@@ -728,15 +949,201 @@ export default function ProjectEdit() {
             onChange={(e) => setClosesAt(e.target.value)}
           />
         </label>
-        <label className="block text-sm text-gray-800">
-          文字说明（区块一）
-          <textarea
-            className={`${input} min-h-[6rem]`}
-            value={textContent}
-            onChange={(e) => setTextContent(e.target.value)}
-            placeholder="套餐说明、规则等"
+        <section className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+          <div className="mb-2 text-sm font-semibold text-gray-900">项目 Banner 与说明</div>
+          <div className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <div className="relative h-36 w-full bg-gray-100">
+              {coverBlock?.url ? (
+                <img
+                  src={coverBlock.url}
+                  alt="项目头图"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-gray-500">
+                  未设置头图
+                </div>
+              )}
+              <label className="absolute bottom-2 right-2 cursor-pointer rounded bg-black/45 px-2 py-1 text-xs text-white">
+                点击更换图片
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file || !shopRow) return;
+                    void uploadProjectAsset(shopRow.data.ownerId, file, 'description')
+                      .then((url) => upsertCoverImage(url))
+                      .catch((err) =>
+                        setMsg(err instanceof Error ? err.message : '图片上传失败')
+                      )
+                      .finally(() => {
+                        e.currentTarget.value = '';
+                      });
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+          <label className="mb-2 block text-sm text-gray-800">
+            输入描述说明
+            <div className="mt-1 rounded-lg border border-gray-200 bg-white px-3 py-2">
+              <textarea
+                ref={descriptionTextareaRef}
+                className="w-full min-h-[6rem] resize-none border-0 p-0 text-[16px] text-gray-900 outline-none"
+                value={textContent}
+                onChange={(e) => setTextContent(e.target.value)}
+                placeholder="输入描述说明"
+              />
+              {descriptionAssets.length > 0 ? (
+                <div className="mt-2 space-y-2 border-t border-gray-100 pt-2">
+                  {descriptionAssets.map((a) => (
+                    <div key={a.id} className="rounded-lg border border-gray-100 bg-gray-50 p-2">
+                      {a.type === 'image-large' ? (
+                        <img src={a.url} alt="" className="w-full rounded-lg object-cover" />
+                      ) : null}
+                      {a.type === 'image-small' ? (
+                        <div className="grid grid-cols-3 gap-2">
+                          {a.urls.map((u) => (
+                            <img key={u} src={u} alt="" className="aspect-square w-full rounded-lg object-cover" />
+                          ))}
+                        </div>
+                      ) : null}
+                      {a.type === 'video' ? <video src={a.url} controls className="w-full rounded-lg" /> : null}
+                      {a.type === 'audio' ? <audio src={a.url} controls className="w-full" /> : null}
+                      {a.type === 'file' ? (
+                        <a href={a.url} target="_blank" rel="noreferrer" className="text-indigo-600 underline">
+                          {a.name}
+                        </a>
+                      ) : null}
+                      {a.type === 'location' ? (
+                        <a href={a.url} target="_blank" rel="noreferrer" className="text-indigo-600 underline">
+                          打开定位
+                        </a>
+                      ) : null}
+                      <div className="mt-2 flex justify-end">
+                        <button
+                          type="button"
+                          className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-600"
+                          onClick={() => removeAsset(a.id)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </label>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => descriptionTextareaRef.current?.focus()}>+ 文字</button>
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => bigImageInputRef.current?.click()}>+ 大图</button>
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => smallImageInputRef.current?.click()}>+ 小图</button>
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => fileInputRef.current?.click()}>+ 文件</button>
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => videoInputRef.current?.click()}>+ 视频</button>
+            <button type="button" className="rounded-lg border border-gray-200 bg-white px-2 py-1" onClick={() => void startAudioRecord()} disabled={recording}>+ 录音</button>
+            {recording ? (
+              <button type="button" className="rounded-lg border border-rose-300 bg-rose-50 px-2 py-1 text-rose-700" onClick={() => void stopAudioRecord()}>
+                停止录音
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="rounded-lg border border-gray-200 bg-white px-2 py-1"
+              onClick={() => {
+                if (!navigator.geolocation) {
+                  setMsg('当前浏览器不支持定位');
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => {
+                    const lat = pos.coords.latitude.toFixed(6);
+                    const lng = pos.coords.longitude.toFixed(6);
+                    addAsset({
+                      type: 'location',
+                      url: `https://maps.google.com/?q=${lat},${lng}`,
+                    });
+                  },
+                  () => {
+                    setMsg('定位失败，请检查定位权限');
+                  }
+                );
+              }}
+            >
+              + 定位
+            </button>
+          </div>
+          <input
+            ref={bigImageInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                void appendUploadedLine(file, '大图', (url) =>
+                  addAsset({ type: 'image-large', url })
+                );
+              }
+              e.currentTarget.value = '';
+            }}
           />
-        </label>
+          <input
+            ref={smallImageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, 3);
+              if (files.length === 0) return;
+              void (async () => {
+                const urls: string[] = [];
+                for (const f of files) {
+                  try {
+                    urls.push(await uploadDescriptionAsset(f));
+                  } catch (err) {
+                    setMsg(err instanceof Error ? err.message : '小图上传失败');
+                    return;
+                  }
+                }
+                addAsset({ type: 'image-small', urls });
+              })();
+              e.currentTarget.value = '';
+            }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                void appendUploadedLine(file, '文件', (url, f) =>
+                  addAsset({ type: 'file', name: f.name, url })
+                );
+              }
+              e.currentTarget.value = '';
+            }}
+          />
+          <input
+            ref={videoInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                void appendUploadedLine(file, '视频', (url) =>
+                  addAsset({ type: 'video', url })
+                );
+              }
+              e.currentTarget.value = '';
+            }}
+          />
+        </section>
 
         <div>
           <div className="mb-2 flex items-center justify-between">

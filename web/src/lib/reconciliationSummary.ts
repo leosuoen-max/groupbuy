@@ -1,6 +1,6 @@
 import type { OrderRow } from './orderService';
 import { orderHasPaymentProof } from './paymentScreenshotHelpers';
-import type { OrderDoc, OrderStatus } from '../types/firestore';
+import type { OrderDoc } from '../types/firestore';
 import {
   deliveryPointReconciliationLabel,
   proofRiskDisplayTone,
@@ -48,8 +48,8 @@ export type ProductionTotals = {
 
 function isClaimedPaid(o: OrderDoc): boolean {
   if (orderHasPaymentProof(o.paymentScreenshots)) return true;
-  const s: OrderStatus = o.status;
-  return s === 'pending' || s === 'confirmed' || s === 'partial_paid';
+  const groups = listOrderPaymentGroups(o);
+  return groups.some((g) => g.bucket === 'pending' || g.bucket === 'confirmed');
 }
 
 /**
@@ -80,11 +80,10 @@ export function buildReconciliationTotals(rows: OrderRow[]): ReconciliationTotal
     }
     activeCount += 1;
     totalActiveAmount += amt;
-    if (o.status === 'confirmed') {
+    const groups = listOrderPaymentGroups(o);
+    if (groups.length > 0 && groups.every((g) => g.bucket === 'confirmed')) {
       orderLevelConfirmedForRate += 1;
     }
-
-    const groups = listOrderPaymentGroups(o);
     let cAmt = 0;
     let pAmt = 0;
     let uAmt = 0;

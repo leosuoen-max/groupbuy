@@ -4,6 +4,66 @@ type ShopContentBlocksProps = {
   data: MockShopHome;
 };
 
+type MixedLine =
+  | { type: 'text'; text: string }
+  | { type: 'image-large'; url: string }
+  | { type: 'image-small'; urls: string[] }
+  | { type: 'video'; url: string }
+  | { type: 'audio'; url: string }
+  | { type: 'file'; name: string; url: string }
+  | { type: 'location'; url: string };
+
+function parseMixedText(raw: string): MixedLine[] {
+  const out: MixedLine[] = [];
+  for (const lineRaw of raw.split('\n')) {
+    const line = lineRaw.trim();
+    if (!line) {
+      out.push({ type: 'text', text: '' });
+      continue;
+    }
+    if (line.startsWith('【大图】')) {
+      const url = line.replace('【大图】', '').trim();
+      if (url) out.push({ type: 'image-large', url });
+      continue;
+    }
+    if (line.startsWith('【小图】')) {
+      const urls = line
+        .replace('【小图】', '')
+        .split('|')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 3);
+      if (urls.length) out.push({ type: 'image-small', urls });
+      continue;
+    }
+    if (line.startsWith('【视频】')) {
+      const url = line.replace('【视频】', '').trim();
+      if (url) out.push({ type: 'video', url });
+      continue;
+    }
+    if (line.startsWith('【录音】')) {
+      const url = line.replace('【录音】', '').trim();
+      if (url) out.push({ type: 'audio', url });
+      continue;
+    }
+    if (line.startsWith('【定位】')) {
+      const url = line.replace('【定位】', '').trim();
+      if (url) out.push({ type: 'location', url });
+      continue;
+    }
+    if (line.startsWith('【文件】')) {
+      const rest = line.replace('【文件】', '').trim();
+      const parts = rest.split(' ');
+      const url = parts.pop() ?? '';
+      const name = parts.join(' ').trim() || '文件';
+      if (url) out.push({ type: 'file', name, url });
+      continue;
+    }
+    out.push({ type: 'text', text: lineRaw });
+  }
+  return out;
+}
+
 function ImageGrid({ blocks }: { blocks: MockShopHome['imageBlocks'] }) {
   const n = blocks.length;
   if (n === 0) return null;
@@ -118,6 +178,7 @@ function ImageGrid({ blocks }: { blocks: MockShopHome['imageBlocks'] }) {
 export function ShopContentBlocks({ data }: ShopContentBlocksProps) {
   const hasText = Boolean(data.textContent?.trim());
   const hasImages = data.imageBlocks.length > 0;
+  const mixedLines = hasText ? parseMixedText(data.textContent ?? '') : [];
 
   if (!hasText && !hasImages) return null;
 
@@ -126,8 +187,62 @@ export function ShopContentBlocks({ data }: ShopContentBlocksProps) {
       {hasText ? (
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">说明</h2>
-          <div className="whitespace-pre-line rounded-xl bg-gray-50 px-3 py-3 text-[15px] leading-relaxed text-gray-800">
-            {data.textContent}
+          <div className="rounded-xl bg-gray-50 px-3 py-3 text-[15px] leading-relaxed text-gray-800">
+            <div className="space-y-2">
+              {mixedLines.map((line, idx) => {
+                if (line.type === 'text') {
+                  return (
+                    <p key={idx} className="whitespace-pre-wrap break-words">
+                      {line.text || '\u00A0'}
+                    </p>
+                  );
+                }
+                if (line.type === 'image-large') {
+                  return (
+                    <img
+                      key={idx}
+                      src={line.url}
+                      alt=""
+                      className="w-full rounded-lg object-cover"
+                      loading="lazy"
+                    />
+                  );
+                }
+                if (line.type === 'image-small') {
+                  return (
+                    <div key={idx} className="grid grid-cols-3 gap-2">
+                      {line.urls.map((u) => (
+                        <img
+                          key={u}
+                          src={u}
+                          alt=""
+                          className="aspect-square w-full rounded-lg object-cover"
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
+                  );
+                }
+                if (line.type === 'video') {
+                  return <video key={idx} src={line.url} controls className="w-full rounded-lg" />;
+                }
+                if (line.type === 'audio') {
+                  return <audio key={idx} src={line.url} controls className="w-full" />;
+                }
+                if (line.type === 'file') {
+                  return (
+                    <a key={idx} href={line.url} target="_blank" rel="noreferrer" className="text-indigo-600 underline">
+                      {line.name}
+                    </a>
+                  );
+                }
+                return (
+                  <a key={idx} href={line.url} target="_blank" rel="noreferrer" className="text-indigo-600 underline">
+                    打开定位
+                  </a>
+                );
+              })}
+            </div>
           </div>
         </div>
       ) : null}

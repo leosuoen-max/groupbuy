@@ -6,6 +6,11 @@ import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listOrdersByCustomer } from '../../lib/orderService';
 import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
+import { buildPaymentGroups } from '../../lib/paymentGroups';
+import {
+  deriveDisplayOrderStatus,
+  sumGroupAmountByStatus,
+} from '../../lib/paymentGroupView';
 import type { OrderDoc, OrderStatus } from '../../types/firestore';
 
 function summarizeLines(o: OrderDoc): string {
@@ -62,14 +67,15 @@ function cardClasses(status: OrderStatus): string {
 
 function uploadHint(o: OrderDoc): { text: string; className: string } | null {
   const hasShot = orderHasPaymentScreenshots(o.paymentScreenshots);
+  const displayStatus = deriveDisplayOrderStatus(o);
   if (o.status === 'cancelled') return null;
   if (hasShot) {
     return { text: '已传付款截图', className: 'text-emerald-700' };
   }
   if (
-    o.status === 'unpaid' ||
-    o.status === 'pending' ||
-    o.status === 'partial_paid'
+    displayStatus === 'unpaid' ||
+    displayStatus === 'pending' ||
+    displayStatus === 'partial_paid'
   ) {
     return { text: '未传付款截图', className: 'text-gray-500' };
   }
@@ -149,7 +155,10 @@ export default function MyOrders() {
             {orders.map((o) => {
               const t = o.createdAt?.toDate?.() ?? new Date();
               const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-              const st = o.status;
+              const st = deriveDisplayOrderStatus(o);
+              const groups = buildPaymentGroups(o);
+              const confirmedAmount = sumGroupAmountByStatus(groups, 'confirmed');
+              const unpaidAmount = sumGroupAmountByStatus(groups, 'unpaid');
               const styles = statusCard[st] ?? statusCard.unpaid;
               const upload = uploadHint(o);
               return (
@@ -188,19 +197,11 @@ export default function MyOrders() {
                       <p className="mt-1 text-sm font-medium text-gray-900">
                         总计 {formatMYR(o.totalAmount)}
                       </p>
-                      {(Number(o.paidAmount) > 0 ||
-                        Number(o.pendingAmount) > 0) &&
+                      {(confirmedAmount > 0 || unpaidAmount > 0) &&
                       o.status !== 'cancelled' ? (
-                        o.status === 'pending' ? (
-                          <p className="mt-0.5 text-[11px] text-gray-600">
-                            已支付 {formatMYR(Number(o.pendingAmount) || 0)}，待确认 · 待支付 RM 0
-                          </p>
-                        ) : (
-                          <p className="mt-0.5 text-[11px] text-gray-600">
-                            已付 {formatMYR(Number(o.paidAmount) || 0)} · 待付{' '}
-                            {formatMYR(Number(o.pendingAmount) || 0)}
-                          </p>
-                        )
+                        <p className="mt-0.5 text-[11px] text-gray-600">
+                          已付 {formatMYR(confirmedAmount)} · 待付 {formatMYR(unpaidAmount)}
+                        </p>
                       ) : null}
                       {o.status === 'unpaid' && o.timedPromoPaymentDueAt ? (
                         <p className="mt-0.5 text-[11px] text-amber-700">

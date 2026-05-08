@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "cleanup-health": "node scripts/delete-health-check.mjs",
+    "dev-wipe-firestore": "node scripts/dev-wipe-firestore.mjs --yes",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "eslint .",

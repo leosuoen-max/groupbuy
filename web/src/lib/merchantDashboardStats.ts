@@ -1,4 +1,5 @@
 import type { OrderRow } from './orderService';
+import { buildPaymentGroups } from './paymentGroups';
 
 /** Dashboard「今日」汇总（按浏览器本地日历日从 createdAt 判定） */
 export type ShopDashboardTodayStats = {
@@ -32,11 +33,11 @@ export function aggregateShopOrdersForToday(
 ): ShopDashboardTodayStats {
   const { start, end } = dayBoundsMs(now);
 
-  let confirmedCount = 0;
+  const confirmedOrders = new Set<string>();
+  const pendingOrders = new Set<string>();
+  const unpaidOrders = new Set<string>();
   let confirmedRevenue = 0;
-  let pendingReviewCount = 0;
   let pendingReviewAmount = 0;
-  let unpaidCount = 0;
   let unpaidAmount = 0;
   let todayOpenOrdersCount = 0;
 
@@ -49,26 +50,34 @@ export function aggregateShopOrdersForToday(
 
     todayOpenOrdersCount += 1;
 
-    const amt = Number(o.totalAmount) || 0;
-
-    if (o.status === 'confirmed') {
-      confirmedCount += 1;
-      confirmedRevenue += Number(o.paidAmount) || amt;
-    } else if (o.status === 'pending' || o.status === 'partial_paid') {
-      pendingReviewCount += 1;
-      pendingReviewAmount += amt;
-    } else if (o.status === 'unpaid') {
-      unpaidCount += 1;
-      unpaidAmount += amt;
+    const groups = buildPaymentGroups(o);
+    let hasConfirmed = false;
+    let hasPending = false;
+    let hasUnpaid = false;
+    for (const g of groups) {
+      const amt = Number(g.subtotal) || 0;
+      if (g.status === 'confirmed') {
+        confirmedRevenue += amt;
+        hasConfirmed = true;
+      } else if (g.status === 'pending') {
+        pendingReviewAmount += amt;
+        hasPending = true;
+      } else {
+        unpaidAmount += amt;
+        hasUnpaid = true;
+      }
     }
+    if (hasConfirmed) confirmedOrders.add(r.id);
+    if (hasPending) pendingOrders.add(r.id);
+    if (hasUnpaid) unpaidOrders.add(r.id);
   }
 
   return {
-    confirmedCount,
+    confirmedCount: confirmedOrders.size,
     confirmedRevenue,
-    pendingReviewCount,
+    pendingReviewCount: pendingOrders.size,
     pendingReviewAmount,
-    unpaidCount,
+    unpaidCount: unpaidOrders.size,
     unpaidAmount,
     todayOpenOrdersCount,
   };

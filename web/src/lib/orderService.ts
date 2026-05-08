@@ -129,17 +129,23 @@ async function autoCancelExpiredTimedPromoOrder(
   orderRef: ReturnType<typeof doc>,
   order: OrderDoc
 ): Promise<OrderDoc> {
-  if (!isTimedPromoPaymentExpired(order)) return order;
+  const next = buildAutoCancelledTimedPromoOrder(order);
+  if (!next) return order;
+  await updateDoc(orderRef, {
+    status: 'cancelled' as const,
+    statusHistory: next.statusHistory ?? [],
+    updatedAt: serverTimestamp(),
+  });
+  return next;
+}
+
+function buildAutoCancelledTimedPromoOrder(order: OrderDoc): OrderDoc | null {
+  if (!isTimedPromoPaymentExpired(order)) return null;
   const hist = [...(order.statusHistory ?? [])];
   hist.push({
     action: 'auto_cancel_unpaid_timed_promo_expired',
     timestamp: Timestamp.now(),
     note: `限时优惠订单超过${TIMED_PROMO_PAYMENT_WINDOW_MINUTES}分钟未付款`,
-  });
-  await updateDoc(orderRef, {
-    status: 'cancelled' as const,
-    statusHistory: hist,
-    updatedAt: serverTimestamp(),
   });
   return {
     ...order,
@@ -362,10 +368,12 @@ export async function listOrdersByCustomer(projectId: string, customerKey: strin
         const tb = b.data.createdAt?.toMillis?.() ?? 0;
         return tb - ta;
       });
-    for (const row of rows) {
-      const orderRef = doc(db, 'orders', row.id);
-      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
-    }
+    await Promise.all(
+      rows.map(async (row) => {
+        const orderRef = doc(db, 'orders', row.id);
+        row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+      })
+    );
     customerOrdersCache.set(ck, { at: Date.now(), rows });
     return rows;
   })();
@@ -412,9 +420,6 @@ async function md5DuplicateInShopOtherOrders(
  * 而不是固定 appendBatches 数组的第一项（否则多笔都会挤在同一档，后续加购永远缺图）。
  */
 function pickPendingAppendBatchIdForNewScreenshot(order: OrderDoc): string | undefined {
-  // 首笔尚未确认前，顾客提交的付款动作默认视为“覆盖当前待付总额”，
-  // 不强绑到某个 appendBatch，避免把同一次支付错误拆成两组。
-  if (!order.initialPaymentConfirmedAt) return undefined;
   const pendingBatches = (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
   if (pendingBatches.length === 0) return undefined;
   /**
@@ -627,7 +632,7 @@ export async function customerDeletePaymentScreenshot(input: {
       pendingBatches.length > 0 &&
       removedUploadedAt >= minPendingMs;
     if (!likelyPendingAppendProof && order.initialPaymentConfirmedAt) {
-      throw new Error('首单付款已被商户确认，相关凭证不能删除');
+      throw new Error('该已确认支付组的凭证不能删除');
     }
   }
 
@@ -970,8 +975,17 @@ export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
         return tb - ta;
       });
     for (const row of rows) {
+      const next = buildAutoCancelledTimedPromoOrder(row.data);
+      if (!next) continue;
+      row.data = next;
       const orderRef = doc(db, 'orders', row.id);
-      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+      void updateDoc(orderRef, {
+        status: 'cancelled' as const,
+        statusHistory: next.statusHistory ?? [],
+        updatedAt: serverTimestamp(),
+      }).catch(() => {
+        // 非阻塞刷新：列表优先返回，落库失败不影响当前读取结果。
+      });
     }
     shopOrdersCache.set(shopId, { at: Date.now(), rows });
     return rows;
@@ -1058,10 +1072,14 @@ export async function merchantConfirmPayment(
 
   if (pre.status === 'confirmed') throw new Error('订单已是已确认状态');
   if (pre.status === 'cancelled') throw new Error('订单已取消');
-  if (pre.status === 'partial_paid') {
-    throw new Error('请在下方的「加购补款」区块逐笔确认，勿使用整单确认');
+  if (pre.initialPaymentConfirmedAt) {
+    throw new Error('该支付组已确认，无需重复确认');
   }
-  if (pre.status !== 'unpaid' && pre.status !== 'pending') {
+  if (
+    pre.status !== 'unpaid' &&
+    pre.status !== 'pending' &&
+    pre.status !== 'partial_paid'
+  ) {
     throw new Error('当前状态不可确认收款');
   }
 
@@ -1069,7 +1087,14 @@ export async function merchantConfirmPayment(
     const oSnap = await tx.get(orderRef);
     if (!oSnap.exists()) throw new Error('订单不存在');
     const o = oSnap.data() as OrderDoc;
-    if (o.status !== 'unpaid' && o.status !== 'pending') {
+    if (o.initialPaymentConfirmedAt) {
+      throw new Error('该支付组已确认，无需重复确认');
+    }
+    if (
+      o.status !== 'unpaid' &&
+      o.status !== 'pending' &&
+      o.status !== 'partial_paid'
+    ) {
       throw new Error('订单状态已变更，请刷新后重试');
     }
 
@@ -1089,12 +1114,17 @@ export async function merchantConfirmPayment(
     };
 
     const totalAmt = Number(o.totalAmount) || 0;
+    const paidBefore = Number(o.paidAmount) || 0;
     const openAppend = hasUnconfirmedAppendBatch(o);
     const firstPay = computeFirstTrancheAmount(o);
-    if (firstPay <= 0) throw new Error('无法计算首单可确认金额');
+    if (firstPay <= 0) throw new Error('无法计算该支付组可确认金额');
     if (firstPay > totalAmt + 0.02) {
-      throw new Error('首单金额与订单合计不一致，请刷新后重试');
+      throw new Error('支付组金额与订单合计不一致，请刷新后重试');
     }
+    const initialSupplement = Math.max(
+      0,
+      Math.min(firstPay, Math.max(0, totalAmt - paidBefore))
+    );
 
     const history = [...(o.statusHistory ?? [])];
 
@@ -1121,14 +1151,16 @@ export async function merchantConfirmPayment(
           ...prevStats,
           confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1,
           unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
-          confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + totalAmt,
+          confirmedRevenue:
+            (prevStats.confirmedRevenue ?? 0) + initialSupplement,
         },
         updatedAt: serverTimestamp(),
       });
       return;
     }
 
-    const nextPending = Math.max(0, totalAmt - firstPay);
+    const newPaid = Math.min(totalAmt, paidBefore + initialSupplement);
+    const nextPending = Math.max(0, totalAmt - newPaid);
     history.push({
       action: 'confirm_initial_payment',
       timestamp: Timestamp.now(),
@@ -1138,7 +1170,7 @@ export async function merchantConfirmPayment(
 
     tx.update(orderRef, {
       status: 'partial_paid',
-      paidAmount: firstPay,
+      paidAmount: newPaid,
       pendingAmount: nextPending,
       appendBatches: o.appendBatches ?? [],
       initialPaymentConfirmedAt: o.initialPaymentConfirmedAt ?? Timestamp.now(),
@@ -1150,7 +1182,8 @@ export async function merchantConfirmPayment(
       stats: {
         ...prevStats,
         unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
-        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + firstPay,
+        confirmedRevenue:
+          (prevStats.confirmedRevenue ?? 0) + initialSupplement,
       },
       updatedAt: serverTimestamp(),
     });
@@ -1180,7 +1213,7 @@ export async function merchantWaiveInitialPaymentScreenshot(
       throw new Error('订单状态已变更，请刷新后重试');
     }
     if (o.initialPaymentConfirmedAt) {
-      throw new Error('首单已确认，无需免提交');
+      throw new Error('该支付组已确认，无需免提交');
     }
 
     const hasInitialProof = Array.isArray(o.paymentScreenshots)
@@ -1196,7 +1229,7 @@ export async function merchantWaiveInitialPaymentScreenshot(
         })
       : false;
     if (hasInitialProof) {
-      throw new Error('首单已有可核对凭证，无需免提交');
+      throw new Error('该支付组已有可核对凭证，无需免提交');
     }
 
     const prevShots = Array.isArray(o.paymentScreenshots)
@@ -1208,7 +1241,7 @@ export async function merchantWaiveInitialPaymentScreenshot(
       waivedNoScreenshot: true,
       waivedByUserId: actorUserId,
       flag: 'yellow',
-      flagReason: '商户已免提交付款凭证（首单）',
+      flagReason: '商户已免提交付款凭证（支付组）',
     });
 
     const history = [...(o.statusHistory ?? [])];
@@ -1231,7 +1264,8 @@ export async function merchantWaiveInitialPaymentScreenshot(
 export async function merchantConfirmAppendBatch(
   orderFirestoreId: string,
   appendBatchId: string,
-  actorUserId: string
+  actorUserId: string,
+  _options?: { includeInitialPayment?: boolean }
 ): Promise<void> {
   const db = getDb();
   const orderRef = doc(db, 'orders', orderFirestoreId);
@@ -1287,7 +1321,9 @@ export async function merchantConfirmAppendBatch(
     const supplement = Number(batch.deltaAmount) || 0;
     if (supplement <= 0) throw new Error('该笔加购金额无效');
     const now = Timestamp.now();
-    const confirmInitialInSameAction = !o.initialPaymentConfirmedAt;
+    // 单组确认必须是“只确认当前组”，禁止夹带首组确认。
+    const includeInitial = false;
+    const confirmInitialInSameAction = includeInitial && !o.initialPaymentConfirmedAt;
     const initialSupplement = confirmInitialInSameAction
       ? Math.max(0, computeFirstTrancheAmount(o))
       : 0;
@@ -1431,7 +1467,8 @@ export async function merchantWaiveAppendBatchScreenshot(
 /** 一次性确认当前所有「待核实」加购补款（多档待确认时一并入账） */
 export async function merchantConfirmPendingAppendBatches(
   orderFirestoreId: string,
-  actorUserId: string
+  actorUserId: string,
+  options?: { includeInitialPayment?: boolean }
 ): Promise<void> {
   const db = getDb();
   const orderRef = doc(db, 'orders', orderFirestoreId);
@@ -1489,7 +1526,8 @@ export async function merchantConfirmPendingAppendBatches(
     if (supplement <= 0) throw new Error('加购金额无效');
 
     const now = Timestamp.now();
-    const confirmInitialInSameAction = !o.initialPaymentConfirmedAt;
+    const includeInitial = options?.includeInitialPayment === true;
+    const confirmInitialInSameAction = includeInitial && !o.initialPaymentConfirmedAt;
     const initialSupplement = confirmInitialInSameAction
       ? Math.max(0, computeFirstTrancheAmount(o))
       : 0;

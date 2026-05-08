@@ -107,12 +107,12 @@ export default function ReconciliationStatement() {
       const shop = await getShopBySlug(slug);
       if (!shop) {
         setOrders([]);
-        setErr('店铺不存在');
+        setErr('未找到该商户链接');
         return;
       }
       if (shop.data.ownerId !== user.uid) {
         setOrders([]);
-        setErr('无权限访问该店铺');
+        setErr('无权限访问该商户');
         return;
       }
       setShopName(shop.data.name);
@@ -320,7 +320,7 @@ export default function ReconciliationStatement() {
     return (
       <PageShell title="对账单" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
-          返回我的店铺
+          返回后台入口
         </Link>
       </PageShell>
     );

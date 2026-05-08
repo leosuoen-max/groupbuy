@@ -91,6 +91,7 @@ export async function updateProjectDoc(
     status?: ProjectDoc['status'];
     closesAt?: Timestamp;
     textContent?: string;
+    imageBlocks?: ProjectDoc['imageBlocks'];
     products?: ProjectProduct[];
     bundleTools?: BundleToolDoc[];
     publishedAt?: Timestamp | null;
@@ -135,16 +136,17 @@ export async function deleteProjectIfAllowed(projectId: string): Promise<void> {
 export async function uploadProjectAsset(
   ownerId: string,
   file: File,
-  scope: 'product' | 'bundle-option'
+  scope: 'product' | 'bundle-option' | 'description'
 ): Promise<string> {
-  if (!file.type.startsWith('image/')) throw new Error('请上传图片文件');
+  if (scope !== 'description' && !file.type.startsWith('image/')) {
+    throw new Error('请上传图片文件');
+  }
   const rawExt = file.name.split('.').pop()?.toLowerCase() ?? '';
   const safeExt = rawExt && /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
   const name = `${globalThis.crypto.randomUUID()}.${safeExt}`;
   const path = `projects/${ownerId}/${scope}/${name}`;
   const storageRef = ref(getStorageClient(), path);
-  const contentType =
-    file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
+  const contentType = file.type || 'application/octet-stream';
   await uploadBytes(storageRef, file, { contentType });
   return getDownloadURL(storageRef);
 }

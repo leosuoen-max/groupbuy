@@ -53,7 +53,9 @@ function mapImageBlocks(
   blocks: ProjectDoc['imageBlocks'] | undefined
 ): MockImageBlock[] {
   if (!blocks?.length) return [];
-  return blocks.map((b) => ({ url: b.url, caption: b.caption }));
+  return blocks
+    .filter((b) => !b.isCoverImage)
+    .map((b) => ({ url: b.url, caption: b.caption }));
 }
 
 function mapBundleTools(tools: ProjectDoc['bundleTools'] | undefined): MockBundleTool[] {
@@ -149,7 +151,8 @@ export async function loadShopHomeFromFirestore(
     .map(mapProduct);
 
   const closesAt = proj.closesAt?.toDate?.()?.toISOString() ?? new Date().toISOString();
-  const bannerUrl = shop.bannerImage?.trim() || undefined;
+  const projectCover = proj.imageBlocks?.find((b) => b.isCoverImage)?.url?.trim();
+  const bannerUrl = projectCover || shop.bannerImage?.trim() || undefined;
   const orderCount = proj.stats?.totalOrders ?? 0;
   const deliveryLabel =
     proj.deliveryPointIds?.length > 0 ? '按配送点' : '待定 / 请见说明';
