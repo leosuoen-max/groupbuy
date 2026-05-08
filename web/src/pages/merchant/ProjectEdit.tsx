@@ -389,24 +389,49 @@ export default function ProjectEdit() {
 
   const moveBundleTool = useCallback(
     (toolId: string, direction: -1 | 1) => {
-      setBundleTools((prev) => {
-        const totalCount = products.length + prev.length;
-        const maxSortOrder = Math.max(0, totalCount - 1);
-        let changed = false;
-        const next = prev.map((x) => {
-          if (x.id !== toolId) return x;
-          const current = Number.isFinite(x.sortOrder) ? Number(x.sortOrder) : 0;
-          const target = Math.max(0, Math.min(maxSortOrder, current + direction));
-          if (target !== current) {
-            changed = true;
-            return { ...x, sortOrder: target };
-          }
-          return x;
-        });
-        return changed ? next : prev;
+      const mixed = [
+        ...products.map((p) => ({
+          type: 'product' as const,
+          id: p.id,
+          sortOrder: Number(p.sortOrder ?? 0) || 0,
+        })),
+        ...bundleTools.map((b) => ({
+          type: 'bundle' as const,
+          id: b.id,
+          sortOrder: Number(b.sortOrder ?? 0) || 0,
+        })),
+      ].sort((a, b) => a.sortOrder - b.sortOrder);
+
+      const idx = mixed.findIndex((x) => x.type === 'bundle' && x.id === toolId);
+      if (idx < 0) return;
+      const target = idx + direction;
+      if (target < 0 || target >= mixed.length) return;
+
+      const reordered = [...mixed];
+      const [picked] = reordered.splice(idx, 1);
+      reordered.splice(target, 0, picked);
+
+      const productSort = new Map<string, number>();
+      const bundleSort = new Map<string, number>();
+      reordered.forEach((x, i) => {
+        if (x.type === 'product') productSort.set(x.id, i);
+        else bundleSort.set(x.id, i);
       });
+
+      setProducts((prev) =>
+        prev.map((p) => ({
+          ...p,
+          sortOrder: (productSort.get(p.id) ?? Number(p.sortOrder ?? 0)) || 0,
+        }))
+      );
+      setBundleTools((prev) =>
+        prev.map((b) => ({
+          ...b,
+          sortOrder: (bundleSort.get(b.id) ?? Number(b.sortOrder ?? 0)) || 0,
+        }))
+      );
     },
-    [products.length]
+    [products, bundleTools]
   );
 
   const applyLocalDraftIfAny = useCallback((): boolean => {
@@ -469,7 +494,12 @@ export default function ProjectEdit() {
     const ps = row.data.products?.length
       ? row.data.products
       : [newProduct(0)];
-    setProducts(ps.map((p, i) => ({ ...p, sortOrder: i })));
+    setProducts(
+      ps.map((p, i) => ({
+        ...p,
+        sortOrder: Number.isFinite(p.sortOrder) ? Number(p.sortOrder) : i,
+      }))
+    );
     setBundleTools(
       (row.data.bundleTools ?? []).map((x, i) => ({
         ...x,
@@ -1514,7 +1544,18 @@ export default function ProjectEdit() {
               type="button"
               className="text-sm font-medium text-indigo-600"
               onClick={() =>
-                setProducts((prev) => [...prev, newProduct(prev.length)].map((x, i) => ({ ...x, sortOrder: i })))
+                setProducts((prev) => {
+                  const maxProductSort = prev.reduce(
+                    (m, x) => Math.max(m, Number(x.sortOrder ?? 0) || 0),
+                    -1
+                  );
+                  const maxBundleSort = bundleTools.reduce(
+                    (m, x) => Math.max(m, Number(x.sortOrder ?? 0) || 0),
+                    -1
+                  );
+                  const nextSort = Math.max(maxProductSort, maxBundleSort) + 1;
+                  return [...prev, newProduct(nextSort)];
+                })
               }
             >
               + 添加商品
@@ -1810,9 +1851,7 @@ export default function ProjectEdit() {
                     onClick={() =>
                       setProducts((prev) =>
                         prev.length > 1
-                          ? prev
-                              .filter((x) => x.id !== p.id)
-                              .map((x, i) => ({ ...x, sortOrder: i }))
+                          ? prev.filter((x) => x.id !== p.id)
                           : prev
                       )
                     }
