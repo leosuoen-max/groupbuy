@@ -68,6 +68,29 @@ export function ProductCard({
     </span>
   );
 
+  const offIso = product.scheduledOffAt;
+  const scheduleRemaining =
+    offIso && new Date(offIso).getTime() > now.getTime()
+      ? formatRemainingShort(offIso, now)
+      : null;
+  const scheduleEndShort =
+    scheduleRemaining && offIso
+      ? new Date(offIso).toLocaleString('zh-CN', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        })
+      : null;
+  /** 与早鸟行同款：月/日 时:分 · 还剩 …，琥珀色 */
+  const scheduleLine =
+    scheduleRemaining && scheduleEndShort ? (
+      <p className="text-[11px] leading-none text-amber-700">
+        下架截止 {scheduleEndShort} · 还剩 {scheduleRemaining}
+      </p>
+    ) : null;
+
   const promoLine = isDiscount ? (
     <p
       className={`text-[11px] leading-none ${
@@ -83,6 +106,14 @@ export function ProductCard({
           : '特惠进行中'}
     </p>
   ) : null;
+
+  const promoFooter =
+    promoLine || scheduleLine ? (
+      <div className="flex flex-col gap-0.5">
+        {promoLine}
+        {scheduleLine}
+      </div>
+    ) : null;
 
   const priceBlock = (
     <div className="flex items-baseline gap-1.5">
@@ -151,7 +182,7 @@ export function ProductCard({
         {priceBlock}
         {stockChip}
       </div>
-      {promoLine}
+      {promoFooter}
     </div>
   );
 

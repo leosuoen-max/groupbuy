@@ -14,6 +14,8 @@ export type MockProduct = {
   stock: number;
   imageUrl?: string;
   isActive: boolean;
+  /** ISO8601，到达后顾客端视为下架 */
+  scheduledOffAt?: string;
 };
 
 export type MockImageBlock = {
@@ -54,6 +56,7 @@ export type MockBundleTool = {
   description?: string;
   isActive: boolean;
   sortOrder?: number;
+  scheduledOffAt?: string;
   series: MockBundleSeries[];
   schemes: MockBundleScheme[];
 };
@@ -120,6 +123,7 @@ export function getMockShopHome(
         imageUrl:
           'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=200&q=80',
         isActive: true,
+        scheduledOffAt: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(),
       },
       {
         id: 'p2',

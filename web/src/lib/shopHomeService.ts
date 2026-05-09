@@ -34,6 +34,7 @@ function tsToIso(t: Timestamp | null | undefined): string | undefined {
 }
 
 function mapProduct(p: ProjectProduct): MockProduct {
+  const scheduledIso = tsToIso(p.scheduledOffAt ?? undefined);
   return {
     id: p.id,
     name: p.name,
@@ -46,6 +47,7 @@ function mapProduct(p: ProjectProduct): MockProduct {
     stock: p.stock,
     imageUrl: p.imageUrl,
     isActive: p.isActive,
+    ...(scheduledIso ? { scheduledOffAt: scheduledIso } : {}),
   };
 }
 
@@ -60,12 +62,15 @@ function mapImageBlocks(
 
 function mapBundleTools(tools: ProjectDoc['bundleTools'] | undefined): MockBundleTool[] {
   if (!tools?.length) return [];
-  return tools.map((t) => ({
+  return tools.map((t) => {
+    const scheduledIso = tsToIso(t.scheduledOffAt ?? undefined);
+    return {
     id: t.id,
     name: t.name,
     description: t.description,
     isActive: t.isActive,
     sortOrder: t.sortOrder ?? 0,
+    ...(scheduledIso ? { scheduledOffAt: scheduledIso } : {}),
     series: t.series
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((s) => ({
@@ -95,7 +100,8 @@ function mapBundleTools(tools: ProjectDoc['bundleTools'] | undefined): MockBundl
         requirements: x.requirements,
         isActive: x.isActive,
       })),
-  }));
+  };
+  });
 }
 
 function resolveUiStatus(

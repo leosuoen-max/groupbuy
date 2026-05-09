@@ -28,6 +28,8 @@ export type ProjectProduct = {
   imageUrl?: string;
   isActive: boolean;
   sortOrder: number;
+  /** 到达该时间后自动视为下架（顾客端不可购）；未设置则无定时下架 */
+  scheduledOffAt?: Timestamp | null;
   /** 本商品可被以下次卡模板抵扣（id 列表，对应 CardTemplateDoc.id） */
   applicableCardTemplateIds?: string[];
 };
@@ -73,6 +75,8 @@ export type BundleToolDoc = {
   description?: string;
   isActive: boolean;
   sortOrder: number;
+  /** 到达该时刻后自动视为下架（顾客端不可购） */
+  scheduledOffAt?: Timestamp | null;
   series: BundleSeriesDoc[];
   schemes: BundleSchemeDoc[];
 };

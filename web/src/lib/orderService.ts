@@ -38,6 +38,7 @@ import type {
   OrderStatus,
   ProjectDoc,
 } from '../types/firestore';
+import { isBundleToolPastScheduledOff, isProductPastScheduledOff } from './productAvailability';
 
 export type OrderRow = { id: string; data: OrderDoc };
 const TIMED_PROMO_PAYMENT_WINDOW_MINUTES = 30;
@@ -180,7 +181,9 @@ function applyStockDeduction(project: ProjectDoc, lines: OrderLine[]): ProjectDo
     const idx = nextProducts.findIndex((p) => p.id === line.productId);
     if (idx < 0) throw new CreateOrderError('PRODUCT_NOT_FOUND');
     const product = nextProducts[idx];
-    if (!product.isActive) throw new CreateOrderError('PRODUCT_INACTIVE');
+    if (!product.isActive || isProductPastScheduledOff(product)) {
+      throw new CreateOrderError('PRODUCT_INACTIVE');
+    }
     if (product.stock < line.quantity) throw new CreateOrderError('INSUFFICIENT_STOCK');
     product.stock -= line.quantity;
   }
@@ -204,7 +207,9 @@ function applyBundleStockDeduction(
   for (const sel of selections) {
     const qty = Math.max(1, Math.floor(sel.quantity || 1));
     const tool = tools.find((t) => t.id === sel.bundleToolId);
-    if (!tool || !tool.isActive) throw new Error('套餐工具不可用，请刷新后重试');
+    if (!tool || !tool.isActive || isBundleToolPastScheduledOff(tool)) {
+      throw new Error('套餐已下架或不可用，请刷新后重试');
+    }
     const scheme = tool.schemes.find((s) => s.id === sel.schemeId && s.isActive);
     if (!scheme) throw new Error('套餐方案不可用，请刷新后重试');
 

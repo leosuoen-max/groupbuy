@@ -71,10 +71,22 @@ function normalizeApplicableCardIds(input: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+function getScheduledOffAtTs(row: {
+  scheduledOffAt?: ProjectProduct['scheduledOffAt'];
+}): Timestamp | null {
+  if (!row.scheduledOffAt) return null;
+  if (row.scheduledOffAt instanceof Timestamp) return row.scheduledOffAt;
+  const t = parseMaybeTimestamp(row.scheduledOffAt as unknown);
+  return t instanceof Timestamp ? t : null;
+}
+
 function normalizeDraftProducts(input: unknown): ProjectProduct[] {
   if (!Array.isArray(input)) return [];
   return input.map((p, i) => {
     const row = (p ?? {}) as Partial<ProjectProduct>;
+    const schedRaw = row.scheduledOffAt;
+    const schedParsed =
+      schedRaw != null ? parseMaybeTimestamp(schedRaw as unknown) : undefined;
     return {
       id: typeof row.id === 'string' && row.id ? row.id : crypto.randomUUID(),
       name: typeof row.name === 'string' ? row.name : '',
@@ -93,6 +105,7 @@ function normalizeDraftProducts(input: unknown): ProjectProduct[] {
         typeof row.sortOrder === 'number' && Number.isFinite(row.sortOrder)
           ? row.sortOrder
           : i,
+      ...(schedParsed instanceof Timestamp ? { scheduledOffAt: schedParsed } : {}),
       applicableCardTemplateIds: normalizeApplicableCardIds(
         (row as { applicableCardTemplateIds?: unknown }).applicableCardTemplateIds
       ),
@@ -468,7 +481,23 @@ export default function ProjectEdit() {
       if (Array.isArray(d.products) && d.products.length > 0) {
         setProducts(normalizeDraftProducts(d.products));
       }
-      if (Array.isArray(d.bundleTools)) setBundleTools(d.bundleTools);
+      if (Array.isArray(d.bundleTools)) {
+        setBundleTools(
+          d.bundleTools.map((tool) => {
+            const row = tool as BundleToolDoc;
+            const sched =
+              row.scheduledOffAt != null
+                ? parseMaybeTimestamp(row.scheduledOffAt as unknown)
+                : null;
+            const next = { ...row };
+            if (row.scheduledOffAt != null) {
+              if (sched instanceof Timestamp) next.scheduledOffAt = sched;
+              else delete next.scheduledOffAt;
+            }
+            return next;
+          })
+        );
+      }
       if (Array.isArray(d.selectedDpIds)) setSelectedDpIds(d.selectedDpIds);
       setMsg('已恢复未保存草稿');
       return true;
@@ -638,6 +667,10 @@ export default function ProjectEdit() {
           p.discountStart as unknown
         );
         const parsedDiscountEnd = parseMaybeTimestamp(p.discountEnd as unknown);
+        const schedTs =
+          p.scheduledOffAt instanceof Timestamp
+            ? p.scheduledOffAt
+            : parseMaybeTimestamp(p.scheduledOffAt as unknown);
         const normalized: ProjectProduct = {
           id: p.id,
           name: p.name.trim(),
@@ -656,6 +689,7 @@ export default function ProjectEdit() {
           ...(discountPrice != null
             ? { discountEnd: parsedDiscountEnd instanceof Timestamp ? parsedDiscountEnd : null }
             : {}),
+          ...(schedTs instanceof Timestamp ? { scheduledOffAt: schedTs } : {}),
           ...(Array.isArray(p.applicableCardTemplateIds) &&
           p.applicableCardTemplateIds.length > 0
             ? {
@@ -673,7 +707,12 @@ export default function ProjectEdit() {
 
   const normalizedBundleTools = useMemo(() => {
     return bundleTools
-      .map((tool, i) => ({
+      .map((tool, i) => {
+        const schedTs =
+          tool.scheduledOffAt instanceof Timestamp
+            ? tool.scheduledOffAt
+            : parseMaybeTimestamp(tool.scheduledOffAt as unknown);
+        return {
         id: tool.id,
         name: (tool.name ?? '').trim(),
         ...(typeof tool.description === 'string' && tool.description.trim()
@@ -681,6 +720,7 @@ export default function ProjectEdit() {
           : {}),
         isActive: tool.isActive !== false,
         sortOrder: Number.isFinite(tool.sortOrder) ? tool.sortOrder : i,
+        ...(schedTs instanceof Timestamp ? { scheduledOffAt: schedTs } : {}),
         series: (tool.series ?? [])
           .map((series, si) => {
             const options = (series.options ?? []).map((opt, oi) => ({
@@ -757,7 +797,8 @@ export default function ProjectEdit() {
             };
           })
           .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
-      }))
+      };
+      })
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   }, [bundleTools]);
 
@@ -1225,13 +1266,22 @@ export default function ProjectEdit() {
     'rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-[15px] text-gray-800 shadow-sm transition active:scale-[0.99]';
 
   const addBundleTool = () => {
-    if (bundleTools.length >= 1) return;
-    setBundleTools([
+    const maxProductSort = products.reduce(
+      (m, x) => Math.max(m, Number(x.sortOrder ?? 0) || 0),
+      -1
+    );
+    const maxBundleSort = bundleTools.reduce(
+      (m, x) => Math.max(m, Number(x.sortOrder ?? 0) || 0),
+      -1
+    );
+    const nextSort = Math.max(maxProductSort, maxBundleSort) + 1;
+    setBundleTools((prev) => [
+      ...prev,
       {
         id: crypto.randomUUID(),
-        name: '午餐套餐',
+        name: `套餐 ${prev.length + 1}`,
         isActive: true,
-        sortOrder: products.length,
+        sortOrder: nextSort,
         series: [],
         schemes: [],
       },
@@ -1654,17 +1704,82 @@ export default function ProjectEdit() {
                     <label className="flex items-center gap-2 text-xs text-gray-700">
                       <input
                         type="checkbox"
-                        checked={p.isActive}
-                        onChange={(e) =>
+                        checked={!p.isActive}
+                        onChange={(e) => {
+                          const delist = e.target.checked;
                           setProducts((prev) =>
-                            prev.map((x) =>
-                              x.id === p.id ? { ...x, isActive: e.target.checked } : x
-                            )
-                          )
-                        }
+                            prev.map((x) => {
+                              if (x.id !== p.id) return x;
+                              if (delist) {
+                                const next = { ...x, isActive: false };
+                                delete next.scheduledOffAt;
+                                return next;
+                              }
+                              return { ...x, isActive: true };
+                            })
+                          );
+                        }}
                       />
-                      上架
+                      下架
                     </label>
+                    <span className="flex flex-wrap items-center gap-1.5 text-xs text-gray-700">
+                      <label
+                        className={`flex items-center gap-1.5 ${p.isActive ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+                        title={
+                          p.isActive
+                            ? undefined
+                            : '请先取消「下架」后再设置定时下架'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={!p.isActive}
+                          checked={Boolean(getScheduledOffAtTs(p))}
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            setProducts((prev) =>
+                              prev.map((x) => {
+                                if (x.id !== p.id) return x;
+                                if (!on) {
+                                  const next = { ...x };
+                                  delete next.scheduledOffAt;
+                                  return next;
+                                }
+                                const withListing = { ...x, isActive: true };
+                                if (getScheduledOffAtTs(withListing)) return withListing;
+                                return {
+                                  ...withListing,
+                                  scheduledOffAt: Timestamp.fromMillis(
+                                    Date.now() + 60 * 60 * 1000
+                                  ),
+                                };
+                              })
+                            );
+                          }}
+                        />
+                        定时下架
+                      </label>
+                      {getScheduledOffAtTs(p) ? (
+                        <input
+                          type="datetime-local"
+                          disabled={!p.isActive}
+                          className="max-w-[11rem] rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] text-gray-800 shadow-inner disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-none"
+                          value={tsToDatetimeLocalInput(getScheduledOffAtTs(p))}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setProducts((prev) =>
+                              prev.map((x) => {
+                                if (x.id !== p.id) return x;
+                                if (!v) return x;
+                                const d = new Date(v);
+                                if (Number.isNaN(d.getTime())) return x;
+                                return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
+                              })
+                            );
+                          }}
+                        />
+                      ) : null}
+                    </span>
                     <div className="flex items-center gap-1 text-xs">
                       <button
                         type="button"
@@ -1935,9 +2050,8 @@ export default function ProjectEdit() {
               type="button"
               className="text-xs font-medium text-indigo-600"
               onClick={addBundleTool}
-              disabled={bundleTools.length >= 1}
             >
-              {bundleTools.length >= 1 ? '已创建' : '+ 新建套餐工具'}
+              + 添加套餐工具
             </button>
           </div>
           {bundleTools.length === 0 ? (
@@ -1997,20 +2111,85 @@ export default function ProjectEdit() {
                       下移
                     </button>
                   </div>
-                  <label className="mt-2 flex items-center gap-2 text-xs text-gray-700">
-                    <input
-                      type="checkbox"
-                      checked={tool.isActive}
-                      onChange={(e) =>
-                        setBundleTools((prev) =>
-                          prev.map((x) =>
-                            x.id === tool.id ? { ...x, isActive: e.target.checked } : x
-                          )
-                        )
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-700">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!tool.isActive}
+                        onChange={(e) => {
+                          const delist = e.target.checked;
+                          setBundleTools((prev) =>
+                            prev.map((x) => {
+                              if (x.id !== tool.id) return x;
+                              if (delist) {
+                                const next = { ...x, isActive: false };
+                                delete next.scheduledOffAt;
+                                return next;
+                              }
+                              return { ...x, isActive: true };
+                            })
+                          );
+                        }}
+                      />
+                      下架
+                    </label>
+                    <span
+                      className={`flex flex-wrap items-center gap-1.5 ${tool.isActive ? '' : 'cursor-not-allowed opacity-60'}`}
+                      title={
+                        tool.isActive ? undefined : '请先取消「下架」后再设置定时下架'
                       }
-                    />
-                    启用套餐工具
-                  </label>
+                    >
+                      <label className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          disabled={!tool.isActive}
+                          checked={Boolean(getScheduledOffAtTs(tool))}
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            setBundleTools((prev) =>
+                              prev.map((x) => {
+                                if (x.id !== tool.id) return x;
+                                if (!on) {
+                                  const next = { ...x };
+                                  delete next.scheduledOffAt;
+                                  return next;
+                                }
+                                const withListing = { ...x, isActive: true };
+                                if (getScheduledOffAtTs(withListing)) return withListing;
+                                return {
+                                  ...withListing,
+                                  scheduledOffAt: Timestamp.fromMillis(
+                                    Date.now() + 60 * 60 * 1000
+                                  ),
+                                };
+                              })
+                            );
+                          }}
+                        />
+                        定时下架
+                      </label>
+                      {getScheduledOffAtTs(tool) ? (
+                        <input
+                          type="datetime-local"
+                          disabled={!tool.isActive}
+                          className="max-w-[11rem] rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] text-gray-800 shadow-inner disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-none"
+                          value={tsToDatetimeLocalInput(getScheduledOffAtTs(tool))}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setBundleTools((prev) =>
+                              prev.map((x) => {
+                                if (x.id !== tool.id) return x;
+                                if (!v) return x;
+                                const d = new Date(v);
+                                if (Number.isNaN(d.getTime())) return x;
+                                return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
+                              })
+                            );
+                          }}
+                        />
+                      ) : null}
+                    </span>
+                  </div>
 
                   <div className="mt-3 rounded-lg border border-gray-100 bg-white p-3">
                     <div className="mb-2 flex items-center justify-between">

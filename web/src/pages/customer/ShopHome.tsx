@@ -10,6 +10,7 @@ import {
   getMockShopHome,
   type MockShopHome,
 } from '../../data/mockShopHome';
+import { isMockProductSellable } from '../../lib/productAvailability';
 import { getEffectivePrice } from '../../lib/productPrice';
 import { formatMYR } from '../../lib/formatMYR';
 import { formatRemainingShort } from '../../lib/countdown';
@@ -334,8 +335,8 @@ export default function ShopHome() {
   }, [isAppendMode, projectId, appendOrderNumber, shopSlug]);
 
   const activeProducts = useMemo(
-    () => (data ? data.products.filter((p) => p.isActive) : []),
-    [data]
+    () => (data ? data.products.filter((p) => isMockProductSellable(p, now)) : []),
+    [data, now]
   );
 
   const setQty = useCallback((productId: string, next: number) => {
@@ -403,9 +404,9 @@ export default function ShopHome() {
   const activeBundleTools = useMemo(
     () =>
       (data?.bundleTools ?? [])
-        .filter((x) => x.isActive)
+        .filter((x) => isMockProductSellable(x, now))
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
-    [data?.bundleTools]
+    [data?.bundleTools, now]
   );
 
   const mixedItems = useMemo(() => {
@@ -797,15 +798,45 @@ export default function ShopHome() {
                     if (promoNotes.length === 0 && hasSpecial) {
                       promoNotes.push('部分方案特惠进行中');
                     }
-                    if (promoNotes.length === 0) return null;
+                    const bundlePromoEl =
+                      promoNotes.length > 0 ? (
+                        <p
+                          className={`text-[11px] font-medium leading-none ${
+                            earliestEarlyBird ? 'text-amber-700' : 'text-rose-600'
+                          }`}
+                        >
+                          {promoNotes.join(' · ')}
+                        </p>
+                      ) : null;
+
+                    const offIso = tool.scheduledOffAt;
+                    const scheduleRemaining =
+                      offIso && new Date(offIso).getTime() > now.getTime()
+                        ? formatRemainingShort(offIso, now)
+                        : null;
+                    const scheduleEndShort =
+                      scheduleRemaining && offIso
+                        ? new Date(offIso).toLocaleString('zh-CN', {
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false,
+                          })
+                        : null;
+                    const bundleScheduleEl =
+                      scheduleRemaining && scheduleEndShort ? (
+                        <p className="text-[11px] leading-none text-amber-700">
+                          下架截止 {scheduleEndShort} · 还剩 {scheduleRemaining}
+                        </p>
+                      ) : null;
+
+                    if (!bundlePromoEl && !bundleScheduleEl) return null;
                     return (
-                      <p
-                        className={`mt-1 text-[11px] font-medium leading-none ${
-                          earliestEarlyBird ? 'text-amber-700' : 'text-rose-600'
-                        }`}
-                      >
-                        {promoNotes.join(' · ')}
-                      </p>
+                      <div className="mt-1 flex flex-col gap-0.5">
+                        {bundlePromoEl}
+                        {bundleScheduleEl}
+                      </div>
                     );
                   })()}
                   {previewOptions.length > 0 ? (
