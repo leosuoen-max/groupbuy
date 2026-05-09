@@ -23,6 +23,10 @@ import {
   merchantWaiveAppendBatchScreenshot,
   type OrderRow,
 } from '../../lib/orderService';
+import {
+  cardApplicationsForAppendBatch,
+  listOrderCardPaymentApplications,
+} from '../../lib/orderCardPaymentApplications';
 import type {
   OrderAppendBatchDoc,
   OrderCardPaymentDoc,
@@ -110,13 +114,15 @@ function aggregateOrderLines(lines: OrderLineDoc[]): OrderLineDoc[] {
 function CardPaymentBreakdown({
   cardPayment,
   lines,
+  title = '本组为卡支付自动确认（无需截图）',
 }: {
   cardPayment: OrderCardPaymentDoc;
   lines: OrderLineDoc[];
+  title?: string;
 }) {
   return (
     <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-      <p className="font-semibold">本组为卡支付自动确认（无需截图）</p>
+      <p className="font-semibold">{title}</p>
       <ul className="mt-1 space-y-0.5">
         {cardPayment.passCards.map((c) => (
           <li key={c.customerCardId}>
@@ -139,20 +145,29 @@ function CardPaymentBreakdown({
 }
 
 function ConfirmedAppendBatchCard({
+  order,
   batch,
   groupNumber,
   paymentScreenshots,
-  cardPayment,
   orderLines,
 }: {
+  order: OrderDoc;
   batch: OrderAppendBatchDoc;
   groupNumber: number;
   paymentScreenshots: unknown;
-  cardPayment?: OrderCardPaymentDoc;
   orderLines: OrderLineDoc[];
 }) {
   const hasBatchProof = hasPaymentScreenshotForAppendBatch(paymentScreenshots, batch.id);
   const isCardAutoConfirmed = batch.confirmedByUserId === 'customer_card_auto';
+  const allCardApps = listOrderCardPaymentApplications(order);
+  let batchCardApps = cardApplicationsForAppendBatch(order, batch.id);
+  if (
+    batchCardApps.length === 0 &&
+    isCardAutoConfirmed &&
+    allCardApps.length === 1
+  ) {
+    batchCardApps = allCardApps;
+  }
   return (
     <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -189,8 +204,21 @@ function ConfirmedAppendBatchCard({
       </div>
       <div className="mt-3">
         <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
-        {isCardAutoConfirmed && !hasBatchProof && cardPayment ? (
-          <CardPaymentBreakdown cardPayment={cardPayment} lines={orderLines} />
+        {isCardAutoConfirmed && !hasBatchProof && batchCardApps.length > 0 ? (
+          <div className="space-y-2">
+            {batchCardApps.map((cp, i) => (
+              <CardPaymentBreakdown
+                key={`${cp.appliedAt?.toMillis?.() ?? 0}-${i}`}
+                cardPayment={cp}
+                lines={orderLines}
+                title={
+                  batchCardApps.length > 1
+                    ? `本组卡支付自动确认（第 ${i + 1} 笔）`
+                    : undefined
+                }
+              />
+            ))}
+          </div>
         ) : (
           <PaymentScreenshotsPanel
             paymentScreenshots={paymentScreenshots}
@@ -406,6 +434,14 @@ export default function MerchantOrderDetail() {
     initialLines.reduce((s, l) => s + l.subtotal, 0);
 
   const firstPaymentAcknowledged = !!order.initialPaymentConfirmedAt;
+
+  const cardAppsAll = listOrderCardPaymentApplications(order);
+  let initialSegmentCardApps = cardAppsAll.filter((a) =>
+    Boolean(a.cardSettlementScope?.includesInitialSegment)
+  );
+  if (initialSegmentCardApps.length === 0 && cardAppsAll.length === 1) {
+    initialSegmentCardApps = cardAppsAll;
+  }
 
   const confirmedBatches = appendBatches
     .filter((b) => b.confirmedAt)
@@ -865,8 +901,23 @@ export default function MerchantOrderDetail() {
                 <h3 className="mb-1 text-xs font-semibold text-gray-700">
                   本组相关截图（未挂批次的图）
                 </h3>
-                {order.cardPayment && firstPaymentAcknowledged && !firstGroupHasProof ? (
-                  <CardPaymentBreakdown cardPayment={order.cardPayment} lines={initialLines} />
+                {initialSegmentCardApps.length > 0 &&
+                firstPaymentAcknowledged &&
+                !firstGroupHasProof ? (
+                  <div className="space-y-2">
+                    {initialSegmentCardApps.map((cp, i) => (
+                      <CardPaymentBreakdown
+                        key={`${cp.appliedAt?.toMillis?.() ?? 0}-${i}`}
+                        cardPayment={cp}
+                        lines={initialLines}
+                        title={
+                          initialSegmentCardApps.length > 1
+                            ? `本组卡支付自动确认（第 ${i + 1} 笔）`
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <PaymentScreenshotsPanel
                     paymentScreenshots={order.paymentScreenshots}
@@ -931,10 +982,10 @@ export default function MerchantOrderDetail() {
             {restConfirmedBatches.map((b, index) => (
               <ConfirmedAppendBatchCard
                 key={b.id}
+                order={order}
                 batch={b}
                 groupNumber={confirmedStartNumber + index}
                 paymentScreenshots={order.paymentScreenshots}
-                cardPayment={order.cardPayment}
                 orderLines={order.lines}
               />
             ))}
@@ -965,32 +1016,44 @@ export default function MerchantOrderDetail() {
             <span>应付合计</span>
             <span>{formatMYR(order.totalAmount)}</span>
           </div>
-          {order.cardPayment ? (
-            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-              <p className="font-semibold">卡支付（系统已抵扣）</p>
-              <ul className="mt-1 space-y-0.5">
-                {order.cardPayment.passCards.map((c) => (
-                  <li key={c.customerCardId}>
-                    · 次卡 #{c.customerCardId.slice(0, 6)} — 抵扣 {c.uses} 次（
-                    {c.appliedLineProductIds
-                      .map((pid) =>
-                        order.lines.find((l) => l.productId === pid)?.name ?? '行'
-                      )
-                      .join('、')}
-                    ）
-                  </li>
-                ))}
-                {order.cardPayment.wallet ? (
-                  <li>
-                    · 钱包扣减 RM{' '}
-                    {Number(order.cardPayment.wallet.deduct ?? 0).toFixed(2)}
-                  </li>
-                ) : null}
-                <li className="pt-1 font-semibold">
-                  共抵扣 RM{' '}
-                  {Number(order.cardPayment.totalDeducted ?? 0).toFixed(2)}
-                </li>
-              </ul>
+          {cardAppsAll.length > 0 ? (
+            <div className="mt-2 space-y-3">
+              {cardAppsAll.map((cp, ci) => (
+                <div
+                  key={`sum-card-${ci}-${cp.appliedAt?.toMillis?.() ?? 0}`}
+                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900"
+                >
+                  <p className="font-semibold">
+                    卡支付（系统已抵扣）
+                    {cardAppsAll.length > 1 ? ` · 第 ${ci + 1} 笔` : ''}
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {cp.passCards.map((c) => (
+                      <li key={`${ci}-${c.customerCardId}-${c.ledgerId}`}>
+                        · 次卡 #{c.customerCardId.slice(0, 6)} — 抵扣 {c.uses}{' '}
+                        次（
+                        {c.appliedLineProductIds
+                          .map(
+                            (pid) =>
+                              order.lines.find((l) => l.productId === pid)?.name ??
+                              '行'
+                          )
+                          .join('、')}
+                        ）
+                      </li>
+                    ))}
+                    {cp.wallet ? (
+                      <li>
+                        · 钱包扣减 RM{' '}
+                        {Number(cp.wallet.deduct ?? 0).toFixed(2)}
+                      </li>
+                    ) : null}
+                    <li className="pt-1 font-semibold">
+                      共抵扣 RM {Number(cp.totalDeducted ?? 0).toFixed(2)}
+                    </li>
+                  </ul>
+                </div>
+              ))}
             </div>
           ) : null}
         </div>

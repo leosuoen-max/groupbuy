@@ -32,6 +32,10 @@ import {
 } from '../../lib/paymentScreenshotHelpers';
 import { buildPaymentGroups } from '../../lib/paymentGroups';
 import {
+  cardApplicationsForPaymentGroup,
+  listOrderCardPaymentApplications,
+} from '../../lib/orderCardPaymentApplications';
+import {
   deriveDisplayOrderStatus,
   sumGroupAmountByStatus,
 } from '../../lib/paymentGroupView';
@@ -109,14 +113,16 @@ function aggregateOrderLines(lines: OrderLineDoc[]): OrderLineDoc[] {
 function CardPaymentBreakdown({
   cardPayment,
   lines,
+  title = '本组为卡支付自动确认（无需截图）',
 }: {
-  cardPayment: OrderDoc['cardPayment'];
+  cardPayment: NonNullable<OrderDoc['cardPayment']>;
   lines: OrderLineDoc[];
+  title?: string;
 }) {
   if (!cardPayment) return null;
   return (
     <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-      <p className="font-semibold">本组为卡支付自动确认（无需截图）</p>
+      <p className="font-semibold">{title}</p>
       <ul className="mt-1 space-y-0.5">
         {cardPayment.passCards.map((c) => (
           <li key={c.customerCardId}>
@@ -659,8 +665,25 @@ export default function OrderDetail() {
       subtotal: g.subtotal,
       proofs: g.proofs,
       hasCardAuto: g.hasCardAuto,
+      appendBatchIds: g.appendBatchIds,
+      includesInitial: g.includesInitial,
     };
   });
+  const cardAppsAll = listOrderCardPaymentApplications(order);
+  const cardWalletTotal = cardAppsAll.reduce(
+    (s, c) => s + Number(c.wallet?.deduct ?? 0),
+    0
+  );
+  const cardPassUsesTotal = cardAppsAll.reduce(
+    (s, c) =>
+      s +
+      c.passCards.reduce((u, p) => u + (Number(p.uses) || 0), 0),
+    0
+  );
+  const cardDeductGrandTotal = cardAppsAll.reduce(
+    (s, c) => s + Number(c.totalDeducted ?? 0),
+    0
+  );
   const statusText = {
     confirmed: '已确认',
     pending: '待确认',
@@ -769,27 +792,20 @@ export default function OrderDetail() {
               <strong>{formatMYR(unpaidAmount)}</strong>
             </p>
           ) : null}
-          {order.cardPayment ? (
+          {cardAppsAll.length > 0 ? (
             <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5 text-[11px] text-emerald-900 ring-1 ring-emerald-200">
               <span className="font-semibold">卡支付：</span>
-              {order.cardPayment.passCards.length > 0 ? (
-                <span className="ml-1">
-                  次卡{' '}
-                  {order.cardPayment.passCards.reduce(
-                    (s, c) => s + (Number(c.uses) || 0),
-                    0
-                  )}{' '}
-                  次
-                </span>
+              {cardPassUsesTotal > 0 ? (
+                <span className="ml-1">次卡 {cardPassUsesTotal} 次</span>
               ) : null}
-              {order.cardPayment.wallet ? (
+              {cardWalletTotal > 0 ? (
                 <span className="ml-1">
-                  · 钱包 RM{' '}
-                  {Number(order.cardPayment.wallet.deduct ?? 0).toFixed(2)}
+                  · 钱包 RM {cardWalletTotal.toFixed(2)}
                 </span>
               ) : null}
               <span className="ml-1">
-                · 共 RM {Number(order.cardPayment.totalDeducted ?? 0).toFixed(2)}
+                · 共 RM {cardDeductGrandTotal.toFixed(2)}
+                {cardAppsAll.length > 1 ? `（${cardAppsAll.length} 笔）` : ''}
               </span>
             </div>
           ) : null}
@@ -1311,9 +1327,16 @@ export default function OrderDetail() {
               <div className="space-y-4">
                 {displayGroups.map((g, idx) => {
                   const groupShots = g.proofs.filter((x) => Boolean(x.url));
+                  const appsForGroup = cardApplicationsForPaymentGroup(order, {
+                    includesInitial: g.includesInitial,
+                    appendBatchIds: g.appendBatchIds,
+                    hasCardAuto: g.hasCardAuto,
+                  });
                   const isCardGroup =
                     g.hasCardAuto ||
-                    (g.status === 'confirmed' && order.cardPayment && groupShots.length === 0);
+                    (g.status === 'confirmed' &&
+                      appsForGroup.length > 0 &&
+                      groupShots.length === 0);
                   return (
                     <div key={`shots-${g.key}`}>
                       <p
@@ -1324,10 +1347,20 @@ export default function OrderDetail() {
                         支付组 {idx + 1}{g.timeLabel ? ` · ${g.timeLabel}` : ''}
                       </p>
                       {isCardGroup && groupShots.length === 0 ? (
-                        <CardPaymentBreakdown
-                          cardPayment={order.cardPayment!}
-                          lines={g.lines}
-                        />
+                        <div className="space-y-2">
+                          {appsForGroup.map((cp, ai) => (
+                            <CardPaymentBreakdown
+                              key={`${cp.appliedAt?.toMillis?.() ?? 0}-${ai}`}
+                              cardPayment={cp}
+                              lines={g.lines}
+                              title={
+                                appsForGroup.length > 1
+                                  ? `本组卡支付自动确认（第 ${ai + 1} 笔）`
+                                  : undefined
+                              }
+                            />
+                          ))}
+                        </div>
                       ) : groupShots.length > 0 ? (
                         <ul className="space-y-2">{groupShots.map(renderPaymentShot)}</ul>
                       ) : (
@@ -1342,12 +1375,25 @@ export default function OrderDetail() {
                 {withUrlShots.map((s, i) => renderPaymentShot(s, i))}
               </ul>
             )
-          ) : order.cardPayment &&
+          ) : cardAppsAll.length > 0 &&
             (order.initialPaymentConfirmedAt ||
               (order.appendBatches ?? []).some((b) => b.confirmedAt)) ? (
             <div>
               <p className="mb-2 text-xs text-gray-500">卡扣款明细（无截图）</p>
-              <CardPaymentBreakdown cardPayment={order.cardPayment} lines={order.lines} />
+              <div className="space-y-2">
+                {cardAppsAll.map((cp, ai) => (
+                  <CardPaymentBreakdown
+                    key={`${cp.appliedAt?.toMillis?.() ?? 0}-${ai}`}
+                    cardPayment={cp}
+                    lines={order.lines}
+                    title={
+                      cardAppsAll.length > 1
+                        ? `卡支付自动确认（第 ${ai + 1} 笔）`
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
             </div>
           ) : null}
 

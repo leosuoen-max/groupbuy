@@ -7,6 +7,7 @@ import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listOrdersByCustomer } from '../../lib/orderService';
 import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
 import { buildPaymentGroups } from '../../lib/paymentGroups';
+import { listOrderCardPaymentApplications } from '../../lib/orderCardPaymentApplications';
 import {
   deriveDisplayOrderStatus,
   sumGroupAmountByStatus,
@@ -185,7 +186,7 @@ export default function MyOrders() {
                             {upload.text}
                           </span>
                         ) : null}
-                        {o.cardPayment ? (
+                        {listOrderCardPaymentApplications(o).length > 0 ? (
                           <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
                             卡支付
                           </span>

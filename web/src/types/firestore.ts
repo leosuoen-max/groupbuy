@@ -324,28 +324,30 @@ export type OrderLineDoc = {
   cardCoveredQuantity?: number;
 };
 
-/** 卡支付汇总（订单上） */
+/** 单次钱包/次卡结算快照（一笔对应一次支付动作、一组清偿） */
 export type OrderCardPaymentDoc = {
-  /** 钱包抵扣（可能不存在） */
+  /** 本次清偿涵盖的分段（与支付组对齐）；旧数据可能缺失 */
+  cardSettlementScope?: {
+    /** 本次是否清偿首单段 */
+    includesInitialSegment: boolean;
+    /** 本次自动确认的加购批次 id */
+    confirmedAppendBatchIds: string[];
+  };
   wallet?: {
     customerCardId: string;
     templateId: string;
     deduct: number;
     ledgerId: string;
   };
-  /** 次卡抵扣分配 */
   passCards: Array<{
     customerCardId: string;
     templateId: string;
-    /** 用了多少次 */
     uses: number;
-    /** 命中的订单行 productId（可重复） */
     appliedLineProductIds: string[];
     ledgerId: string;
   }>;
-  /** 卡侧抵扣总金额 = wallet.deduct + Σ(pass.uses × 该行 unitPrice) */
+  /** 本次结算卡侧抵扣总金额 */
   totalDeducted: number;
-  /** 抵扣发生时间 */
   appliedAt: Timestamp;
 };
 
@@ -391,7 +393,11 @@ export type OrderDoc = {
   };
   isManualMatch: boolean;
   paymentScreenshots: unknown[];
-  /** 已应用的卡支付（钱包+次卡）；自动取消时回滚以此为依据 */
+  /** 每次卡支付一条，按时间追加；与支付组一一留痕，参见 orderCardPaymentApplications */
+  cardPaymentApplications?: OrderCardPaymentDoc[];
+  /**
+   * @deprecated 仅旧订单单笔卡支付；新订单请用 cardPaymentApplications + listOrderCardPaymentApplications
+   */
   cardPayment?: OrderCardPaymentDoc;
   status: OrderStatus;
   internalNotes: unknown[];

@@ -1631,7 +1631,9 @@ export async function applyCardPaymentToOrder(params: {
       allocByPid.set(a.lineProductId, a.passCovered);
     }
     const nextLines = (order.lines ?? []).map((l) => {
-      const covered = allocByPid.get(l.productId) ?? 0;
+      const deltaCovered = allocByPid.get(l.productId) ?? 0;
+      const prevCovered = Number(l.cardCoveredQuantity ?? 0);
+      const covered = prevCovered + deltaCovered;
       const next: OrderLineDoc = {
         productId: l.productId,
         name: l.name,
@@ -1645,7 +1647,11 @@ export async function applyCardPaymentToOrder(params: {
       return next;
     });
 
-    const cardPaymentDoc: OrderCardPaymentDoc = {
+    const thisApplyCardPayment: OrderCardPaymentDoc = {
+      cardSettlementScope: {
+        includesInitialSegment: autoConfirmInitial,
+        confirmedAppendBatchIds: [...autoConfirmAppendIds],
+      },
       passCards: plan.cardAllocations.map((a, i) => ({
         customerCardId: a.customerCardId,
         templateId: a.templateId,
@@ -1666,6 +1672,17 @@ export async function applyCardPaymentToOrder(params: {
       totalDeducted: ROUND2(plan.totalAmount),
       appliedAt: now,
     };
+
+    const migratedCardApplications: OrderCardPaymentDoc[] = [
+      ...(order.cardPaymentApplications ?? []),
+    ];
+    if (migratedCardApplications.length === 0 && order.cardPayment) {
+      migratedCardApplications.push(order.cardPayment);
+    }
+    const nextCardApplications = [
+      ...migratedCardApplications,
+      thisApplyCardPayment,
+    ];
 
     // 卡支付是自动确认：仅把本次卡支付覆盖到的「待付款组」标记为已确认。
     const nextAppendBatches = (order.appendBatches ?? []).map((b) =>
@@ -1698,7 +1715,8 @@ export async function applyCardPaymentToOrder(params: {
     tx.update(orderRef, {
       lines: nextLines,
       appendBatches: nextAppendBatches,
-      cardPayment: cardPaymentDoc,
+      cardPaymentApplications: nextCardApplications,
+      cardPayment: deleteField(),
       paidAmount: ROUND2(Number(order.paidAmount ?? 0) + plan.totalAmount),
       pendingAmount: nextPendingAmount,
       status: nextStatus,

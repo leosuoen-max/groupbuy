@@ -1,4 +1,5 @@
 import type { OrderAppendBatchDoc, OrderDoc, OrderLineDoc } from '../types/firestore';
+import { listOrderCardPaymentApplications } from './orderCardPaymentApplications';
 import { parseScreenshotEntries, type ParsedScreenshotEntry } from './paymentScreenshotHelpers';
 
 export type PaymentGroupStatus = 'unpaid' | 'pending' | 'confirmed';
@@ -132,10 +133,12 @@ function buildActionBuckets(order: OrderDoc, segments: Segment[]): ActionBucket[
     upsertBucket(buckets, `time-stage:${idx}`, idx, atMs, p);
   }
 
-  const cardAt = order.cardPayment?.appliedAt?.toMillis?.();
-  if (typeof cardAt === 'number') {
+  const cardApps = listOrderCardPaymentApplications(order);
+  for (let i = 0; i < cardApps.length; i++) {
+    const cardAt = cardApps[i]?.appliedAt?.toMillis?.();
+    if (typeof cardAt !== 'number') continue;
     const idx = stageIndexByTime(segments, cardAt);
-    upsertBucket(buckets, `card:${idx}`, idx, cardAt, null, true);
+    upsertBucket(buckets, `card:${i}:${cardAt}`, idx, cardAt, null, true);
   }
 
   return [...buckets.values()].sort((a, b) => {

@@ -2,6 +2,7 @@ import type { OrderRow } from './orderService';
 import { orderHasPaymentProof } from './paymentScreenshotHelpers';
 import type { OrderDoc } from '../types/firestore';
 import { buildPaymentGroups } from './paymentGroups';
+import { listOrderCardPaymentApplications } from './orderCardPaymentApplications';
 import {
   deliveryPointReconciliationLabel,
   proofRiskDisplayTone,
@@ -104,11 +105,14 @@ export function buildReconciliationTotals(rows: OrderRow[]): ReconciliationTotal
         .filter((g) => g.status === 'confirmed' && g.proofs.some((p) => p.waivedNoScreenshot))
         .reduce((s, g) => s + (Number(g.subtotal) || 0), 0);
     }
-    if (!cardComponentAdded.has(row.id) && o.cardPayment?.totalDeducted) {
-      const wallet = Number(o.cardPayment.wallet?.deduct ?? 0) || 0;
-      const totalDeducted = Number(o.cardPayment.totalDeducted ?? 0) || 0;
-      confirmedWalletAmount += wallet;
-      confirmedPassDeductAmount += Math.max(0, totalDeducted - wallet);
+    const cardApps = listOrderCardPaymentApplications(o);
+    if (!cardComponentAdded.has(row.id) && cardApps.length > 0) {
+      for (const cp of cardApps) {
+        const wallet = Number(cp.wallet?.deduct ?? 0) || 0;
+        const totalDeducted = Number(cp.totalDeducted ?? 0) || 0;
+        confirmedWalletAmount += wallet;
+        confirmedPassDeductAmount += Math.max(0, totalDeducted - wallet);
+      }
       cardComponentAdded.add(row.id);
     }
 
