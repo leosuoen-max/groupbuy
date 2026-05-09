@@ -26,6 +26,10 @@ import {
   type CardTemplateRow,
 } from '../../lib/cardService';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
+import {
+  DescriptionLineEditor,
+  type DescriptionLineEditorHandle,
+} from '../../components/merchant/DescriptionLineEditor';
 
 function toDatetimeLocalValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -333,7 +337,7 @@ export default function ProjectEdit() {
   );
   const [selectedDpIds, setSelectedDpIds] = useState<string[]>([]);
   const [draftHydrated, setDraftHydrated] = useState(false);
-  const lineTextareaRefs = useRef<Record<number, HTMLTextAreaElement | null>>({});
+  const lineEditorRefs = useRef<Record<number, DescriptionLineEditorHandle | null>>({});
   const bigImageInputRef = useRef<HTMLInputElement | null>(null);
   const smallImageInputRef = useRef<HTMLInputElement | null>(null);
   const appendSmallImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -891,22 +895,62 @@ export default function ProjectEdit() {
       prev.map((a) => (a.lineIndex > idx ? { ...a, lineIndex: a.lineIndex + 1 } : a))
     );
     queueMicrotask(() => {
-      const ta = lineTextareaRefs.current[idx + 1];
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(0, 0);
+      lineEditorRefs.current[idx + 1]?.focusStart();
       setActiveLineIndex(idx + 1);
       setActiveLineCaret(0);
+    });
+  }, []);
+
+  const splitLineAtCaret = useCallback((idx: number, left: string, right: string) => {
+    setTextContent((prev) => {
+      const lines = prev.split('\n');
+      if (idx < 0 || idx >= lines.length) return prev;
+      lines[idx] = left;
+      lines.splice(idx + 1, 0, right);
+      return lines.join('\n');
+    });
+    setDescriptionAssets((prev) =>
+      prev.map((a) => (a.lineIndex > idx ? { ...a, lineIndex: a.lineIndex + 1 } : a))
+    );
+    queueMicrotask(() => {
+      lineEditorRefs.current[idx + 1]?.focusStart();
+      setActiveLineIndex(idx + 1);
+      setActiveLineCaret(0);
+    });
+  }, []);
+
+  /** 将第 idx 行与上一行合并（Backspace 行首、或空行回退） */
+  const mergeLineWithPrevious = useCallback((idx: number) => {
+    if (idx <= 0) return;
+    const boundaryPlain = lineEditorRefs.current[idx - 1]?.getPlainLength() ?? 0;
+    setTextContent((prev) => {
+      const lines = prev.split('\n');
+      if (idx >= lines.length) return prev;
+      const merged = `${lines[idx - 1] ?? ''}${lines[idx] ?? ''}`;
+      lines[idx - 1] = merged;
+      lines.splice(idx, 1);
+      return lines.join('\n');
+    });
+    setDescriptionAssets((prev) =>
+      prev.map((a) => (a.lineIndex > idx ? { ...a, lineIndex: a.lineIndex - 1 } : a))
+    );
+    queueMicrotask(() => {
+      const ed = lineEditorRefs.current[idx - 1];
+      if (!ed) return;
+      ed.setCaretCharacterOffset(boundaryPlain);
+      setActiveLineIndex(idx - 1);
+      setActiveLineCaret(boundaryPlain);
     });
   }, []);
 
   const insertAssetAtCursor = useCallback((asset: NewDescriptionAsset) => {
     const lines = textContent.split('\n');
     const lineNo = Math.max(0, Math.min(activeLineIndex, lines.length - 1));
-    const col = Math.max(0, Math.min(activeLineCaret, (lines[lineNo] ?? '').length));
+    const ed = lineEditorRefs.current[lineNo];
+    const split = ed?.extractSplitAtCaret();
     const currentLine = lines[lineNo] ?? '';
-    const left = currentLine.slice(0, col);
-    const right = currentLine.slice(col);
+    const left = split?.left ?? currentLine.slice(0, activeLineCaret);
+    const right = split?.right ?? currentLine.slice(activeLineCaret);
     const nextLines = [
       ...lines.slice(0, lineNo),
       left,
@@ -922,23 +966,19 @@ export default function ProjectEdit() {
       { id: crypto.randomUUID(), lineIndex: insertLineIndex, ...asset },
     ]);
     queueMicrotask(() => {
-      const ta = lineTextareaRefs.current[insertLineIndex + 1];
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(0, 0);
+      lineEditorRefs.current[insertLineIndex + 1]?.focusStart();
       setActiveLineIndex(insertLineIndex + 1);
       setActiveLineCaret(0);
     });
   }, [activeLineCaret, activeLineIndex, textContent]);
 
-  const focusTextareaAtLine = useCallback((lineIndex: number) => {
-    const ta = lineTextareaRefs.current[lineIndex];
-    if (!ta) return;
-    ta.focus();
-    const pos = ta.value.length;
-    ta.setSelectionRange(pos, pos);
+  const focusEditorAtLine = useCallback((lineIndex: number) => {
+    const ed = lineEditorRefs.current[lineIndex];
+    if (!ed) return;
+    ed.focusEnd();
+    const len = ed.getPlainLength();
     setActiveLineIndex(lineIndex);
-    setActiveLineCaret(pos);
+    setActiveLineCaret(len);
   }, []);
 
   const uploadDescriptionAsset = async (file: File) => {
@@ -1299,12 +1339,35 @@ export default function ProjectEdit() {
               </label>
             </div>
           </div>
-          <label className="mb-2 block text-sm font-medium text-gray-800">
+          <div className="mb-2 block text-sm font-medium text-gray-800">
             输入描述说明
             <div className="mt-1 rounded-lg bg-indigo-50/60 px-3 py-2 text-xs leading-5 text-indigo-700">
-              建议：标题一句话、正文分段写，素材会插入到当前光标的下一行。
+              建议：先选中文字再点稍小/稍大；可多次叠加。工具栏在按下时生效，避免选区丢失。
             </div>
-            <div className="mt-2 space-y-2.5 rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium text-gray-500">本行选区：</span>
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-sm text-gray-800 shadow-sm"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  lineEditorRefs.current[activeLineIndex]?.toggleSmall();
+                }}
+              >
+                稍小
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-sm text-gray-800 shadow-sm"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  lineEditorRefs.current[activeLineIndex]?.toggleLarge();
+                }}
+              >
+                稍大
+              </button>
+            </div>
+            <div className="mt-2 space-y-1 rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
               {[...descriptionAssets].filter((x) => x.lineIndex === 0).map((a) => (
                 <DescriptionAssetCard
                   key={a.id}
@@ -1314,38 +1377,39 @@ export default function ProjectEdit() {
                     setAppendSmallTargetLineNo(a.lineIndex);
                     appendSmallImageInputRef.current?.click();
                   }}
-                  onFocusLine={() => focusTextareaAtLine(0)}
+                  onFocusLine={() => focusEditorAtLine(0)}
                 />
               ))}
               {textLines.map((line, idx) => (
-                <div key={`line-${idx}`} className="space-y-2">
-                  <textarea
-                    ref={(el) => {
-                      lineTextareaRefs.current[idx] = el;
+                <div key={`line-${idx}`} className="space-y-1">
+                  <DescriptionLineEditor
+                    ref={(r) => {
+                      lineEditorRefs.current[idx] = r;
                     }}
-                    className="w-full resize-none border-0 p-0 text-[16px] leading-7 text-gray-900 outline-none placeholder:text-gray-400"
-                    rows={1}
+                    lineIndex={idx}
                     value={line}
                     placeholder={idx === 0 ? '输入描述说明' : ''}
-                    onFocus={(e) => {
-                      setActiveLineIndex(idx);
-                      setActiveLineCaret(e.currentTarget.selectionStart ?? 0);
+                    onChange={(markers) => setLineText(idx, markers)}
+                    onSplitLine={(left, right) => splitLineAtCaret(idx, left, right)}
+                    onMergeWithPrevious={() => mergeLineWithPrevious(idx)}
+                    onGoToPreviousLineEnd={() => {
+                      const ed = lineEditorRefs.current[idx - 1];
+                      if (!ed) return;
+                      ed.focusEnd();
+                      setActiveLineIndex(idx - 1);
+                      setActiveLineCaret(ed.getPlainLength());
                     }}
-                    onSelect={(e) => {
-                      setActiveLineIndex(idx);
-                      setActiveLineCaret(e.currentTarget.selectionStart ?? 0);
+                    onGoToNextLineStart={() => {
+                      const ed = lineEditorRefs.current[idx + 1];
+                      if (!ed) return;
+                      ed.focusStart();
+                      setActiveLineIndex(idx + 1);
+                      setActiveLineCaret(0);
                     }}
-                    onChange={(e) => setLineText(idx, e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter') return;
-                      e.preventDefault();
-                      const t = e.currentTarget;
-                      const pos = t.selectionStart ?? t.value.length;
-                      const left = t.value.slice(0, pos);
-                      const right = t.value.slice(pos);
-                      setLineText(idx, left);
-                      insertTextLineAfter(idx, right);
-                    }}
+                    canMergeUp={idx > 0}
+                    hasLineAbove={idx > 0}
+                    hasLineBelow={idx < textLines.length - 1}
+                    onFocus={() => setActiveLineIndex(idx)}
                   />
                   {[...descriptionAssets]
                     .filter((x) => x.lineIndex === idx + 1)
@@ -1360,13 +1424,13 @@ export default function ProjectEdit() {
                           setAppendSmallTargetLineNo(a.lineIndex);
                           appendSmallImageInputRef.current?.click();
                         }}
-                        onFocusLine={() => focusTextareaAtLine(idx + 1)}
+                        onFocusLine={() => focusEditorAtLine(idx + 1)}
                       />
                     ))}
                 </div>
               ))}
             </div>
-          </label>
+          </div>
           <div className="flex flex-wrap gap-2.5 text-sm">
             <button
               type="button"

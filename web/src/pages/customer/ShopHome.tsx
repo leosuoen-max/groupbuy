@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShopHeader } from '../../components/customer/ShopHeader';
+import { ShopProjectStatusCard } from '../../components/customer/ShopProjectStatusCard';
 import { ShopContentBlocks } from '../../components/customer/ShopContentBlocks';
 import { ProductCard } from '../../components/customer/ProductCard';
 import { ShopBottomBar } from '../../components/customer/ShopBottomBar';
+import { ShopMoreMenuSheet } from '../../components/customer/ShopMoreMenuSheet';
 import {
   getMockShopHome,
   type MockShopHome,
@@ -267,6 +269,8 @@ export default function ShopHome() {
     url: string;
     name?: string;
   } | null>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [menuCopied, setMenuCopied] = useState(false);
   const [appendTarget, setAppendTarget] = useState<OrderRow | null>(null);
   const [appendError, setAppendError] = useState<string | null>(null);
   const [appendSubmitting, setAppendSubmitting] = useState(false);
@@ -361,6 +365,40 @@ export default function ShopHome() {
   }, [activeProducts, cart, now, bundleCart]);
 
   const basePath = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+
+  const handleSharePage = useCallback(async () => {
+    if (!data) return;
+    const url = window.location.href;
+    const title = `${data.shopName} · ${data.projectTitle}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, url });
+        return;
+      }
+    } catch {
+      /* 用户取消分享 */
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      window.prompt('复制链接：', url);
+    }
+  }, [data]);
+
+  const handleCopyMenuLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setMenuCopied(true);
+      window.setTimeout(() => setMenuCopied(false), 1300);
+    } catch {
+      setMenuCopied(false);
+    }
+  }, []);
+
+  const hasProjectDescription = useMemo(() => {
+    if (!data) return false;
+    return Boolean(data.textContent?.trim()) || data.imageBlocks.length > 0;
+  }, [data]);
 
   const activeBundleTools = useMemo(
     () =>
@@ -583,9 +621,19 @@ export default function ShopHome() {
 
   return (
     <div className="min-h-svh bg-white pb-36">
-      <ShopHeader data={data} now={now} />
+      <ShopHeader
+        data={data}
+        onShare={handleSharePage}
+        onOpenMore={() => setMoreMenuOpen(true)}
+      />
 
-      <ShopContentBlocks data={data} />
+      <ShopProjectStatusCard data={data} now={now} />
+
+      {hasProjectDescription ? (
+        <div className="mx-4 mt-3 rounded-2xl border border-gray-100 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+          <ShopContentBlocks data={data} embeddedInCard />
+        </div>
+      ) : null}
 
       {hasShopCards ? (
         <section className="px-4 pb-2">
@@ -1088,6 +1136,7 @@ export default function ShopHome() {
         totalQty={totalQty}
         totalAmount={totalAmount}
         onSubmit={handleSubmit}
+        variant="dual"
         submitLabelOverride={
           isAppendMode
             ? appendSubmitting
@@ -1104,6 +1153,18 @@ export default function ShopHome() {
         showMyOrdersInMore={bottomBarMenu.showMyOrdersInMore}
         isShopOwner={bottomBarMenu.isShopOwner}
         invitedRole={bottomBarMenu.invitedRole}
+      />
+
+      <ShopMoreMenuSheet
+        open={moreMenuOpen}
+        onClose={() => setMoreMenuOpen(false)}
+        shopSlug={shopSlug}
+        projectId={projectId}
+        showMyOrdersInMore={bottomBarMenu.showMyOrdersInMore}
+        isShopOwner={bottomBarMenu.isShopOwner}
+        invitedRole={bottomBarMenu.invitedRole}
+        copied={menuCopied}
+        onCopyLink={handleCopyMenuLink}
       />
     </div>
   );

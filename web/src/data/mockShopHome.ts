@@ -60,6 +60,8 @@ export type MockBundleTool = {
 
 export type MockShopHome = {
   shopName: string;
+  /** 店铺头像 / Logo（商户设置 logoImage） */
+  shopLogoUrl?: string;
   /** 项目标题，用于订单展示 */
   projectTitle: string;
   bannerUrl?: string;
@@ -83,6 +85,7 @@ export function getMockShopHome(
   const soon = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
   return {
     shopName: '辉姐家常小厨',
+    shopLogoUrl: undefined,
     projectTitle: '5/4 晚餐',
     bannerUrl: undefined,
     themeColor: '#E63946',

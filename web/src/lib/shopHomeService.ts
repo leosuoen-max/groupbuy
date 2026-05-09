@@ -159,6 +159,7 @@ export async function loadShopHomeFromFirestore(
 
   const data: MockShopHome = {
     shopName: shop.name,
+    shopLogoUrl: shop.logoImage?.trim() || undefined,
     projectTitle: proj.title,
     bannerUrl,
     themeColor: shop.themeColor || '#E63946',

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProjectStatus } from '../../data/mockShopHome';
 import { formatMYR } from '../../lib/formatMYR';
+import { ShopMoreMenuSheet } from './ShopMoreMenuSheet';
 
 type ShopBottomBarProps = {
   shopSlug: string;
@@ -23,6 +24,11 @@ type ShopBottomBarProps = {
   submitLabelOverride?: string;
   /** 额外禁用提交（不影响关闭状态判断） */
   forceDisableSubmit?: boolean;
+  /**
+   * full：我的订单 + 更多 + 提交（默认）
+   * dual：仅「我的订单」+「请选择商品 / 提交」（与顶栏「更多」配合）
+   */
+  variant?: 'full' | 'dual';
 };
 
 export function ShopBottomBar({
@@ -39,16 +45,15 @@ export function ShopBottomBar({
   invitedRole = null,
   submitLabelOverride,
   forceDisableSubmit = false,
+  variant = 'full',
 }: ShopBottomBarProps) {
   const base = '/shop/' + encodeURIComponent(shopSlug) + '/' + encodeURIComponent(projectId);
-  const dashboardBase =
-    '/dashboard/' + encodeURIComponent(shopSlug);
   const closed = projectStatus === 'closed' || projectStatus === 'full';
   const canSubmit = !closed && totalQty > 0 && !forceDisableSubmit;
   const [menuOpen, setMenuOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  let primaryLabel = '请先选择商品';
+  let primaryLabel = '请选择商品';
   if (closed) primaryLabel = '已截止';
   else if (submitLabelOverride) primaryLabel = submitLabelOverride;
   else if (totalQty > 0) {
@@ -65,9 +70,33 @@ export function ShopBottomBar({
     }
   };
 
-  const showAdminSection = Boolean(isShopOwner || invitedRole);
-  const canEditProject = Boolean(isShopOwner || invitedRole === 'high_admin');
-  const canShopSettings = Boolean(isShopOwner || invitedRole === 'high_admin');
+  if (variant === 'dual') {
+    return (
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+        <div className="pointer-events-auto w-full max-w-lg px-3">
+          <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur">
+            <div className="flex gap-2">
+              <Link
+                to={`${base}/my-orders`}
+                className="flex h-12 flex-1 items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-sm font-semibold text-gray-800 active:bg-gray-100"
+              >
+                我的订单
+              </Link>
+              <button
+                type="button"
+                className="flex h-12 flex-1 items-center justify-center rounded-xl px-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:text-gray-100"
+                style={{ backgroundColor: canSubmit ? themeColor : undefined }}
+                disabled={!canSubmit}
+                onClick={onSubmit}
+              >
+                {primaryLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
@@ -114,134 +143,17 @@ export function ShopBottomBar({
         </div>
       </div>
 
-      {menuOpen ? (
-        <div className="pointer-events-auto fixed inset-0 z-30 bg-black/25">
-          <button
-            type="button"
-            className="absolute inset-0 h-full w-full"
-            aria-label="关闭更多菜单"
-            onClick={() => setMenuOpen(false)}
-          />
-          <div className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-lg rounded-t-2xl bg-white p-4 shadow-2xl">
-            <div className="mb-2 text-center text-sm font-semibold text-gray-900">
-              更多
-            </div>
-            <div className="space-y-1 text-sm">
-              <Link
-                to={base}
-                onClick={() => setMenuOpen(false)}
-                className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-              >
-                🏠 商户首页
-              </Link>
-              {showMyOrdersInMore ? (
-                <Link
-                  to={`${base}/my-orders`}
-                  onClick={() => setMenuOpen(false)}
-                  className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                >
-                  📋 我的订单
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="block w-full rounded-lg px-3 py-2 text-left text-gray-800 hover:bg-gray-50"
-              >
-                🔗 复制链接 {copied ? '（已复制）' : ''}
-              </button>
-              <a
-                href={`mailto:?subject=${encodeURIComponent('意见反馈')}&body=${encodeURIComponent(`页面：${window.location.href}`)}`}
-                className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-              >
-                💬 意见反馈
-              </a>
-            </div>
-            {showAdminSection ? (
-              <>
-                <div className="my-2 border-t border-gray-100" />
-                <div className="mb-1 px-1 text-xs font-semibold text-gray-500">
-                  管理
-                </div>
-                <div className="space-y-1 text-sm">
-                  <Link
-                    to={dashboardBase}
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                  >
-                    📊 实时数据
-                  </Link>
-                  <Link
-                    to={`${dashboardBase}/orders`}
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                  >
-                    📋 订单管理
-                  </Link>
-                  {canEditProject ? (
-                    <Link
-                      to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
-                      onClick={() => setMenuOpen(false)}
-                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                    >
-                      ✏️ 编辑菜单
-                    </Link>
-                  ) : null}
-                  {canEditProject ? (
-                    <Link
-                      to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
-                      onClick={() => setMenuOpen(false)}
-                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                    >
-                      ⚙️ 项目设置
-                    </Link>
-                  ) : null}
-                  {isShopOwner && canShopSettings ? (
-                    <Link
-                      to={`${dashboardBase}/settings`}
-                      onClick={() => setMenuOpen(false)}
-                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                    >
-                      ⚙️ 基本设置
-                    </Link>
-                  ) : null}
-                  {isShopOwner ? (
-                    <Link
-                      to={`${dashboardBase}/admins`}
-                      onClick={() => setMenuOpen(false)}
-                      className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                    >
-                      👥 管理员管理
-                    </Link>
-                  ) : null}
-                  <Link
-                    to={dashboardBase}
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
-                  >
-                    🔄 切换到商户后台
-                  </Link>
-                </div>
-              </>
-            ) : null}
-            <div className="my-2 border-t border-gray-100" />
-            <Link
-              to="/register"
-              onClick={() => setMenuOpen(false)}
-              className="block rounded-lg px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-50"
-            >
-              ✨ 想拥有自己的店？立即创建 →
-            </Link>
-            <button
-              type="button"
-              onClick={() => setMenuOpen(false)}
-              className="mt-2 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <ShopMoreMenuSheet
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        shopSlug={shopSlug}
+        projectId={projectId}
+        showMyOrdersInMore={showMyOrdersInMore}
+        isShopOwner={isShopOwner}
+        invitedRole={invitedRole}
+        copied={copied}
+        onCopyLink={handleCopy}
+      />
     </div>
   );
 }

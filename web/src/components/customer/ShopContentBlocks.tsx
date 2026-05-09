@@ -1,8 +1,94 @@
+import type { ReactNode } from 'react';
 import type { MockShopHome } from '../../data/mockShopHome';
+import { findBalancedWrapperEnd } from '../../lib/descriptionRichText';
 
 type ShopContentBlocksProps = {
   data: MockShopHome;
+  /** 嵌入白底卡片（店铺首页大屏布局）：收紧边距并隐藏分区小标题 */
+  embeddedInCard?: boolean;
 };
+
+/** `**粗体**`；`〔小〕…〔/小〕`、`〔大〕…〔/大〕` 为商户编辑页插入的字号片段 */
+function renderBoldSegments(text: string): ReactNode {
+  const parts = text.split(/(\*\*[\s\S]*?\*\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith('**') && p.endsWith('**') && p.length >= 4) {
+      return (
+        <strong key={i} className="font-bold text-gray-900" style={{ fontWeight: 700 }}>
+          {p.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={i}>{p}</span>;
+  });
+}
+
+/**
+ * 平衡解析嵌套的 〔小〕/〔大〕，避免非贪婪正则在嵌套时把「尾标签」当正文显示。
+ */
+function RichTextLine({ text }: { text: string }) {
+  return <>{formatRichParts(text)}</>;
+}
+
+function formatRichParts(s: string): ReactNode {
+  if (!s) return null;
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  let k = 0;
+  while (i < s.length) {
+    if (s.startsWith('〔小〕', i)) {
+      const m = findBalancedWrapperEnd(s, i, '〔小〕', '〔/小〕');
+      if (m) {
+        nodes.push(
+          <span
+            key={`r-${k++}`}
+            className="leading-snug text-gray-800"
+            style={{ fontSize: '0.875em' }}
+          >
+            {formatRichParts(m.inner)}
+          </span>
+        );
+        i = m.endExclusive;
+        continue;
+      }
+      nodes.push(
+        <span key={`r-${k++}`}>{renderBoldSegments(s.slice(i, i + 3))}</span>
+      );
+      i += 3;
+      continue;
+    }
+    if (s.startsWith('〔大〕', i)) {
+      const m = findBalancedWrapperEnd(s, i, '〔大〕', '〔/大〕');
+      if (m) {
+        nodes.push(
+          <span
+            key={`r-${k++}`}
+            className="leading-snug text-gray-900"
+            style={{ fontSize: '1.125em' }}
+          >
+            {formatRichParts(m.inner)}
+          </span>
+        );
+        i = m.endExclusive;
+        continue;
+      }
+      nodes.push(
+        <span key={`r-${k++}`}>{renderBoldSegments(s.slice(i, i + 3))}</span>
+      );
+      i += 3;
+      continue;
+    }
+    let next = s.length;
+    const a = s.indexOf('〔小〕', i);
+    const b = s.indexOf('〔大〕', i);
+    if (a >= 0) next = Math.min(next, a);
+    if (b >= 0) next = Math.min(next, b);
+    const chunk = s.slice(i, next);
+    nodes.push(<span key={`r-${k++}`}>{renderBoldSegments(chunk)}</span>);
+    i = next;
+  }
+  return <>{nodes}</>;
+}
 
 type MixedLine =
   | { type: 'heading'; text: string }
@@ -190,35 +276,47 @@ function ImageGrid({ blocks }: { blocks: MockShopHome['imageBlocks'] }) {
   );
 }
 
-export function ShopContentBlocks({ data }: ShopContentBlocksProps) {
+export function ShopContentBlocks({ data, embeddedInCard }: ShopContentBlocksProps) {
   const hasText = Boolean(data.textContent?.trim());
   const hasImages = data.imageBlocks.length > 0;
   const mixedLines = hasText ? parseMixedText(data.textContent ?? '') : [];
 
   if (!hasText && !hasImages) return null;
 
+  const sectionClass = embeddedInCard
+    ? 'space-y-4 py-0'
+    : 'space-y-5 px-4 py-4';
+
   return (
-    <section className="space-y-5 px-4 py-4">
+    <section className={sectionClass}>
       {hasText ? (
         <div>
-          <h2 className="mb-2 text-sm font-semibold tracking-wide text-gray-900">说明</h2>
-          <div className="rounded-xl bg-gray-50 px-3 py-3.5 text-[16px] leading-7 text-gray-800">
-            <div className="space-y-2.5">
+          {embeddedInCard ? null : (
+            <h2 className="mb-2 text-sm font-semibold tracking-wide text-gray-900">说明</h2>
+          )}
+          <div
+            className={
+              embeddedInCard
+                ? 'rounded-xl bg-gray-50/90 px-3 py-3 text-[16px] leading-6 text-gray-800'
+                : 'rounded-xl bg-gray-50 px-3 py-3.5 text-[16px] leading-6 text-gray-800'
+            }
+          >
+            <div className="space-y-1.5">
               {mixedLines.map((line, idx) => {
                 if (line.type === 'heading') {
                   return (
                     <h3
                       key={idx}
-                      className="mb-1 border-l-4 border-amber-400 pl-3 text-[22px] font-semibold leading-tight tracking-wide text-gray-900"
+                      className="mb-0.5 border-l-4 border-amber-400 pl-3 text-[22px] font-semibold leading-tight tracking-wide text-gray-900"
                     >
-                      {line.text}
+                      <RichTextLine text={line.text} />
                     </h3>
                   );
                 }
                 if (line.type === 'text') {
                   return (
-                    <p key={idx} className="whitespace-pre-wrap break-words text-[16px] leading-7">
-                      {line.text || '\u00A0'}
+                    <p key={idx} className="whitespace-pre-wrap break-words text-[16px] leading-6">
+                      {line.text ? <RichTextLine text={line.text} /> : '\u00A0'}
                     </p>
                   );
                 }
@@ -275,7 +373,9 @@ export function ShopContentBlocks({ data }: ShopContentBlocksProps) {
 
       {hasImages ? (
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">图册</h2>
+          {embeddedInCard ? null : (
+            <h2 className="mb-2 text-sm font-semibold text-gray-900">图册</h2>
+          )}
           <ImageGrid blocks={data.imageBlocks} />
         </div>
       ) : null}
