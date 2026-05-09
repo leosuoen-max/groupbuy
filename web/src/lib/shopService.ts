@@ -14,6 +14,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
 import type { ShopDoc } from '../types/firestore';
+import { DEFAULT_SHOP_THEME_COLOR } from './shopTheme';
 
 export type ShopRow = { id: string; data: ShopDoc };
 
@@ -80,7 +81,7 @@ export async function createShop(
     slug,
     name,
     ownerId,
-    themeColor: '#E63946',
+    themeColor: DEFAULT_SHOP_THEME_COLOR,
     paymentMethods: [],
     settings: { language: 'zh', currency: 'MYR' },
     createdAt: serverTimestamp(),

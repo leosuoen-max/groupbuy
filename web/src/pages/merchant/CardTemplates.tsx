@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug } from '../../lib/shopService';
+import { H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import {
   cardRequestAwaitingCustomerProof,
   cardRequestNeedsMerchantConfirm,
@@ -795,7 +796,9 @@ function CardEditor({ draft, onChange, onCancel, onSave, saving }: CardEditorPro
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center">
-      <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl">
+      <div
+        className={`max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-white p-4 sm:rounded-2xl ${H5_COLUMN_CLASS}`}
+      >
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-base font-semibold text-gray-900">{modalTitle}</h2>
           <button

@@ -1,5 +1,7 @@
 /** 顾客端 ShopHome 用 mock；后续接 Firestore 替换 */
 
+import { DEFAULT_SHOP_THEME_COLOR } from '../lib/shopTheme';
+
 export type ProjectStatus = 'open' | 'closed' | 'full';
 
 export type MockProduct = {
@@ -91,7 +93,7 @@ export function getMockShopHome(
     shopLogoUrl: undefined,
     projectTitle: '5/4 晚餐',
     bannerUrl: undefined,
-    themeColor: '#E63946',
+    themeColor: DEFAULT_SHOP_THEME_COLOR,
     status: 'open',
     closesAt: soon,
     orderCount: 13,

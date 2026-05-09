@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 
 export default function NotFound() {
   return (
-    <main className="mx-auto max-w-xl px-5 py-5">
+    <main className="w-full px-4 py-5">
       <h1 className="mb-3 text-xl font-semibold text-gray-900">页面不存在</h1>
       <p>
         <Link

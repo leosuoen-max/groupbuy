@@ -1,11 +1,20 @@
 import type { ReactNode } from 'react';
 import type { MockShopHome } from '../../data/mockShopHome';
 import { findBalancedWrapperEnd } from '../../lib/descriptionRichText';
+import {
+  mixedLinesHaveRenderableContent,
+  parseMixedText,
+  stripLeadingDuplicateProjectTitle,
+} from '../../lib/shopDescriptionMixedLines';
 
 type ShopContentBlocksProps = {
   data: MockShopHome;
   /** 嵌入白底卡片（店铺首页大屏布局）：收紧边距并隐藏分区小标题 */
   embeddedInCard?: boolean;
+  /**
+   * 与页顶项目标题一致时，去掉说明区重复的首行标题（【标题】/# 等与 projectTitle 相同）
+   */
+  dedupeTitleWithProject?: string;
 };
 
 /** `**粗体**`；`〔小〕…〔/小〕`、`〔大〕…〔/大〕` 为商户编辑页插入的字号片段 */
@@ -88,81 +97,6 @@ function formatRichParts(s: string): ReactNode {
     i = next;
   }
   return <>{nodes}</>;
-}
-
-type MixedLine =
-  | { type: 'heading'; text: string }
-  | { type: 'text'; text: string }
-  | { type: 'image-large'; url: string }
-  | { type: 'image-small'; urls: string[] }
-  | { type: 'video'; url: string }
-  | { type: 'audio'; url: string }
-  | { type: 'file'; name: string; url: string }
-  | { type: 'location'; url: string };
-
-function parseMixedText(raw: string): MixedLine[] {
-  const out: MixedLine[] = [];
-  for (const lineRaw of raw.split('\n')) {
-    const line = lineRaw.trim();
-    if (!line) {
-      out.push({ type: 'text', text: '' });
-      continue;
-    }
-    if (line.startsWith('【大图】')) {
-      const url = line.replace('【大图】', '').trim();
-      if (url) out.push({ type: 'image-large', url });
-      continue;
-    }
-    if (line.startsWith('【小图】')) {
-      const urls = line
-        .replace('【小图】', '')
-        .split('|')
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .slice(0, 3);
-      if (urls.length) out.push({ type: 'image-small', urls });
-      continue;
-    }
-    if (line.startsWith('【视频】')) {
-      const url = line.replace('【视频】', '').trim();
-      if (url) out.push({ type: 'video', url });
-      continue;
-    }
-    if (line.startsWith('【录音】')) {
-      const url = line.replace('【录音】', '').trim();
-      if (url) out.push({ type: 'audio', url });
-      continue;
-    }
-    if (line.startsWith('【定位】')) {
-      const url = line.replace('【定位】', '').trim();
-      if (url) out.push({ type: 'location', url });
-      continue;
-    }
-    if (line.startsWith('【文件】')) {
-      const rest = line.replace('【文件】', '').trim();
-      const parts = rest.split(' ');
-      const url = parts.pop() ?? '';
-      const name = parts.join(' ').trim() || '文件';
-      if (url) out.push({ type: 'file', name, url });
-      continue;
-    }
-    if (line.startsWith('# ')) {
-      const text = line.slice(2).trim();
-      if (text) {
-        out.push({ type: 'heading', text });
-        continue;
-      }
-    }
-    if (line.startsWith('【标题】')) {
-      const text = line.replace('【标题】', '').trim();
-      if (text) {
-        out.push({ type: 'heading', text });
-        continue;
-      }
-    }
-    out.push({ type: 'text', text: lineRaw });
-  }
-  return out;
 }
 
 function ImageGrid({ blocks }: { blocks: MockShopHome['imageBlocks'] }) {
@@ -276,12 +210,21 @@ function ImageGrid({ blocks }: { blocks: MockShopHome['imageBlocks'] }) {
   );
 }
 
-export function ShopContentBlocks({ data, embeddedInCard }: ShopContentBlocksProps) {
+export function ShopContentBlocks({
+  data,
+  embeddedInCard,
+  dedupeTitleWithProject,
+}: ShopContentBlocksProps) {
   const hasText = Boolean(data.textContent?.trim());
   const hasImages = data.imageBlocks.length > 0;
-  const mixedLines = hasText ? parseMixedText(data.textContent ?? '') : [];
+  const rawLines = hasText ? parseMixedText(data.textContent ?? '') : [];
+  const mixedLines =
+    embeddedInCard && dedupeTitleWithProject?.trim()
+      ? stripLeadingDuplicateProjectTitle(rawLines, dedupeTitleWithProject)
+      : rawLines;
 
-  if (!hasText && !hasImages) return null;
+  const showTextSection = mixedLinesHaveRenderableContent(mixedLines);
+  if (!showTextSection && !hasImages) return null;
 
   const sectionClass = embeddedInCard
     ? 'space-y-4 py-0'
@@ -289,7 +232,7 @@ export function ShopContentBlocks({ data, embeddedInCard }: ShopContentBlocksPro
 
   return (
     <section className={sectionClass}>
-      {hasText ? (
+      {showTextSection ? (
         <div>
           {embeddedInCard ? null : (
             <h2 className="mb-2 text-sm font-semibold tracking-wide text-gray-900">说明</h2>

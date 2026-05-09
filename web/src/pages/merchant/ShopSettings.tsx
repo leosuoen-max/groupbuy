@@ -3,6 +3,11 @@ import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug, updateShop, uploadShopImage } from '../../lib/shopService';
+import {
+  DEFAULT_SHOP_THEME_COLOR,
+  normalizeShopThemeColor,
+  SHOP_THEME_PRESETS,
+} from '../../lib/shopTheme';
 
 type PaymentMethodItem = { id: string; name: string; qrCodeUrl: string };
 
@@ -17,7 +22,7 @@ export default function ShopSettings() {
   const [msg, setMsg] = useState<string | null>(null);
 
   const [name, setName] = useState('');
-  const [themeColor, setThemeColor] = useState('#E63946');
+  const [themeColor, setThemeColor] = useState(DEFAULT_SHOP_THEME_COLOR);
   const [bannerImage, setBannerImage] = useState('');
   const [logoImage, setLogoImage] = useState('');
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodItem[]>([]);
@@ -45,7 +50,7 @@ export default function ShopSettings() {
           if (cancelled) return;
           setShopId(row.id);
           setName(row.data.name ?? '');
-          setThemeColor(row.data.themeColor ?? '#E63946');
+          setThemeColor(normalizeShopThemeColor(row.data.themeColor));
           setBannerImage(row.data.bannerImage ?? '');
           setLogoImage(row.data.logoImage ?? '');
           setPaymentMethods(row.data.paymentMethods ?? []);
@@ -72,7 +77,7 @@ export default function ShopSettings() {
     try {
       await updateShop(shopId, {
         name,
-        themeColor,
+        themeColor: normalizeShopThemeColor(themeColor),
         bannerImage: bannerImage || null,
         logoImage: logoImage || null,
         paymentMethods: paymentMethods
@@ -170,16 +175,36 @@ export default function ShopSettings() {
           />
         </label>
 
-        <label className="block text-sm text-gray-800">
-          主题色
-          <input
-            type="color"
-            className="mt-1 h-10 w-20 rounded border border-gray-200 bg-white"
-            value={themeColor}
-            onChange={(e) => setThemeColor(e.target.value)}
-            disabled={!canEdit}
-          />
-        </label>
+        <div className="block text-sm text-gray-800">
+          <span className="block">主题色（设计预设）</span>
+          <p className="mt-1 text-xs font-normal text-gray-500">
+            用于顾客页「+」与提交按钮；价格数字固定为稿定青绿色。
+          </p>
+          <div className="mt-2 flex flex-wrap gap-3">
+            {SHOP_THEME_PRESETS.map((p) => {
+              const selected =
+                themeColor.toLowerCase() === p.hex.toLowerCase();
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  title={p.name}
+                  disabled={!canEdit}
+                  onClick={() => setThemeColor(p.hex)}
+                  className={`relative h-10 w-10 shrink-0 rounded-full shadow-inner ring-2 ring-offset-2 transition ${
+                    selected ? 'ring-emerald-600 ring-offset-white' : 'ring-transparent ring-offset-white'
+                  }`}
+                  style={{ backgroundColor: p.hex }}
+                  aria-label={p.name}
+                  aria-pressed={selected}
+                />
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-gray-400">
+            当前：<span className="font-mono text-gray-600">{themeColor}</span>
+          </p>
+        </div>
 
         <label className="block text-sm text-gray-800">
           门头图（Banner）

@@ -10,7 +10,7 @@ const link = 'text-indigo-600 underline-offset-2 hover:underline';
 
 export function PageShell({ title, subtitle, children }: PageShellProps) {
   return (
-    <main className="mx-auto min-h-[60vh] max-w-xl px-5 py-5">
+    <main className="min-h-[60vh] w-full px-4 py-5">
       <p className="mb-3">
         <Link to="/" className={link}>
           ← 首页

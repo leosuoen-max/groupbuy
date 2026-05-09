@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProjectStatus } from '../../data/mockShopHome';
 import { formatMYR } from '../../lib/formatMYR';
+import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import { ShopMoreMenuSheet } from './ShopMoreMenuSheet';
 
 type ShopBottomBarProps = {
@@ -30,6 +31,9 @@ type ShopBottomBarProps = {
    */
   variant?: 'full' | 'dual';
 };
+
+const ghostBtn =
+  'inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-[18px] py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 disabled:opacity-50';
 
 export function ShopBottomBar({
   shopSlug,
@@ -70,78 +74,73 @@ export function ShopBottomBar({
     }
   };
 
+  const primaryBtn =
+    'flex min-h-[46px] flex-1 items-center justify-center rounded-full px-4 py-3 text-[15px] font-semibold text-white shadow-[0_2px_10px_rgba(8,194,121,0.25)] transition disabled:bg-gray-300 disabled:text-gray-100 disabled:shadow-none';
+
   if (variant === 'dual') {
     return (
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-        <div className="pointer-events-auto w-full max-w-lg px-3">
-          <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur">
-            <div className="flex gap-2">
-              <Link
-                to={`${base}/my-orders`}
-                className="flex h-12 flex-1 items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-sm font-semibold text-gray-800 active:bg-gray-100"
-              >
-                我的订单
-              </Link>
-              <button
-                type="button"
-                className="flex h-12 flex-1 items-center justify-center rounded-xl px-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:text-gray-100"
-                style={{ backgroundColor: canSubmit ? themeColor : undefined }}
-                disabled={!canSubmit}
-                onClick={onSubmit}
-              >
-                {primaryLabel}
-              </button>
-            </div>
-          </div>
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
+        <div className={`pointer-events-auto flex w-full gap-2.5 px-4 ${H5_COLUMN_CLASS}`}>
+          <Link
+            to={`${base}/my-orders`}
+            className={ghostBtn}
+            style={{ borderColor: DESIGN_BORDER }}
+          >
+            我的订单
+          </Link>
+          <button
+            type="button"
+            className={primaryBtn}
+            style={{ backgroundColor: canSubmit ? themeColor : undefined }}
+            disabled={!canSubmit}
+            onClick={onSubmit}
+          >
+            {primaryLabel}
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-      <div className="pointer-events-auto w-full max-w-lg px-3">
-        <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur">
-          <div className="flex gap-2">
-            {showMyOrdersPrimary ? (
-              <Link
-                to={`${base}/my-orders`}
-                className="flex h-12 flex-[1.05] items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 active:bg-gray-100"
-              >
-                我的订单
-              </Link>
-            ) : (
-              <div
-                className="flex h-12 flex-[1.05] rounded-xl border border-transparent bg-transparent"
-                aria-hidden
-              />
-            )}
-            <button
-              type="button"
-              className="flex h-12 min-w-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-800 active:bg-gray-50"
-              onClick={() => setMenuOpen(true)}
-              aria-label="更多"
-            >
-              更多
-            </button>
-            <button
-              type="button"
-              className="flex h-12 flex-[1.25] items-center justify-center rounded-xl px-2 text-sm font-semibold text-white disabled:bg-gray-300 disabled:text-gray-100"
-              style={{ backgroundColor: canSubmit ? themeColor : undefined }}
-              disabled={!canSubmit}
-              onClick={onSubmit}
-            >
-              {primaryLabel}
-            </button>
-          </div>
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col items-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
+      <div className={`pointer-events-auto flex w-full gap-2.5 px-4 ${H5_COLUMN_CLASS}`}>
+        {showMyOrdersPrimary ? (
           <Link
-            to="/register"
-            className="mt-2 block text-center text-xs text-gray-500 underline-offset-2 hover:underline"
+            to={`${base}/my-orders`}
+            className={ghostBtn}
+            style={{ borderColor: DESIGN_BORDER }}
           >
-            想拥有自己的店？立即免费创建 →
+            我的订单
           </Link>
-        </div>
+        ) : (
+          <div className="w-0 shrink-0" aria-hidden />
+        )}
+        <button
+          type="button"
+          className={`${ghostBtn} min-w-[3.25rem] px-4`}
+          style={{ borderColor: DESIGN_BORDER }}
+          onClick={() => setMenuOpen(true)}
+          aria-label="更多"
+        >
+          更多
+        </button>
+        <button
+          type="button"
+          className={primaryBtn}
+          style={{ backgroundColor: canSubmit ? themeColor : undefined }}
+          disabled={!canSubmit}
+          onClick={onSubmit}
+        >
+          {primaryLabel}
+        </button>
       </div>
+      <Link
+        to="/register"
+        className={`pointer-events-auto mt-2 block px-4 text-center text-xs text-gray-500 underline-offset-2 hover:underline ${H5_COLUMN_CLASS}`}
+      >
+        想拥有自己的店？立即免费创建 →
+      </Link>
 
       <ShopMoreMenuSheet
         open={menuOpen}

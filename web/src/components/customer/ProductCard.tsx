@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { MockProduct } from '../../data/mockShopHome';
+import { DESIGN_PRICE_TEAL } from '../../lib/shopTheme';
 import { formatMYR } from '../../lib/formatMYR';
 import { getEffectivePrice } from '../../lib/productPrice';
 import { formatRemainingShort } from '../../lib/countdown';
@@ -60,9 +61,10 @@ export function ProductCard({
     </span>
   ) : (
     <span
-      className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-none ${
-        lowStock ? 'bg-orange-50 text-orange-700' : 'bg-emerald-50 text-emerald-700'
+      className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+        lowStock ? 'bg-orange-50 text-orange-700' : 'bg-teal-50'
       }`}
+      style={lowStock ? undefined : { color: DESIGN_PRICE_TEAL }}
     >
       余 {product.stock}
     </span>
@@ -118,8 +120,8 @@ export function ProductCard({
   const priceBlock = (
     <div className="flex items-baseline gap-1.5">
       <span
-        className="text-[20px] font-bold leading-none tracking-tight"
-        style={{ color: soldOut ? '#94a3b8' : themeColor }}
+        className="text-[17px] font-extrabold leading-none tracking-tight"
+        style={{ color: soldOut ? '#94a3b8' : DESIGN_PRICE_TEAL }}
       >
         {formatMYR(unit)}
       </span>
@@ -136,7 +138,7 @@ export function ProductCard({
       {quantity > 0 ? (
         <button
           type="button"
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-[18px] font-semibold leading-none text-slate-500 transition active:scale-95"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-[18px] font-semibold leading-none text-slate-500 transition active:scale-95"
           onClick={onDec}
           aria-label="减少"
         >
@@ -150,7 +152,7 @@ export function ProductCard({
       ) : null}
       <button
         type="button"
-        className="flex h-8 w-8 items-center justify-center rounded-full text-[20px] font-semibold leading-none text-white shadow-sm transition active:scale-95 disabled:opacity-40"
+        className="flex h-9 w-9 items-center justify-center rounded-full text-[22px] font-light leading-none text-white shadow-[0_2px_8px_rgba(8,194,121,0.28)] transition active:scale-95 disabled:opacity-40"
         style={{ backgroundColor: canInc ? themeColor : '#cbd5e1' }}
         onClick={onInc}
         disabled={!canInc}
@@ -165,7 +167,7 @@ export function ProductCard({
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-1.5">
         <span
-          className={`truncate text-[16px] font-semibold leading-tight ${
+          className={`truncate text-[15px] font-bold leading-tight ${
             soldOut ? 'text-slate-500' : 'text-slate-900'
           }`}
         >
@@ -189,17 +191,17 @@ export function ProductCard({
   if (product.imageUrl) {
     return (
       <>
-        <article className="flex items-center gap-3 border-b border-slate-100 py-3 last:border-b-0">
+        <article className="flex items-center gap-3 py-3.5">
           <button
             type="button"
-            className="relative shrink-0 overflow-hidden rounded-2xl bg-slate-50 ring-1 ring-slate-100"
+            className="relative h-[68px] w-[68px] shrink-0 overflow-hidden rounded-xl bg-slate-50 ring-1 ring-slate-100"
             onClick={() => setPreviewOpen(true)}
             aria-label="查看商品大图"
           >
             <img
               src={product.imageUrl}
               alt=""
-              className={`h-[88px] w-[88px] object-cover ${soldOut ? 'opacity-60' : ''}`}
+              className={`h-full w-full object-cover ${soldOut ? 'opacity-60' : ''}`}
               loading="lazy"
             />
             {soldOut ? (
@@ -241,7 +243,7 @@ export function ProductCard({
   }
 
   return (
-    <article className="flex items-center gap-3 border-b border-slate-100 py-3 last:border-b-0">
+    <article className="flex items-center gap-3 py-3.5">
       {info}
       <div className="self-end pb-0.5">{stepper}</div>
     </article>

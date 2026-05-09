@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShopHeader } from '../../components/customer/ShopHeader';
 import { ShopProjectStatusCard } from '../../components/customer/ShopProjectStatusCard';
 import { ShopContentBlocks } from '../../components/customer/ShopContentBlocks';
+import { shopHomeAnnouncementHasVisibleBody } from '../../lib/shopDescriptionMixedLines';
 import { ProductCard } from '../../components/customer/ProductCard';
 import { ShopBottomBar } from '../../components/customer/ShopBottomBar';
 import { ShopMoreMenuSheet } from '../../components/customer/ShopMoreMenuSheet';
@@ -292,8 +293,10 @@ export default function ShopHome() {
 
   useEffect(() => {
     if (!isAppendMode) {
-      setAppendTarget(null);
-      setAppendError(null);
+      queueMicrotask(() => {
+        setAppendTarget(null);
+        setAppendError(null);
+      });
       return;
     }
     let cancelled = false;
@@ -398,7 +401,7 @@ export default function ShopHome() {
 
   const hasProjectDescription = useMemo(() => {
     if (!data) return false;
-    return Boolean(data.textContent?.trim()) || data.imageBlocks.length > 0;
+    return shopHomeAnnouncementHasVisibleBody(data);
   }, [data]);
 
   const activeBundleTools = useMemo(
@@ -591,7 +594,7 @@ export default function ShopHome() {
 
   if (loading) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-white px-6 text-center text-sm text-gray-600">
+      <div className="flex min-h-svh items-center justify-center px-6 text-center text-sm text-gray-600">
         加载店铺与项目…
       </div>
     );
@@ -599,7 +602,7 @@ export default function ShopHome() {
 
   if (errorText) {
     return (
-      <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-white px-6 text-center">
+      <div className="flex min-h-svh flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-sm text-gray-800">{errorText}</p>
         <button
           type="button"
@@ -614,47 +617,39 @@ export default function ShopHome() {
 
   if (!data) {
     return (
-      <div className="flex min-h-svh items-center justify-center bg-white px-6 text-center text-sm text-gray-600">
+      <div className="flex min-h-svh items-center justify-center px-6 text-center text-sm text-gray-600">
         暂无数据
       </div>
     );
   }
 
   return (
-    <div className="min-h-svh bg-white pb-36">
-      <ShopHeader
-        data={data}
-        onShare={handleSharePage}
-        onOpenMore={() => setMoreMenuOpen(true)}
-      />
+    <div className="pb-36">
+        <ShopHeader
+          data={data}
+          onShare={handleSharePage}
+          onOpenMore={() => setMoreMenuOpen(true)}
+        />
 
-      <ShopProjectStatusCard data={data} now={now} />
+        <ShopProjectStatusCard data={data} now={now} />
 
-      {hasProjectDescription ? (
-        <div className="mx-4 mt-3 rounded-2xl border border-gray-100 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
-          <ShopContentBlocks data={data} embeddedInCard />
-        </div>
-      ) : null}
-
-      {hasShopCards ? (
-        <section className="px-4 pb-2">
-          <Link
-            to={`/shop/${encodeURIComponent(shopSlug)}/cards?from=${encodeURIComponent(projectId)}`}
-            className="flex items-center justify-between rounded-2xl bg-white px-3 py-2.5 ring-1 ring-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
-          >
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
-                优惠卡
-              </span>
-              <span className="text-[13px] text-slate-700">钱包 / 次卡 · 抵扣订单</span>
-            </div>
-            <span className="text-[12px] text-slate-500">查看 →</span>
-          </Link>
-        </section>
-      ) : null}
+        {hasProjectDescription ? (
+          <>
+            <hr className="h-px w-full border-0 bg-[#e5e7eb]" aria-hidden />
+            <section className="px-4 pb-2.5 pt-3.5" aria-label="公告">
+              <div className="rounded-[10px] border border-[#e5e7eb] bg-white px-3.5 py-3">
+                <ShopContentBlocks
+                  data={data}
+                  embeddedInCard
+                  dedupeTitleWithProject={data.projectTitle}
+                />
+              </div>
+            </section>
+          </>
+        ) : null}
 
       {isAppendMode ? (
-        <section className="px-4 pb-2">
+        <section className="px-4 pb-2 pt-1">
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
             <p className="font-semibold">
               加购模式 · 订单 #{appendTarget?.data.orderNumber ?? appendOrderNumber}
@@ -667,14 +662,14 @@ export default function ShopHome() {
         </section>
       ) : null}
 
-      <section className="px-4 pb-2">
-        <div className="mb-2 flex items-baseline justify-between">
-          <h2 className="text-[15px] font-semibold tracking-tight text-slate-900">商品清单</h2>
+      <section className="px-4 pb-6 pt-1.5" aria-label="商品清单">
+        <div className="mb-2 flex items-baseline justify-between px-0 pt-1">
+          <h2 className="text-[15px] font-bold tracking-tight text-slate-900">商品清单</h2>
           <span className="text-[11px] text-slate-400">
             {useMock ? '演示数据' : '截单与库存以页面状态为准'}
           </span>
         </div>
-        <div className="rounded-2xl bg-white px-3 ring-1 ring-slate-100 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div>
           {mixedItems.map((item) => {
             if (item.kind === 'product') {
               const p = item.product;
@@ -711,55 +706,59 @@ export default function ShopHome() {
               previewOptions.length - compactPreviewOptions.length
             );
             return (
-              <article key={item.key} className="py-2.5">
-                <div className="rounded-2xl bg-white p-2.5 ring-1 ring-slate-100">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[17px] font-semibold leading-tight text-slate-900">
-                      {tool.name}
-                    </span>
-                    <div className="min-w-0 flex-1 overflow-x-auto">
-                      <div className="flex w-max items-center gap-2">
-                        {activeSchemes.map((s) => {
-                          const ep = getEffectiveSchemePrice(s, now);
-                          const isEarlyBird = Boolean(ep.discountEndsAt);
-                          return (
-                            <span
-                              key={s.id}
-                              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[12px] text-slate-700"
-                            >
-                              <span className="font-medium">{s.name}</span>
-                              <span>· RM {ep.unit.toFixed(2)}</span>
-                              {ep.isDiscount ? (
-                                <span
-                                  className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
-                                    isEarlyBird
-                                      ? 'bg-amber-100 text-amber-800'
-                                      : 'bg-rose-100 text-rose-700'
-                                  }`}
-                                >
-                                  {isEarlyBird ? '早鸟价' : '特惠'}
-                                </span>
-                              ) : null}
-                            </span>
-                          );
-                        })}
-                      </div>
+              <article key={item.key} className="py-3.5">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+                      <span className="shrink-0 text-[17px] font-semibold leading-tight text-slate-900">
+                        {tool.name}
+                      </span>
+                      {activeSchemes.map((s) => {
+                        const ep = getEffectiveSchemePrice(s, now);
+                        const isEarlyBird = Boolean(ep.discountEndsAt);
+                        return (
+                          <span
+                            key={s.id}
+                            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-[12px] text-slate-700"
+                          >
+                            <span className="font-medium">{s.name}</span>
+                            <span>· RM {ep.unit.toFixed(2)}</span>
+                            {ep.isDiscount ? (
+                              <span
+                                className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                                  isEarlyBird
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-rose-100 text-rose-700'
+                                }`}
+                              >
+                                {isEarlyBird ? '早鸟价' : '特惠'}
+                              </span>
+                            ) : null}
+                          </span>
+                        );
+                      })}
                     </div>
-                    <button
-                      type="button"
-                      className={`ml-auto ${
-                        openBundleToolId === tool.id
-                          ? 'rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700'
-                          : 'inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-400 text-2xl leading-none text-white shadow-sm'
-                      }`}
-                      onClick={() =>
-                        setOpenBundleToolId((prev) => (prev === tool.id ? null : tool.id))
-                      }
-                      aria-label={openBundleToolId === tool.id ? '折叠套餐' : '展开套餐'}
-                    >
-                      {openBundleToolId === tool.id ? '折叠' : '+'}
-                    </button>
                   </div>
+                  <button
+                    type="button"
+                    className={
+                      openBundleToolId === tool.id
+                        ? 'shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700'
+                        : 'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[22px] font-light leading-none text-white shadow-sm transition active:scale-95'
+                    }
+                    style={
+                      openBundleToolId !== tool.id
+                        ? { backgroundColor: data.themeColor }
+                        : undefined
+                    }
+                    onClick={() =>
+                      setOpenBundleToolId((prev) => (prev === tool.id ? null : tool.id))
+                    }
+                    aria-label={openBundleToolId === tool.id ? '折叠套餐' : '展开套餐'}
+                  >
+                    {openBundleToolId === tool.id ? '折叠' : '+'}
+                  </button>
+                </div>
                   {tool.description?.trim() ? (
                     <p className="mt-1 truncate text-[12px] leading-snug text-slate-500">
                       {tool.description.trim()}
@@ -1111,7 +1110,6 @@ export default function ShopHome() {
                       )}
                     </div>
                   ) : null}
-                </div>
               </article>
             );
           })}
@@ -1196,6 +1194,7 @@ export default function ShopHome() {
         invitedRole={bottomBarMenu.invitedRole}
         copied={menuCopied}
         onCopyLink={handleCopyMenuLink}
+        showCardsEntry={hasShopCards}
       />
     </div>
   );

@@ -76,7 +76,7 @@ export default function Home() {
   );
 
   return (
-    <main className="mx-auto max-w-xl px-5 py-5">
+    <main className="w-full px-4 py-5">
       <h1 className="mb-3 text-2xl font-semibold text-gray-900">群购订单管理</h1>
       <p className="mb-4 text-sm leading-relaxed text-gray-600">{hint}</p>
 

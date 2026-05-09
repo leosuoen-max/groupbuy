@@ -12,7 +12,9 @@
   }
 
   body {
-    @apply m-0 min-h-svh bg-white text-gray-900;
+    /* 与 DESIGN_PAGE_BG 一致；实际内容区由 H5Shell 中间白栏承载 */
+    @apply m-0 min-h-svh text-gray-900;
+    background-color: #f3f4f1;
   }
 
   #root {

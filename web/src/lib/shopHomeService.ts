@@ -9,6 +9,7 @@ import type {
   ProjectStatus,
 } from '../data/mockShopHome';
 import type { ProjectDoc, ProjectProduct } from '../types/firestore';
+import { normalizeShopThemeColor } from './shopTheme';
 
 export type ShopHomeLoadError =
   | 'SHOP_NOT_FOUND'
@@ -168,7 +169,7 @@ export async function loadShopHomeFromFirestore(
     shopLogoUrl: shop.logoImage?.trim() || undefined,
     projectTitle: proj.title,
     bannerUrl,
-    themeColor: shop.themeColor || '#E63946',
+    themeColor: normalizeShopThemeColor(shop.themeColor),
     status: resolveUiStatus(proj, now),
     closesAt,
     orderCount,

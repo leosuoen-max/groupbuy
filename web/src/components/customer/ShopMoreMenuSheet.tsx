@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { H5_COLUMN_CLASS } from '../../lib/shopTheme';
 
 export type ShopMoreMenuSheetProps = {
   open: boolean;
@@ -10,6 +11,8 @@ export type ShopMoreMenuSheetProps = {
   invitedRole: 'normal_admin' | 'high_admin' | null;
   copied: boolean;
   onCopyLink: () => void;
+  /** 店铺上架优惠卡时在「更多」中显示钱包 / 优惠卡入口（原首页横条已移除） */
+  showCardsEntry?: boolean;
 };
 
 export function ShopMoreMenuSheet({
@@ -22,6 +25,7 @@ export function ShopMoreMenuSheet({
   invitedRole,
   copied,
   onCopyLink,
+  showCardsEntry = false,
 }: ShopMoreMenuSheetProps) {
   if (!open) return null;
 
@@ -34,7 +38,9 @@ export function ShopMoreMenuSheet({
   return (
     <div className="pointer-events-auto fixed inset-0 z-30 bg-black/25">
       <button type="button" className="absolute inset-0 h-full w-full" aria-label="关闭更多菜单" onClick={onClose} />
-      <div className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-lg rounded-t-2xl bg-white p-4 shadow-2xl">
+      <div
+        className={`absolute inset-x-0 bottom-0 mx-auto w-full rounded-t-2xl bg-white p-4 shadow-2xl ${H5_COLUMN_CLASS}`}
+      >
         <div className="mb-2 text-center text-sm font-semibold text-gray-900">更多</div>
         <div className="space-y-1 text-sm">
           <Link
@@ -60,6 +66,15 @@ export function ShopMoreMenuSheet({
           >
             🔗 复制链接 {copied ? '（已复制）' : ''}
           </button>
+          {showCardsEntry ? (
+            <Link
+              to={`/shop/${encodeURIComponent(shopSlug)}/cards?from=${encodeURIComponent(projectId)}`}
+              onClick={onClose}
+              className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+            >
+              💳 钱包 / 优惠卡
+            </Link>
+          ) : null}
           <a
             href={`mailto:?subject=${encodeURIComponent('意见反馈')}&body=${encodeURIComponent(`页面：${window.location.href}`)}`}
             className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
