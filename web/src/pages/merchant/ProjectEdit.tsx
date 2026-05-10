@@ -71,6 +71,11 @@ function parseMaybeTimestamp(v: unknown): Timestamp | null | undefined {
   return undefined;
 }
 
+/** 同一套餐内方案名称唯一性：去首尾空白，连续空白视为一格 */
+function normalizeBundleSchemeDisplayName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ');
+}
+
 function normalizeApplicableCardIds(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) return undefined;
   const out = input.filter((x): x is string => typeof x === 'string' && !!x);
@@ -898,6 +903,32 @@ export default function ProjectEdit() {
     return null;
   }, [normalizedProducts, normalizedBundleTools]);
 
+  const bundleSchemeDuplicateValidation = useMemo<{
+    message: string;
+    key: string;
+  } | null>(() => {
+    for (const tool of bundleTools) {
+      const toolName = (tool.name ?? '').trim() || '未命名套餐';
+      const keyToIds = new Map<string, string[]>();
+      for (const sch of tool.schemes ?? []) {
+        const k = normalizeBundleSchemeDisplayName(sch.name ?? '');
+        if (!k) continue;
+        const ids = keyToIds.get(k) ?? [];
+        ids.push(sch.id);
+        keyToIds.set(k, ids);
+      }
+      for (const [schemeLabel, ids] of keyToIds) {
+        if (ids.length > 1) {
+          return {
+            message: `套餐「${toolName}」内不能有两个同名方案「${schemeLabel}」，请改名后再保存或发布`,
+            key: `scheme-dup:${ids[0]}`,
+          };
+        }
+      }
+    }
+    return null;
+  }, [bundleTools]);
+
   const focusValidationTarget = useCallback((key: string) => {
     setValidationHighlightKey(key);
     queueMicrotask(() => {
@@ -1186,6 +1217,11 @@ export default function ProjectEdit() {
 
   const handleSaveDraft = async () => {
     if (!resolvedPid) return;
+    if (bundleSchemeDuplicateValidation) {
+      setMsg(bundleSchemeDuplicateValidation.message);
+      focusValidationTarget(bundleSchemeDuplicateValidation.key);
+      return;
+    }
     if (promotionValidation) {
       setMsg(promotionValidation.message);
       focusValidationTarget(promotionValidation.key);
@@ -1230,6 +1266,11 @@ export default function ProjectEdit() {
 
   const handlePublish = async () => {
     if (!resolvedPid) return;
+    if (bundleSchemeDuplicateValidation) {
+      setMsg(bundleSchemeDuplicateValidation.message);
+      focusValidationTarget(bundleSchemeDuplicateValidation.key);
+      return;
+    }
     if (promotionValidation) {
       setMsg(promotionValidation.message);
       focusValidationTarget(promotionValidation.key);
@@ -2694,6 +2735,23 @@ export default function ProjectEdit() {
                               items={libraryRows}
                               kindFilter="bundle_scheme"
                               onPick={(row) => {
+                                const picked = normalizeBundleSchemeDisplayName(
+                                  row.data.name ?? ''
+                                );
+                                if (picked) {
+                                  const dup = tool.schemes.some(
+                                    (s) =>
+                                      s.id !== sch.id &&
+                                      normalizeBundleSchemeDisplayName(s.name ?? '') ===
+                                        picked
+                                  );
+                                  if (dup) {
+                                    setMsg(
+                                      `该套餐内已有同名方案「${picked}」，请先改名或删除重复项后再套用`
+                                    );
+                                    return;
+                                  }
+                                }
                                 setBundleTools((prev) =>
                                   prev.map((x) =>
                                     x.id === tool.id
@@ -2757,10 +2815,16 @@ export default function ProjectEdit() {
                             <label className="flex min-w-[10rem] flex-[2] basis-[min(100%,18rem)] flex-col gap-0.5">
                               <span className="text-[10px] text-gray-500">方案名称</span>
                               <input
-                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                id={`validation-scheme-dup:${sch.id}`}
+                                className={`rounded border bg-white px-2 py-1.5 text-xs ${
+                                  validationHighlightKey === `scheme-dup:${sch.id}`
+                                    ? 'border-red-500 ring-2 ring-red-200'
+                                    : 'border-gray-200'
+                                }`}
                                 value={sch.name}
                                 placeholder="如：双人套餐"
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  setValidationHighlightKey(null);
                                   setBundleTools((prev) =>
                                     prev.map((x) =>
                                       x.id === tool.id
@@ -2774,8 +2838,8 @@ export default function ProjectEdit() {
                                           }
                                         : x
                                     )
-                                  )
-                                }
+                                  );
+                                }}
                               />
                             </label>
                             <label className="flex w-full basis-full flex-col gap-0.5">
