@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+declare module 'virtual:deploy-build-id' {
+  /** 生产构建为随机 UUID，开发为 "dev" */
+  export const DEPLOY_BUILD_ID: string;
+}
+
 interface ImportMetaEnv {
   readonly VITE_FIREBASE_API_KEY: string;
   readonly VITE_FIREBASE_AUTH_DOMAIN: string;
