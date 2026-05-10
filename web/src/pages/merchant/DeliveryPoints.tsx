@@ -366,43 +366,43 @@ export default function DeliveryPoints() {
               key={row.id}
               className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm"
             >
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <span className="font-medium text-gray-900">
-                    [{row.data.code ?? '—'}] {row.data.shortName ?? row.data.name}
+              {/* 第一行：名称（地址长度不影响右侧操作区） */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-gray-900">
+                  [{row.data.code ?? '—'}] {row.data.shortName ?? row.data.name}
+                </span>
+                {row.data.isActive === false ? (
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+                    已停用
                   </span>
-                  {row.data.isActive === false ? (
-                    <span className="ml-2 rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
-                      已停用
-                    </span>
-                  ) : null}
-                  {row.data.detailAddress ? (
-                    <p className="mt-1 text-xs text-gray-600">
-                      {row.data.detailAddress}
-                    </p>
+                ) : null}
+              </div>
+
+              {/* 第二行：图片/地图短链与右侧按钮同一行，避免长地址挤乱排版 */}
+              <div className="mt-2 flex items-start justify-between gap-2">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  {row.data.imageUrl ? (
+                    <a
+                      href={row.data.imageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="shrink-0 text-indigo-600 hover:underline"
+                    >
+                      查看图片
+                    </a>
                   ) : null}
                   {row.data.mapsUrl ? (
                     <a
                       href={row.data.mapsUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1 block text-xs text-indigo-600 hover:underline"
+                      className="shrink-0 text-indigo-600 hover:underline"
                     >
                       打开谷歌地图
                     </a>
                   ) : null}
-                  {row.data.imageUrl ? (
-                    <a
-                      href={row.data.imageUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-indigo-600 hover:underline"
-                    >
-                      查看图片
-                    </a>
-                  ) : null}
                 </div>
-                <div className="flex shrink-0 flex-wrap gap-1">
+                <div className="flex shrink-0 flex-nowrap items-center gap-1">
                   <button
                     type="button"
                     className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-800"
@@ -424,11 +424,18 @@ export default function DeliveryPoints() {
                       checked={row.data.isActive !== false}
                       onChange={() => void toggleActive(row)}
                     />
-                    <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
+                    <div className="h-6 w-11 shrink-0 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
                     <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
                   </label>
                 </div>
               </div>
+
+              {/* 第三行：详细地址独占一行 */}
+              {row.data.detailAddress ? (
+                <p className="mt-2 break-words text-xs leading-relaxed text-gray-600">
+                  {row.data.detailAddress}
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>
