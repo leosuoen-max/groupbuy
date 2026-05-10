@@ -13,7 +13,8 @@ type CustomerEntry = {
   projectTitle: string;
 };
 
-export default function Home() {
+/** 商户自用：店铺与项目链接汇总（原首页文案页） */
+export default function HomeLinks() {
   const { user, loading: authLoading } = useAuthUser();
   const [customerEntries, setCustomerEntries] = useState<CustomerEntry[]>([]);
   const [shopSlugs, setShopSlugs] = useState<string[]>([]);
@@ -71,21 +72,26 @@ export default function Home() {
 
   const hint = useMemo(
     () =>
-      '顾客端地址格式为 /shop/{公开链接 slug}/{项目 ID}，其中项目 ID 是 Firestore 文档 id（在项目列表里对应每个项目）。首页曾用的 demo-shop / demo-project 只是示例字符串，若数据库里没有对应商户，就会提示「找不到该店铺链接」。',
+      '顾客端地址格式为 /shop/{公开链接 slug}/{项目 ID}，其中项目 ID 是 Firestore 文档 id（在项目列表里对应每个项目）。若数据库里没有对应商户，会提示「找不到该店铺链接」。',
     []
   );
 
   return (
     <main className="w-full px-4 py-5">
-      <h1 className="mb-3 text-2xl font-semibold text-gray-900">群购订单管理</h1>
+      <p className="mb-3 text-sm">
+        <Link className={link} to="/">
+          ← 商户入口
+        </Link>
+      </p>
+      <h1 className="mb-3 text-2xl font-semibold text-gray-900">链接与快捷入口</h1>
       <p className="mb-4 text-sm leading-relaxed text-gray-600">{hint}</p>
 
       <section className="mb-6">
-        <h2 className="mb-2 text-base font-semibold text-gray-900">平台</h2>
+        <h2 className="mb-2 text-base font-semibold text-gray-900">账号</h2>
         <ul className="list-disc space-y-1 pl-5 text-gray-800">
           <li>
             <Link className={link} to="/login">
-              登录（商户匿名登录）
+              登录
             </Link>
           </li>
           <li>

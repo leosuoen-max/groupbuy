@@ -1,0 +1,5 @@
+{
+  "projects": {
+    "default": "在此填入与 web/.env.local 中 VITE_FIREBASE_PROJECT_ID 相同的项目 ID"
+  }
+}

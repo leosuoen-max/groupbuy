@@ -54,7 +54,7 @@
   - Firestore（数据库，实时同步）
   - Storage（图片存储）
   - Authentication（手机号验证码）
-- **部署：** Vercel
+- **部署：** Firebase Hosting（仓库根目录 `firebase.json` + `npm run deploy`）或 Vercel 等静态托管
 - **商户端：** PWA（可添加到桌面，支持推送通知）
 - **顾客端：** 纯 H5（无需安装）
 
@@ -138,3 +138,13 @@ yourapp.com/shop/[shop-slug]/[project-id]
 ---
 
 **详细需求请按顺序阅读 `docs/` 目录下的所有文件。**
+
+---
+
+## Firebase Hosting 发布（简要）
+
+1. 安装 Firebase CLI：**无需** `npm i -g`（避免 `/usr/local` 权限问题）。在仓库根目录执行 `npm install` 即可把 `firebase-tools` 装在项目里；登录用 `npx firebase login`（或 `npm run firebase -- login`）。
+2. 在仓库根目录：复制 `.firebaserc.example` 为 `.firebaserc`，把其中的项目 ID 改成与 `web/.env.local` 里 **`VITE_FIREBASE_PROJECT_ID`** 一致。
+3. 首次在 [Firebase 控制台](https://console.firebase.google.com/) → 你的项目 → **Hosting** → 若提示未启用，按向导关联本项目。
+4. 构建的环境变量：生产环境需在本地导出 `VITE_FIREBASE_*` 后再构建，或使用 CI 注入（勿把密钥提交到 Git）。在项目根执行：`npm run deploy`（会先 `web` 构建再 `firebase deploy --only hosting`）。
+5. 部署完成后把 Hosting 提供的域名（如 `xxx.web.app`）加入 **Authentication → 授权网域**。

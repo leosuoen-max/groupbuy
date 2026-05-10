@@ -27,6 +27,13 @@ import {
   buildProductionCsv,
   buildProductionTotals,
 } from '../../lib/reconciliationSummary';
+import {
+  buildProfitCopyText,
+  buildProfitCsv,
+  buildProfitTotals,
+} from '../../lib/reconciliationProfit';
+import { getProject } from '../../lib/projectService';
+import type { ProjectDoc } from '../../types/firestore';
 import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
 import {
@@ -95,9 +102,12 @@ export default function ReconciliationStatement() {
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
   const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
-  const [viewMode, setViewMode] = useState<'reconciliation' | 'production'>(
-    'reconciliation'
-  );
+  const [viewMode, setViewMode] = useState<
+    'reconciliation' | 'production' | 'profit'
+  >('reconciliation');
+  const [projectDocsMap, setProjectDocsMap] = useState<
+    Map<string, ProjectDoc>
+  >(() => new Map());
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -188,6 +198,47 @@ export default function ReconciliationStatement() {
     [scopedOrders, bucketSelection]
   );
 
+  const projectIdsKey = useMemo(
+    () =>
+      [...new Set(scopedOrders.map((r) => r.data.projectId))]
+        .sort()
+        .join(','),
+    [scopedOrders]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const ids = projectIdsKey
+      ? (projectIdsKey.split(',') as string[])
+      : [];
+    if (ids.length === 0) {
+      setProjectDocsMap(new Map());
+      return;
+    }
+    void (async () => {
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          const row = await getProject(id);
+          return [id, row?.data ?? null] as const;
+        })
+      );
+      if (cancelled) return;
+      const m = new Map<string, ProjectDoc>();
+      for (const [id, data] of entries) {
+        if (data) m.set(id, data);
+      }
+      setProjectDocsMap(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectIdsKey]);
+
+  const profitTotals = useMemo(
+    () => buildProfitTotals(scopedOrders, bucketSelection, projectDocsMap),
+    [scopedOrders, bucketSelection, projectDocsMap]
+  );
+
   const projectOptions = useMemo(() => {
     const m = new Map<string, string>();
     for (const r of orders) {
@@ -252,11 +303,17 @@ export default function ReconciliationStatement() {
             bucketSelection,
             deliveryPointLookup,
           })
-        : buildProductionCopyText({
-            shopName,
-            projectLabel,
-            totals: productionTotals,
-          });
+        : viewMode === 'production'
+          ? buildProductionCopyText({
+              shopName,
+              projectLabel,
+              totals: productionTotals,
+            })
+          : buildProfitCopyText({
+              shopName,
+              projectLabel,
+              totals: profitTotals,
+            });
     try {
       await navigator.clipboard.writeText(text);
       setCopyOk(true);
@@ -278,7 +335,9 @@ export default function ReconciliationStatement() {
     const csv = '\ufeff' + (
       viewMode === 'reconciliation'
         ? buildReconciliationCsv(scopedOrders, bucketSelection, deliveryPointLookup)
-        : buildProductionCsv(productionTotals)
+        : viewMode === 'production'
+          ? buildProductionCsv(productionTotals)
+          : buildProfitCsv(profitTotals)
     );
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -287,7 +346,9 @@ export default function ReconciliationStatement() {
     a.download =
       viewMode === 'reconciliation'
         ? `对账单-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
-        : `生产统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
+        : viewMode === 'production'
+          ? `生产统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
+          : `成本利润-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -371,6 +432,17 @@ export default function ReconciliationStatement() {
           onClick={() => setViewMode('production')}
         >
           厨房生产统计
+        </button>
+        <button
+          type="button"
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            viewMode === 'profit'
+              ? 'bg-gray-900 text-white'
+              : 'border border-gray-200 bg-white text-gray-600'
+          }`}
+          onClick={() => setViewMode('profit')}
+        >
+          成本利润统计
         </button>
       </div>
 
@@ -510,7 +582,7 @@ export default function ReconciliationStatement() {
             </p>
           ) : null}
         </>
-      ) : (
+      ) : viewMode === 'production' ? (
         <div className="mb-5 grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
             <div className="text-xs font-medium text-indigo-800">总出品份数</div>
@@ -530,6 +602,73 @@ export default function ReconciliationStatement() {
               {productionTotals.bundleOptionTotalQty}
             </div>
           </div>
+        </div>
+      ) : (
+        <div className="mb-5 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+              <div className="text-xs font-medium text-emerald-800">销售额（行 subtotal）</div>
+              <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
+                {formatMYR(profitTotals.totalSales)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+              <div className="text-xs font-medium text-amber-900">采购成本</div>
+              <div className="mt-1 text-xl font-bold tabular-nums text-amber-950">
+                {formatMYR(profitTotals.totalCost)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+              <div className="text-xs font-medium text-indigo-800">毛利</div>
+              <div className="mt-1 text-xl font-bold tabular-nums text-indigo-950">
+                {formatMYR(profitTotals.grossProfit)}
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3">
+              <div className="text-xs font-medium text-rose-900">早鸟让价合计</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-rose-950">
+                {formatMYR(profitTotals.earlyBirdReduction)}
+              </div>
+              <p className="mt-1 text-[11px] text-rose-900/80">
+                相对当前菜单标价 × 份数（限时截止）
+              </p>
+            </div>
+            <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+              <div className="text-xs font-medium text-orange-900">特惠让价合计</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-orange-950">
+                {formatMYR(profitTotals.specialReduction)}
+              </div>
+              <p className="mt-1 text-[11px] text-orange-900/80">
+                相对当前菜单标价 × 份数（无截止）
+              </p>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+              <div className="text-xs font-medium text-gray-800">优惠让价总计</div>
+              <div className="mt-1 text-lg font-bold tabular-nums text-gray-900">
+                {formatMYR(profitTotals.discountReductionTotal)}
+              </div>
+            </div>
+          </div>
+          <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
+            利润统计复用上方「筛选项目」「凭证时间」与「清单包含」所选付款组（含待付款、待确认、已确认）。
+            请在项目编辑中为商品与套餐方案填写<strong className="font-medium text-gray-800">采购成本</strong>
+            ；未填则该行成本按 0，并在下方表格旁提示缺失笔数。
+            早鸟/特惠让价按<strong className="font-medium text-gray-800">当前菜单标价</strong>
+            推算；若改价与下单时不一致会有误差。
+          </p>
+          {profitTotals.missingProjectCount > 0 ? (
+            <p className="text-xs text-amber-800">
+              有 {profitTotals.missingProjectCount} 笔订单未能加载项目菜单（无法拆分成本/让价）。
+            </p>
+          ) : null}
+          {profitTotals.missingCostLineCount > 0 ? (
+            <p className="text-xs text-amber-800">
+              有 {profitTotals.missingCostLineCount}{' '}
+              条明细未配置采购成本（已计入销售额，成本按 0）。
+            </p>
+          ) : null}
         </div>
       )}
 
@@ -587,7 +726,13 @@ export default function ReconciliationStatement() {
 
       <div className="mb-2 flex flex-wrap gap-2">
         <ActionButton type="button" variant="primary" onClick={() => void handleCopy()}>
-          {copyOk ? '已复制' : viewMode === 'reconciliation' ? '复制对账清单' : '复制生产清单'}
+          {copyOk
+            ? '已复制'
+            : viewMode === 'reconciliation'
+              ? '复制对账清单'
+              : viewMode === 'production'
+                ? '复制生产清单'
+                : '复制利润统计'}
         </ActionButton>
         <ActionButton type="button" variant="secondary" onClick={handleExportCsv}>
           导出 CSV
@@ -599,9 +744,13 @@ export default function ReconciliationStatement() {
           （与配送点管理一致）；无绑定 ID 的历史订单仍显示收货时的快照名称。手机宽度有限时可<strong className="font-medium text-gray-700">左右滑动</strong>
           查看整表。
         </p>
-      ) : (
+      ) : viewMode === 'production' ? (
         <p className="mb-4 text-xs text-gray-500">
           生产统计复用当前项目、凭证时间与「清单包含」筛选。普通商品按下单份数累计；套餐按系列中具体单项拆解累计，供厨房备料与出品参考。
+        </p>
+      ) : (
+        <p className="mb-4 text-xs text-gray-500">
+          按商品/套餐方案汇总销售额与采购成本；筛选范围与上方「清单包含」一致，可包含待付款、待确认组。
         </p>
       )}
 
@@ -609,6 +758,11 @@ export default function ReconciliationStatement() {
         <EmptyStateCard
           title="当前筛选范围暂无订单"
           hint="可放宽时间窗口、切换项目，或勾选更多「清单包含」标签。"
+        />
+      ) : viewMode === 'profit' && profitTotals.rows.length === 0 ? (
+        <EmptyStateCard
+          title="当前筛选下无明细"
+          hint="请勾选「清单包含」中的付款组，或放宽项目/时间筛选。"
         />
       ) : viewMode === 'reconciliation' ? (
         <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
@@ -744,7 +898,7 @@ export default function ReconciliationStatement() {
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : viewMode === 'production' ? (
         <div className="grid gap-4 md:grid-cols-2">
           <section className="rounded-xl border border-gray-200 bg-white">
             <div className="border-b border-gray-100 px-4 py-3">
@@ -788,6 +942,41 @@ export default function ReconciliationStatement() {
               </ul>
             )}
           </section>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
+          <table className="w-full min-w-[36rem] table-fixed border-collapse text-left text-sm">
+            <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
+              <tr>
+                <th className="w-[14%] px-2 py-2">类型</th>
+                <th className="w-[28%] px-2 py-2">名称</th>
+                <th className="w-[10%] px-2 py-2">数量</th>
+                <th className="w-[16%] px-2 py-2">销售额</th>
+                <th className="w-[16%] px-2 py-2">成本</th>
+                <th className="w-[16%] px-2 py-2">毛利</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {profitTotals.rows.map((r) => (
+                <tr key={r.key} className="bg-white">
+                  <td className="px-2 py-2 text-xs text-gray-600">
+                    {r.kind === 'scheme' ? '套餐方案' : '商品'}
+                  </td>
+                  <td className="min-w-0 px-2 py-2 break-words text-gray-900">{r.name}</td>
+                  <td className="whitespace-nowrap px-2 py-2 tabular-nums">{r.quantity}</td>
+                  <td className="whitespace-nowrap px-2 py-2 tabular-nums">
+                    {formatMYR(r.sales)}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 tabular-nums">
+                    {formatMYR(r.cost)}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 font-medium tabular-nums text-emerald-900">
+                    {formatMYR(r.profit)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

@@ -13,7 +13,7 @@ export function PageShell({ title, subtitle, children }: PageShellProps) {
     <main className="min-h-[60vh] w-full px-4 py-5">
       <p className="mb-3">
         <Link to="/" className={link}>
-          ← 首页
+          ← 商户入口
         </Link>
       </p>
       <h1 className="mb-2 text-xl font-semibold text-gray-900">{title}</h1>

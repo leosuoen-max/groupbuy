@@ -9,10 +9,6 @@ import {
   updateProjectPermissionRole,
   type PermissionRow,
 } from '../../lib/permissionService';
-import {
-  listProjectsByShopId,
-  type ProjectRow,
-} from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
 
 function resolveInviteOrigin(): string {
@@ -29,7 +25,6 @@ export default function AdminManagement() {
   const [err, setErr] = useState<string | null>(null);
   const [shopId, setShopId] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
-  const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<'high_admin' | 'normal_admin'>(
     'normal_admin'
@@ -58,8 +53,6 @@ export default function AdminManagement() {
       }
       setShopId(shop.id);
       setShopName(shop.data.name);
-      const list = await listProjectsByShopId(shop.id);
-      setProjects(list);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -205,9 +198,6 @@ export default function AdminManagement() {
       </PageShell>
     );
   }
-
-  const input =
-    'mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900';
 
   return (
     <PageShell

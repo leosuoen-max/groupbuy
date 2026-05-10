@@ -20,6 +20,8 @@ export type ProjectProduct = {
   id: string;
   name: string;
   description?: string;
+  /** 商户录入：单品采购成本（RM），用于对账单利润统计 */
+  purchaseCost?: number;
   price: number;
   discountPrice?: number;
   discountStart?: Timestamp | null;
@@ -56,6 +58,8 @@ export type BundleSeriesDoc = {
 export type BundleSchemeDoc = {
   id: string;
   name: string;
+  /** 商户录入：该套餐方案采购成本（RM），用于对账单利润统计 */
+  purchaseCost?: number;
   price: number;
   discountPrice?: number;
   discountStart?: Timestamp | null;
@@ -143,6 +147,22 @@ export type InvitationDoc = {
   usedAt?: Timestamp | null;
   usedBy?: string | null;
   createdAt: Timestamp;
+};
+
+/** 登录/注册用户在平台上的登记快照（`registered_users/{uid}`） */
+export type RegisteredUserDoc = {
+  uid: string;
+  /** 掩码展示，如 ****5678；匿名用户为 null */
+  phoneMasked: string | null;
+  isAnonymous: boolean;
+  firstSeenAt: Timestamp;
+  lastSeenAt: Timestamp;
+};
+
+/** 平台后台管理员白名单（`platform_admins/{uid}`，控制台手动创建文档即可） */
+export type PlatformAdminDoc = {
+  note?: string;
+  createdAt?: Timestamp;
 };
 
 /* ----------------------------- 优惠卡（钱包 / 次卡） ----------------------------- */

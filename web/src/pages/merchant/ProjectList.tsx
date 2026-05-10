@@ -19,6 +19,31 @@ function statusLabel(s: ProjectRow['data']['status']) {
   return '已截止';
 }
 
+function isProjectPublished(p: ProjectRow): boolean {
+  return p.data.status === 'published';
+}
+
+/** 已发布 / 已截止项目展示首次发布时间（Firestore publishedAt） */
+function formatPublishedAtLine(p: ProjectRow): string | null {
+  if (p.data.status === 'draft') return null;
+  const ts = p.data.publishedAt;
+  if (!ts?.toDate) return null;
+  const d = ts.toDate();
+  return `发布于 ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+function resolvePublicOrigin(): string {
+  const envOrigin = (import.meta.env.VITE_PUBLIC_APP_ORIGIN as string | undefined)?.trim();
+  if (envOrigin) return envOrigin.replace(/\/+$/, '');
+  return typeof window !== 'undefined' ? window.location.origin : '';
+}
+
+function customerShopHomeUrl(slug: string, projectId: string): string {
+  const path = `/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
+  const origin = resolvePublicOrigin();
+  return origin ? `${origin}${path}` : path;
+}
+
 export default function ProjectList() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const { user, loading: authLoading } = useAuthUser();
@@ -30,6 +55,7 @@ export default function ProjectList() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
 
   const slug = decodeURIComponent(shopSlug);
 
@@ -133,6 +159,17 @@ export default function ProjectList() {
     return '发布';
   }, []);
 
+  const handleCopyCustomerLink = async (p: ProjectRow) => {
+    const url = customerShopHomeUrl(slug, p.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedProjectId(p.id);
+      window.setTimeout(() => setCopiedProjectId((cur) => (cur === p.id ? null : cur)), 2000);
+    } catch {
+      window.prompt('复制顾客进店链接：', url);
+    }
+  };
+
   const handleDeleteProject = async (p: ProjectRow) => {
     if (busyId) return;
     const title = p.data.title?.trim() || '未命名项目';
@@ -212,50 +249,72 @@ export default function ProjectList() {
         <p className="text-sm text-gray-600">还没有项目，点上方新建。</p>
       ) : (
         <ul className="space-y-2">
-          {projects.map((p) => (
+          {projects.map((p) => {
+            const publishedLine = formatPublishedAtLine(p);
+            return (
             <li key={p.id}>
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm">
-                <Link
-                  to={`${base}/projects/${encodeURIComponent(p.id)}`}
-                  className="min-w-0 flex-1"
-                >
-                  <span className="block min-w-0 truncate font-medium text-gray-900">
-                    {p.data.title || '未命名'}
-                  </span>
-                </Link>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
-                    disabled={busyId === p.id}
-                    onClick={() => void handleDeleteProject(p)}
-                  >
-                    删除
-                  </button>
-                  <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
-                    {statusLabel(p.data.status)}
-                  </span>
-                  <label
-                    className={`relative inline-flex items-center ${
-                      busyId === p.id ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
-                    }`}
-                    title="发布/撤回"
-                    aria-label={switchLabel}
-                  >
-                    <input
-                      type="checkbox"
-                      className="peer sr-only"
+              <div className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm">
+                {/* 窄屏勿与标题同一行，避免操作区被挤出视口 */}
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Link to={`${base}/projects/${encodeURIComponent(p.id)}`}>
+                        <span className="block break-words font-medium leading-snug text-gray-900">
+                          {p.data.title || '未命名'}
+                        </span>
+                      </Link>
+                      {publishedLine ? (
+                        <p className="mt-1 text-[11px] leading-snug text-gray-500">
+                          {publishedLine}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                      {statusLabel(p.data.status)}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isProjectPublished(p) ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-900"
+                        onClick={() => void handleCopyCustomerLink(p)}
+                      >
+                        {copiedProjectId === p.id ? '已复制' : '复制链接'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
                       disabled={busyId === p.id}
-                      checked={p.data.status === 'published'}
-                      onChange={() => void togglePublish(p)}
-                    />
-                    <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
-                    <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
-                  </label>
+                      onClick={() => void handleDeleteProject(p)}
+                    >
+                      删除
+                    </button>
+                    <label
+                      className={`relative ml-auto inline-flex shrink-0 items-center ${
+                        busyId === p.id ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                      }`}
+                      title="发布/撤回"
+                      aria-label={switchLabel}
+                    >
+                      <input
+                        type="checkbox"
+                        className="peer sr-only"
+                        disabled={busyId === p.id}
+                        checked={isProjectPublished(p)}
+                        onChange={() => void togglePublish(p)}
+                      />
+                      <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
+                      <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
+                    </label>
+                  </div>
                 </div>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </PageShell>

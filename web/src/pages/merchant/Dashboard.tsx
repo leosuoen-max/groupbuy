@@ -169,31 +169,31 @@ export default function MerchantDashboard() {
         {ordersLoading ? (
           <p className="text-sm text-gray-500">正在统计今日订单…</p>
         ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-emerald-950 shadow-sm">
-              <div className="text-xs font-medium text-emerald-800">已确认到账</div>
-              <div className="mt-1 text-xl font-bold tabular-nums">
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-2.5 text-emerald-950 shadow-sm sm:px-3 sm:py-3">
+              <div className="text-[11px] font-medium leading-tight text-emerald-800 sm:text-xs">已确认到账</div>
+              <div className="mt-1 text-base font-bold tabular-nums sm:text-xl">
                 {formatMYR(todayStats.confirmedRevenue)}
               </div>
-              <div className="mt-0.5 text-xs text-emerald-800">
+              <div className="mt-0.5 text-[11px] text-emerald-800 sm:text-xs">
                 {todayStats.confirmedCount} 单
               </div>
             </div>
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-amber-950 shadow-sm">
-              <div className="text-xs font-medium text-amber-800">待确认</div>
-              <div className="mt-1 text-xl font-bold tabular-nums">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-2 py-2.5 text-amber-950 shadow-sm sm:px-3 sm:py-3">
+              <div className="text-[11px] font-medium leading-tight text-amber-800 sm:text-xs">待确认</div>
+              <div className="mt-1 text-base font-bold tabular-nums sm:text-xl">
                 {formatMYR(todayStats.pendingReviewAmount)}
               </div>
-              <div className="mt-0.5 text-xs text-amber-800">
+              <div className="mt-0.5 text-[11px] text-amber-800 sm:text-xs">
                 {todayStats.pendingReviewCount} 单
               </div>
             </div>
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-rose-950 shadow-sm">
-              <div className="text-xs font-medium text-rose-800">未付款</div>
-              <div className="mt-1 text-xl font-bold tabular-nums">
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-2.5 text-rose-950 shadow-sm sm:px-3 sm:py-3">
+              <div className="text-[11px] font-medium leading-tight text-rose-800 sm:text-xs">未付款</div>
+              <div className="mt-1 text-base font-bold tabular-nums sm:text-xl">
                 {formatMYR(todayStats.unpaidAmount)}
               </div>
-              <div className="mt-0.5 text-xs text-rose-800">
+              <div className="mt-0.5 text-[11px] text-rose-800 sm:text-xs">
                 {todayStats.unpaidCount} 单
               </div>
             </div>
@@ -211,46 +211,46 @@ export default function MerchantDashboard() {
           （顾客已传截图）。请到「优惠卡」页面处理。
         </p>
       ) : null}
-      <div className="grid grid-cols-2 gap-2 overflow-visible sm:grid-cols-3">
+      <div className="grid grid-cols-3 gap-1.5 overflow-visible sm:gap-2">
         <Link
           to={`${base}/projects`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           项目列表
         </Link>
         <Link
           to={`${base}/orders`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           订单管理
         </Link>
         <Link
           to={`${base}/reconciliation`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           对账单
         </Link>
         <Link
           to={`${base}/settings`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           基本设置
         </Link>
         <Link
           to={`${base}/delivery-points`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           配送点
         </Link>
         <Link
           to={`${base}/admins`}
-          className="flex min-h-[3.5rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           管理员
         </Link>
         <Link
           to={`${base}/cards`}
-          className="relative flex min-h-[3.5rem] items-center justify-center overflow-visible rounded-xl border border-gray-200 bg-white px-2 text-center text-sm font-medium text-gray-900 shadow-sm active:bg-gray-50"
+          className="relative flex min-h-[3.25rem] items-center justify-center overflow-visible rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >
           <span className="relative z-0 px-3">优惠卡</span>
           {pendingCardConfirmCount > 0 ? (

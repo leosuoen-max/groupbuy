@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom';
-import Home from './pages/Home';
+import MerchantEntry from './pages/MerchantEntry';
+import HomeLinks from './pages/HomeLinks';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import InviteAccept from './pages/InviteAccept';
@@ -23,14 +24,18 @@ import CardTemplates from './pages/merchant/CardTemplates';
 import CardTemplateDetail from './pages/merchant/CardTemplateDetail';
 import CustomerCards from './pages/customer/CustomerCards';
 import CustomerCardBuy from './pages/customer/CustomerCardBuy';
+import PlatformRegistrations from './pages/PlatformRegistrations';
 
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
+      <Route path="/" element={<MerchantEntry />} />
+      <Route path="/home" element={<HomeLinks />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/invite/:code" element={<InviteAccept />} />
+
+      <Route path="/admin/registrations" element={<PlatformRegistrations />} />
 
       <Route path="/dashboard" element={<ShopList />} />
       <Route path="/dashboard/:shopSlug" element={<MerchantDashboard />} />

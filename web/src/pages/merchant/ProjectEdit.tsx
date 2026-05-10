@@ -91,6 +91,11 @@ function normalizeDraftProducts(input: unknown): ProjectProduct[] {
       id: typeof row.id === 'string' && row.id ? row.id : crypto.randomUUID(),
       name: typeof row.name === 'string' ? row.name : '',
       description: typeof row.description === 'string' ? row.description : '',
+      ...(typeof row.purchaseCost === 'number' &&
+      !Number.isNaN(row.purchaseCost) &&
+      row.purchaseCost >= 0
+        ? { purchaseCost: row.purchaseCost }
+        : {}),
       price: Number(row.price ?? 0) || 0,
       discountPrice:
         row.discountPrice != null && Number(row.discountPrice) > 0
@@ -682,6 +687,7 @@ export default function ProjectEdit() {
           p.scheduledOffAt instanceof Timestamp
             ? p.scheduledOffAt
             : parseMaybeTimestamp(p.scheduledOffAt as unknown);
+        const purchaseCostRaw = p.purchaseCost;
         const normalized: ProjectProduct = {
           id: p.id,
           name: p.name.trim(),
@@ -701,6 +707,11 @@ export default function ProjectEdit() {
             ? { discountEnd: parsedDiscountEnd instanceof Timestamp ? parsedDiscountEnd : null }
             : {}),
           ...(schedTs instanceof Timestamp ? { scheduledOffAt: schedTs } : {}),
+          ...(typeof purchaseCostRaw === 'number' &&
+          !Number.isNaN(purchaseCostRaw) &&
+          purchaseCostRaw >= 0
+            ? { purchaseCost: purchaseCostRaw }
+            : {}),
           ...(Array.isArray(p.applicableCardTemplateIds) &&
           p.applicableCardTemplateIds.length > 0
             ? {
@@ -770,10 +781,16 @@ export default function ProjectEdit() {
               sch.discountStart as unknown
             );
             const parsedDiscountEnd = parseMaybeTimestamp(sch.discountEnd as unknown);
+            const schCost = (sch as { purchaseCost?: unknown }).purchaseCost;
             return {
               id: sch.id,
               name: (sch.name ?? '').trim(),
               price: Number(sch.price ?? 0) || 0,
+              ...(typeof schCost === 'number' &&
+              !Number.isNaN(schCost) &&
+              schCost >= 0
+                ? { purchaseCost: schCost }
+                : {}),
               requirements: Object.fromEntries(
                 Object.entries(sch.requirements ?? {}).map(([k, v]) => [
                   k,
@@ -1882,7 +1899,7 @@ export default function ProjectEdit() {
                     )
                   }
                 />
-                <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label className="text-xs text-gray-700">
                     价格 (RM)
                     <input
@@ -1915,6 +1932,32 @@ export default function ProjectEdit() {
                           prev.map((x) =>
                             x.id === p.id
                               ? { ...x, stock: Number(e.target.value) || 0 }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="text-xs text-gray-700">
+                    采购成本 (RM)
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      className={input}
+                      placeholder="可选"
+                      value={p.purchaseCost ?? ''}
+                      onChange={(e) =>
+                        setProducts((prev) =>
+                          prev.map((x) =>
+                            x.id === p.id
+                              ? {
+                                  ...x,
+                                  purchaseCost:
+                                    e.target.value.trim() === ''
+                                      ? undefined
+                                      : Math.max(0, Number(e.target.value) || 0),
+                                }
                               : x
                           )
                         )
@@ -2609,6 +2652,46 @@ export default function ProjectEdit() {
                                             ...x,
                                             schemes: x.schemes.map((s) =>
                                               s.id === sch.id ? { ...s, price: n } : s
+                                            ),
+                                          }
+                                        : x
+                                    )
+                                  );
+                                }}
+                              />
+                            </label>
+                            <label className="flex min-w-[6rem] flex-1 flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">采购成本</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="可选"
+                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs tabular-nums"
+                                value={
+                                  sch.purchaseCost != null && sch.purchaseCost > 0
+                                    ? sch.purchaseCost
+                                    : sch.purchaseCost === 0
+                                      ? 0
+                                      : ''
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value.trim();
+                                  setBundleTools((prev) =>
+                                    prev.map((x) =>
+                                      x.id === tool.id
+                                        ? {
+                                            ...x,
+                                            schemes: x.schemes.map((s) =>
+                                              s.id === sch.id
+                                                ? {
+                                                    ...s,
+                                                    purchaseCost:
+                                                      raw === ''
+                                                        ? undefined
+                                                        : Math.max(0, Number(raw) || 0),
+                                                  }
+                                                : s
                                             ),
                                           }
                                         : x

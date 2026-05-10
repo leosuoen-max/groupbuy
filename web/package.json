@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:host": "vite --host",
     "cleanup-health": "node scripts/delete-health-check.mjs",
     "dev-wipe-firestore": "node scripts/dev-wipe-firestore.mjs --yes",
     "build": "tsc -b && vite build",
