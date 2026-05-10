@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
@@ -69,6 +69,8 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [qrPreview, setQrPreview] = useState<{ name: string; url: string } | null>(null);
 
   const refreshRequest = useCallback(async () => {
     if (!requestId) return;
@@ -322,6 +324,16 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''
   }`;
 
+  const shopPaymentMethods = useMemo(
+    () =>
+      (shop?.data.paymentMethods ?? []).filter(
+        (pm) => pm?.qrCodeUrl && String(pm.qrCodeUrl).trim().length > 0
+      ),
+    [shop?.data.paymentMethods]
+  );
+  const primaryPaymentMethod = shopPaymentMethods[0] ?? null;
+  const extraPaymentMethods = shopPaymentMethods.slice(1);
+
   if (loading) {
     return (
       <PageShell title={mode === 'purchase' ? '购买优惠卡' : '充值'} subtitle="加载中…">
@@ -542,83 +554,168 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
         </section>
         )
       ) : (
-        <section className="mb-4">
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">支付与上传截图</h2>
-          <div className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700">
-            <div>
-              请实付：
-              <span className="text-base font-bold text-gray-900">
-                {formatMYR(Number(request.data.payAmount))}
-              </span>
+        <section className="mb-4 space-y-3">
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">
+            <h2 className="mb-2 text-sm font-semibold text-indigo-900">
+              支付方法二：转账、上传付款截图
+            </h2>
+            <div className="mb-3 rounded-lg bg-white px-3 py-2 text-xs text-indigo-900 ring-1 ring-indigo-100">
+              <p>
+                应付合计：
+                <strong className="ml-1 text-base font-bold tabular-nums text-gray-900">
+                  {formatMYR(Number(request.data.payAmount))}
+                </strong>
+              </p>
+              <p className="mt-0.5">
+                到账：{' '}
+                {request.data.templateTypeSnapshot === 'stored'
+                  ? `面值 RM ${Number(request.data.gainValue).toFixed(2)}`
+                  : `${Number(request.data.gainValue)} 次`}
+              </p>
             </div>
-            <div className="mt-0.5">
-              到账：{' '}
-              {request.data.templateTypeSnapshot === 'stored'
-                ? `面值 RM ${Number(request.data.gainValue).toFixed(2)}`
-                : `${Number(request.data.gainValue)} 次`}
-            </div>
-            <p className="mt-2 text-[11px] text-gray-500">
-              请按上方金额转账给商户，并将付款截图上传。商户确认到账后，卡余额/次数会立即生效。
-            </p>
-            {(shop.data.paymentMethods ?? []).length > 0 ? (
-              <div className="mt-3 space-y-2">
-                {shop.data.paymentMethods.map((pm) => (
-                  <div
-                    key={pm.id}
-                    className="rounded-lg border border-gray-200 bg-white p-2 text-xs text-gray-700"
-                  >
-                    <div className="font-semibold">{pm.name}</div>
-                    {pm.qrCodeUrl ? (
-                      <img
-                        src={pm.qrCodeUrl}
-                        alt={pm.name}
-                        className="mt-1 max-h-40 w-auto rounded"
-                      />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
 
-          <div className="mt-3">
-            <input
-              type="file"
-              accept="image/*"
-              className="block w-full text-sm"
-              disabled={uploading || request.data.status !== 'pending'}
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                void handleUpload(f);
-                e.currentTarget.value = '';
-              }}
-            />
-            {Array.isArray(request.data.paymentScreenshots) &&
-            request.data.paymentScreenshots.length > 0 ? (
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {request.data.paymentScreenshots.map((s) => (
-                  <div key={s.url} className="relative">
-                    <img
-                      src={s.url}
-                      alt="支付截图"
-                      className="h-24 w-full rounded object-cover"
-                    />
+            <div className="flex gap-3">
+              <div className="w-[6.5rem] shrink-0">
+                {primaryPaymentMethod ? (
+                  <>
                     <button
                       type="button"
-                      className="absolute right-1 top-1 rounded-full bg-white/90 px-1.5 py-0.5 text-[11px] font-semibold text-red-700 shadow"
-                      onClick={() => void handleRemove(s.url)}
+                      onClick={() =>
+                        setQrPreview({
+                          name: primaryPaymentMethod.name,
+                          url: primaryPaymentMethod.qrCodeUrl,
+                        })
+                      }
+                      className="overflow-hidden rounded-xl border border-indigo-100 bg-white shadow-sm"
                     >
-                      删除
+                      <img
+                        src={primaryPaymentMethod.qrCodeUrl}
+                        alt={primaryPaymentMethod.name}
+                        className="aspect-square w-[6.5rem] object-cover"
+                        loading="lazy"
+                      />
                     </button>
+                    <p className="mt-1 text-center text-[11px] text-indigo-900/80">
+                      {primaryPaymentMethod.name}
+                    </p>
+                  </>
+                ) : (
+                  <div className="flex aspect-square w-[6.5rem] items-center justify-center rounded-xl border border-dashed border-indigo-200 bg-white text-center text-[11px] leading-snug text-indigo-500">
+                    暂无收款码
                   </div>
-                ))}
+                )}
               </div>
-            ) : (
-              <p className="mt-2 text-xs text-gray-500">尚未上传截图。</p>
-            )}
+
+              <div className="min-w-0 flex-1">
+                <p className="mb-2 text-xs leading-relaxed text-indigo-900/80">
+                  请按「应付合计」转账。可一笔付清或分多笔支付，到账总额与本笔实付一致即可。
+                </p>
+                {request.data.status === 'pending' ? (
+                  <button
+                    type="button"
+                    disabled={uploading}
+                    onClick={() => fileRef.current?.click()}
+                    className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-3 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {uploading ? '上传中…' : '选择图片上传'}
+                  </button>
+                ) : (
+                  <div className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-indigo-100 bg-white px-2 text-xs text-gray-500">
+                    当前不可上传
+                  </div>
+                )}
+                <p
+                  className="mt-1 line-clamp-3 text-[11px] text-indigo-900/70"
+                  title="请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与本笔实付一致即可；上传至少一张截图供商户核对。商户确认后卡内余额/次数生效。"
+                >
+                  请按「应付合计」转账。你可「一笔付清」或「分多笔支付」，只要到账总额与本笔实付一致即可；上传至少一张截图供商户核对。商户确认后卡内余额/次数生效。
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                {extraPaymentMethods.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {extraPaymentMethods.map((x) => (
+                      <button
+                        key={x.id}
+                        type="button"
+                        onClick={() => setQrPreview({ name: x.name, url: x.qrCodeUrl })}
+                        className="rounded-full border border-indigo-200 bg-white px-2 py-0.5 text-[10px] text-indigo-700"
+                      >
+                        {x.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : primaryPaymentMethod ? (
+                  <span className="text-[11px] text-indigo-900/70">点击收款码可放大 / 下载</span>
+                ) : null}
+              </div>
+              <span className="shrink-0 text-[11px] text-amber-700">没有付款凭证，无法开通。</span>
+            </div>
           </div>
 
-          <div className="mt-4 flex gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={uploading || request.data.status !== 'pending'}
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              void handleUpload(f);
+              e.currentTarget.value = '';
+            }}
+          />
+
+          {Array.isArray(request.data.paymentScreenshots) &&
+          request.data.paymentScreenshots.length > 0 ? (
+            <ul className="space-y-2">
+              {request.data.paymentScreenshots.map((s) => (
+                <li
+                  key={s.url}
+                  className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-2"
+                >
+                  <a href={s.url} target="_blank" rel="noreferrer" className="shrink-0">
+                    <img src={s.url} alt="" className="h-16 w-16 rounded-md object-cover" />
+                  </a>
+                  <div className="min-w-0 flex-1 text-xs">
+                    <p className="font-medium text-gray-900">已上传截图</p>
+                    {s.uploadedAt ? (
+                      <p className="mt-1 text-gray-500">
+                        {s.uploadedAt.toDate?.().toLocaleString?.() ?? ''}
+                      </p>
+                    ) : null}
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-indigo-600 underline-offset-2 hover:underline"
+                      >
+                        查看原图
+                      </a>
+                      {request.data.status === 'pending' ? (
+                        <button
+                          type="button"
+                          disabled={uploading}
+                          onClick={() => void handleRemove(s.url)}
+                          className="text-red-600 underline-offset-2 hover:underline disabled:opacity-50"
+                        >
+                          删除
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-gray-500">尚未上传截图。</p>
+          )}
+
+          <div className="flex gap-2">
             <Link
               to={cardsHref}
               className="flex-1 rounded-lg border border-gray-200 bg-white py-2.5 text-center text-sm font-medium text-gray-700"
@@ -633,11 +730,50 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
               撤销请求
             </button>
           </div>
-          <p className="mt-2 text-[11px] text-gray-500">
+          <p className="text-[11px] text-gray-500">
             提交后请耐心等待商户确认，到账即可使用。可在「我的卡片」查看状态。
           </p>
         </section>
       )}
+
+      {qrPreview ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4"
+          onClick={() => setQrPreview(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="mb-2 text-center text-sm font-semibold text-gray-900">
+              {qrPreview.name}
+            </p>
+            <img
+              src={qrPreview.url}
+              alt={qrPreview.name}
+              className="aspect-square w-full rounded-xl border border-gray-100 object-contain"
+            />
+            <div className="mt-3 flex gap-2">
+              <a
+                href={qrPreview.url}
+                download={`${qrPreview.name || '收款码'}.png`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-10 flex-1 items-center justify-center rounded-xl bg-indigo-600 px-3 text-sm font-semibold text-white"
+              >
+                下载收款码
+              </a>
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-gray-200 px-4 text-sm text-gray-700"
+                onClick={() => setQrPreview(null)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageShell>
   );
 }
