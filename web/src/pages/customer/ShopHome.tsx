@@ -7,6 +7,7 @@ import { shopHomeAnnouncementHasVisibleBody } from '../../lib/shopDescriptionMix
 import { ProductCard } from '../../components/customer/ProductCard';
 import { ShopBottomBar } from '../../components/customer/ShopBottomBar';
 import { ShopMoreMenuSheet } from '../../components/customer/ShopMoreMenuSheet';
+import { ShopShareSheet } from '../../components/customer/ShopShareSheet';
 import {
   getMockShopHome,
   type MockShopHome,
@@ -273,6 +274,8 @@ export default function ShopHome() {
   } | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [menuCopied, setMenuCopied] = useState(false);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [shareSheetCopied, setShareSheetCopied] = useState(false);
   const [appendTarget, setAppendTarget] = useState<OrderRow | null>(null);
   const [appendError, setAppendError] = useState<string | null>(null);
   const [appendSubmitting, setAppendSubmitting] = useState(false);
@@ -370,22 +373,33 @@ export default function ShopHome() {
 
   const basePath = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
 
-  const handleSharePage = useCallback(async () => {
+  const handleSharePage = useCallback(() => {
+    if (!data) return;
+    setShareSheetOpen(true);
+  }, [data]);
+
+  const handleShareSheetCopy = useCallback(async () => {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareSheetCopied(true);
+      window.setTimeout(() => setShareSheetCopied(false), 1600);
+    } catch {
+      window.prompt('复制链接：', url);
+    }
+  }, []);
+
+  const handleShareSheetSystemShare = useCallback(async () => {
     if (!data) return;
     const url = window.location.href;
     const title = `${data.shopName} · ${data.projectTitle}`;
     try {
       if (navigator.share) {
         await navigator.share({ title, url });
-        return;
+        setShareSheetOpen(false);
       }
     } catch {
-      /* 用户取消分享 */
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      window.prompt('复制链接：', url);
+      /* 用户取消系统分享 */
     }
   }, [data]);
 
@@ -1214,6 +1228,19 @@ export default function ShopHome() {
         copied={menuCopied}
         onCopyLink={handleCopyMenuLink}
         showCardsEntry={hasShopCards}
+      />
+
+      <ShopShareSheet
+        open={shareSheetOpen}
+        onClose={() => {
+          setShareSheetOpen(false);
+          setShareSheetCopied(false);
+        }}
+        headline={`${data.shopName} · ${data.projectTitle}`}
+        copied={shareSheetCopied}
+        onCopyLink={handleShareSheetCopy}
+        showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
+        onSystemShare={() => void handleShareSheetSystemShare()}
       />
     </div>
   );
