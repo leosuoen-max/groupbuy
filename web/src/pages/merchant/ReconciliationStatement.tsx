@@ -507,31 +507,31 @@ export default function ReconciliationStatement() {
 
       {viewMode === 'reconciliation' ? (
         <>
-          <div className="mb-5 grid gap-3 sm:grid-cols-2">
+          <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
               <div className="text-xs font-medium text-emerald-800">已确认到账（组口径）</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-emerald-900">
+              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-emerald-900">
                 {formatMYR(totals.confirmedAmount)}
               </div>
               <div className="text-xs text-emerald-800">{totals.confirmedCount} 单</div>
             </div>
             <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
               <div className="text-xs font-medium text-amber-900">待确认金额（组口径）</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-amber-950">
+              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-amber-950">
                 {formatMYR(totals.pendingAmount)}
               </div>
               <div className="text-xs text-amber-900">{totals.pendingCount} 单</div>
             </div>
             <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
               <div className="text-xs font-medium text-red-900">待付款（组口径）</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-red-950">
+              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-red-950">
                 {formatMYR(totals.unpaidAmount)}
               </div>
               <div className="text-xs text-red-900">{totals.unpaidCount} 单</div>
             </div>
             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
               <div className="text-xs font-medium text-gray-700">订单总额（未取消）</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-gray-900">
+              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-gray-900">
                 {formatMYR(totals.totalActiveAmount)}
               </div>
               <div className="text-xs text-gray-600">{totals.activeCount} 单</div>
@@ -583,7 +583,7 @@ export default function ReconciliationStatement() {
           ) : null}
         </>
       ) : viewMode === 'production' ? (
-        <div className="mb-5 grid gap-3 sm:grid-cols-3">
+        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
             <div className="text-xs font-medium text-indigo-800">总出品份数</div>
             <div className="mt-1 text-2xl font-bold tabular-nums text-indigo-950">
@@ -605,48 +605,53 @@ export default function ReconciliationStatement() {
         </div>
       ) : (
         <div className="mb-5 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-              <div className="text-xs font-medium text-emerald-800">销售额（行 subtotal）</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-emerald-950">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+              <div className="text-xs font-medium leading-tight text-emerald-800">
+                <span className="block">销售额</span>
+                <span className="mt-0.5 block text-[10px] font-normal text-emerald-800/90">
+                  行 subtotal
+                </span>
+              </div>
+              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-emerald-950">
                 {formatMYR(profitTotals.totalSales)}
               </div>
             </div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
               <div className="text-xs font-medium text-amber-900">采购成本</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-amber-950">
+              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-amber-950">
                 {formatMYR(profitTotals.totalCost)}
               </div>
             </div>
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
               <div className="text-xs font-medium text-indigo-800">毛利</div>
-              <div className="mt-1 text-xl font-bold tabular-nums text-indigo-950">
+              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-indigo-950">
                 {formatMYR(profitTotals.grossProfit)}
               </div>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-rose-100 bg-rose-50 px-4 py-3">
               <div className="text-xs font-medium text-rose-900">早鸟让价合计</div>
-              <div className="mt-1 text-lg font-bold tabular-nums text-rose-950">
+              <div className="mt-1 whitespace-nowrap text-lg font-bold tabular-nums text-rose-950">
                 {formatMYR(profitTotals.earlyBirdReduction)}
               </div>
-              <p className="mt-1 text-[11px] text-rose-900/80">
+              <p className="mt-auto pt-2 text-[11px] leading-snug text-rose-900/80">
                 相对当前菜单标价 × 份数（限时截止）
               </p>
             </div>
-            <div className="rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
               <div className="text-xs font-medium text-orange-900">特惠让价合计</div>
-              <div className="mt-1 text-lg font-bold tabular-nums text-orange-950">
+              <div className="mt-1 whitespace-nowrap text-lg font-bold tabular-nums text-orange-950">
                 {formatMYR(profitTotals.specialReduction)}
               </div>
-              <p className="mt-1 text-[11px] text-orange-900/80">
+              <p className="mt-auto pt-2 text-[11px] leading-snug text-orange-900/80">
                 相对当前菜单标价 × 份数（无截止）
               </p>
             </div>
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
               <div className="text-xs font-medium text-gray-800">优惠让价总计</div>
-              <div className="mt-1 text-lg font-bold tabular-nums text-gray-900">
+              <div className="mt-auto whitespace-nowrap pt-1 text-lg font-bold tabular-nums text-gray-900">
                 {formatMYR(profitTotals.discountReductionTotal)}
               </div>
             </div>
@@ -872,7 +877,7 @@ export default function ReconciliationStatement() {
                           ) : (
                             <span className="inline-flex w-full items-center justify-center">
                               <span
-                                className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${
+                                className={`inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-white/80 ${
                                   flag === 'red'
                                     ? 'bg-red-500'
                                     : flag === 'yellow'
