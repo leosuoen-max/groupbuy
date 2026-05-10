@@ -22,6 +22,7 @@ import AdminManagement from './pages/merchant/AdminManagement';
 import ShopSettings from './pages/merchant/ShopSettings';
 import CardTemplates from './pages/merchant/CardTemplates';
 import CardTemplateDetail from './pages/merchant/CardTemplateDetail';
+import ProductLibrary from './pages/merchant/ProductLibrary';
 import CustomerCards from './pages/customer/CustomerCards';
 import CustomerCardBuy from './pages/customer/CustomerCardBuy';
 import PlatformRegistrations from './pages/PlatformRegistrations';
@@ -82,6 +83,10 @@ export function AppRoutes() {
       <Route
         path="/dashboard/:shopSlug/cards/:templateId"
         element={<CardTemplateDetail />}
+      />
+      <Route
+        path="/dashboard/:shopSlug/product-library"
+        element={<ProductLibrary />}
       />
 
       <Route

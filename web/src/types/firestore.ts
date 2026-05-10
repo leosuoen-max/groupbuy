@@ -58,6 +58,8 @@ export type BundleSeriesDoc = {
 export type BundleSchemeDoc = {
   id: string;
   name: string;
+  /** 商户备注（可与产品库「备注」对应；顾客端可选展示） */
+  note?: string;
   /** 商户录入：该套餐方案采购成本（RM），用于对账单利润统计 */
   purchaseCost?: number;
   price: number;
@@ -168,6 +170,26 @@ export type PlatformAdminDoc = {
 /* ----------------------------- 优惠卡（钱包 / 次卡） ----------------------------- */
 
 export type CardType = 'stored' | 'pass';
+
+/** 店铺级产品库：同名（规范化后）视为同一产品，用于项目编辑时快速选用 */
+export type ProductLibraryKind = 'product' | 'bundle_scheme';
+
+export type ProductLibraryItemDoc = {
+  shopId: string;
+  ownerId: string;
+  /** 去重键：trim + 连续空白归一 + 小写 */
+  nameKey: string;
+  /** 展示名称 */
+  name: string;
+  imageUrl?: string;
+  purchaseCost?: number;
+  /** 零售价 (RM) */
+  retailPrice: number;
+  note?: string;
+  kind: ProductLibraryKind;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
 
 export type CardTopupRule = {
   /** 顾客实付金额 (RM) */

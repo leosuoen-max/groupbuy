@@ -219,6 +219,12 @@ export default function MerchantDashboard() {
           项目列表
         </Link>
         <Link
+          to={`${base}/product-library`}
+          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+        >
+          产品库
+        </Link>
+        <Link
           to={`${base}/orders`}
           className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
         >

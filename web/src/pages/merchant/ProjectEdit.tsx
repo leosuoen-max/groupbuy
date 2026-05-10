@@ -25,6 +25,12 @@ import {
   listCardTemplatesByShop,
   type CardTemplateRow,
 } from '../../lib/cardService';
+import {
+  listProductLibraryByShop,
+  upsertProductLibraryItem,
+  type ProductLibraryRow,
+} from '../../lib/productLibraryService';
+import { ProductLibraryPicker } from '../../components/merchant/ProductLibraryPicker';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
 import {
   DescriptionLineEditor,
@@ -353,6 +359,7 @@ export default function ProjectEdit() {
   const [deliveryLibrary, setDeliveryLibrary] = useState<DeliveryPointRow[]>(
     []
   );
+  const [libraryRows, setLibraryRows] = useState<ProductLibraryRow[]>([]);
   const [selectedDpIds, setSelectedDpIds] = useState<string[]>([]);
   const [draftHydrated, setDraftHydrated] = useState(false);
   const lineEditorRefs = useRef<Record<number, DescriptionLineEditorHandle | null>>({});
@@ -575,6 +582,20 @@ export default function ProjectEdit() {
     };
   }, [shopRow?.data.ownerId, shopRow?.id]);
 
+  const refreshLibrary = useCallback(async () => {
+    if (!shopRow?.id) return;
+    try {
+      const rows = await listProductLibraryByShop(shopRow.id);
+      setLibraryRows(rows);
+    } catch {
+      setLibraryRows([]);
+    }
+  }, [shopRow?.id]);
+
+  useEffect(() => {
+    void refreshLibrary();
+  }, [refreshLibrary]);
+
   /** 解析店铺 + 权限；新建项目时创建草稿并替换路由 */
   useEffect(() => {
     let cancelled = false;
@@ -782,9 +803,13 @@ export default function ProjectEdit() {
             );
             const parsedDiscountEnd = parseMaybeTimestamp(sch.discountEnd as unknown);
             const schCost = (sch as { purchaseCost?: unknown }).purchaseCost;
+            const schNote = (sch as { note?: unknown }).note;
             return {
               id: sch.id,
               name: (sch.name ?? '').trim(),
+              ...(typeof schNote === 'string' && schNote.trim()
+                ? { note: schNote.trim() }
+                : {}),
               price: Number(sch.price ?? 0) || 0,
               ...(typeof schCost === 'number' &&
               !Number.isNaN(schCost) &&
@@ -1875,6 +1900,63 @@ export default function ProjectEdit() {
                     </button>
                   </div>
                 </div>
+                <div className="mb-2 space-y-1">
+                  <ProductLibraryPicker
+                    items={libraryRows}
+                    kindFilter="product"
+                    onPick={(row) => {
+                      setProducts((prev) =>
+                        prev.map((x) =>
+                          x.id === p.id
+                            ? {
+                                ...x,
+                                name: row.data.name,
+                                imageUrl: row.data.imageUrl,
+                                purchaseCost: row.data.purchaseCost,
+                                price: row.data.retailPrice,
+                                description: row.data.note ?? '',
+                              }
+                            : x
+                        )
+                      );
+                      setMsg('已从商品库套用');
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-indigo-600"
+                    onClick={() => {
+                      if (!shopRow || !user) return;
+                      if (!p.name.trim()) {
+                        setMsg('请先填写商品名称再存入商品库');
+                        return;
+                      }
+                      void upsertProductLibraryItem(
+                        shopRow.id,
+                        shopRow.data.ownerId,
+                        {
+                          name: p.name,
+                          imageUrl: p.imageUrl,
+                          purchaseCost: p.purchaseCost,
+                          retailPrice: p.price,
+                          note: p.description,
+                          kind: 'product',
+                        }
+                      )
+                        .then(() => {
+                          setMsg('已同步到商品库（同名会合并）');
+                          void refreshLibrary();
+                        })
+                        .catch((err: unknown) =>
+                          setMsg(
+                            err instanceof Error ? err.message : '写入商品库失败'
+                          )
+                        );
+                    }}
+                  >
+                    将本行存入商品库
+                  </button>
+                </div>
                 <input
                   className={input}
                   placeholder="名称"
@@ -2607,6 +2689,70 @@ export default function ProjectEdit() {
                     <div className="space-y-2">
                       {tool.schemes.map((sch) => (
                         <div key={sch.id} className="rounded border border-gray-100 bg-gray-50/50 p-2">
+                          <div className="mb-2 space-y-1">
+                            <ProductLibraryPicker
+                              items={libraryRows}
+                              kindFilter="bundle_scheme"
+                              onPick={(row) => {
+                                setBundleTools((prev) =>
+                                  prev.map((x) =>
+                                    x.id === tool.id
+                                      ? {
+                                          ...x,
+                                          schemes: x.schemes.map((s) =>
+                                            s.id === sch.id
+                                              ? {
+                                                  ...s,
+                                                  name: row.data.name,
+                                                  price: row.data.retailPrice,
+                                                  purchaseCost: row.data.purchaseCost,
+                                                  note: row.data.note,
+                                                }
+                                              : s
+                                          ),
+                                        }
+                                      : x
+                                  )
+                                );
+                                setMsg('已从商品库套用方案');
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-indigo-600"
+                              onClick={() => {
+                                if (!shopRow || !user) return;
+                                if (!sch.name.trim()) {
+                                  setMsg('请先填写方案名称再存入商品库');
+                                  return;
+                                }
+                                void upsertProductLibraryItem(
+                                  shopRow.id,
+                                  shopRow.data.ownerId,
+                                  {
+                                    name: sch.name,
+                                    retailPrice: sch.price,
+                                    purchaseCost: sch.purchaseCost,
+                                    note: sch.note,
+                                    kind: 'bundle_scheme',
+                                  }
+                                )
+                                  .then(() => {
+                                    setMsg('已同步套餐方案到商品库（同名会合并）');
+                                    void refreshLibrary();
+                                  })
+                                  .catch((err: unknown) =>
+                                    setMsg(
+                                      err instanceof Error
+                                        ? err.message
+                                        : '写入商品库失败'
+                                    )
+                                  );
+                              }}
+                            >
+                              将本方案存入商品库
+                            </button>
+                          </div>
                           <div className="flex flex-wrap items-end gap-x-2 gap-y-2">
                             <label className="flex min-w-[10rem] flex-[2] basis-[min(100%,18rem)] flex-col gap-0.5">
                               <span className="text-[10px] text-gray-500">方案名称</span>
@@ -2630,6 +2776,34 @@ export default function ProjectEdit() {
                                     )
                                   )
                                 }
+                              />
+                            </label>
+                            <label className="flex w-full basis-full flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">备注（可选）</span>
+                              <textarea
+                                className="min-h-[2rem] rounded border border-gray-200 bg-white px-2 py-1 text-xs"
+                                value={sch.note ?? ''}
+                                placeholder="可与产品库备注对应"
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setBundleTools((prev) =>
+                                    prev.map((x) =>
+                                      x.id === tool.id
+                                        ? {
+                                            ...x,
+                                            schemes: x.schemes.map((s) =>
+                                              s.id === sch.id
+                                                ? {
+                                                    ...s,
+                                                    note: v.trim() ? v : undefined,
+                                                  }
+                                                : s
+                                            ),
+                                          }
+                                        : x
+                                    )
+                                  );
+                                }}
                               />
                             </label>
                             <label className="flex min-w-[6rem] flex-1 flex-col gap-0.5">
