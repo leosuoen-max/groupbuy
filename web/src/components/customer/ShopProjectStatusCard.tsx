@@ -6,13 +6,20 @@ type ShopProjectStatusCardProps = {
   now: Date;
 };
 
+function formatDeadlineDisplay(closesAt: Date, referenceNow: Date): string {
+  const y = closesAt.getFullYear();
+  const m = closesAt.getMonth() + 1;
+  const d = closesAt.getDate();
+  const hh = closesAt.getHours().toString().padStart(2, '0');
+  const mm = closesAt.getMinutes().toString().padStart(2, '0');
+  const datePart =
+    y !== referenceNow.getFullYear() ? `${y}年${m}月${d}日` : `${m}月${d}日`;
+  return `${datePart} ${hh}:${mm}`;
+}
+
 export function ShopProjectStatusCard({ data, now }: ShopProjectStatusCardProps) {
   const closes = new Date(data.closesAt);
-  const timeLabel = closes.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  const timeLabel = formatDeadlineDisplay(closes, now);
 
   const remaining = formatRemainingShort(data.closesAt, now);
 

@@ -30,7 +30,10 @@ export type BundleSelectionDraft = {
 
 export type MockDeliveryPoint = {
   id: string;
+  /** 简称（展示） */
   name: string;
+  /** 配送点编号，如 A1 */
+  code?: string;
   detailAddress?: string;
   deliveryTime?: string;
   imageUrl?: string;

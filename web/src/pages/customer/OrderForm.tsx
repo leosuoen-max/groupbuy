@@ -70,13 +70,18 @@ export default function OrderForm() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  /** 仅在选择「以上都不对」时展示，与「详细地址」拆分 */
+  const [addressSupplement, setAddressSupplement] = useState('');
   const [note, setNote] = useState('');
   const [deliveryId, setDeliveryId] = useState<string>('');
   /** 用户对当前推测配送点点「否」后记录该配送点 id；推测变化时需重新确认 */
   const [dismissedSuggestionId, setDismissedSuggestionId] = useState<
     string | null
   >(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  /** 配送点「查看详情」弹窗：当前展示的配送点 id */
+  const [deliveryDetailModalId, setDeliveryDetailModalId] = useState<string | null>(
+    null
+  );
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitHint, setSubmitHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -91,6 +96,28 @@ export default function OrderForm() {
   useEffect(() => {
     contactPrefilledRef.current = false;
   }, [projectId]);
+
+  useEffect(() => {
+    if (step !== 2) setDeliveryDetailModalId(null);
+  }, [step]);
+
+  useEffect(() => {
+    if (!deliveryDetailModalId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDeliveryDetailModalId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deliveryDetailModalId]);
+
+  useEffect(() => {
+    if (!deliveryDetailModalId) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [deliveryDetailModalId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -138,6 +165,7 @@ export default function OrderForm() {
           const uiPoints: MockDeliveryPoint[] = filtered.map((p) => ({
             id: p.id,
             name: p.data.shortName ?? p.data.name,
+            code: p.data.code,
             detailAddress: p.data.detailAddress,
             imageUrl: p.data.imageUrl,
           }));
@@ -230,6 +258,11 @@ export default function OrderForm() {
     };
   }, [deliveryId, points]);
 
+  const deliveryDetailModalPoint = useMemo(() => {
+    if (!deliveryDetailModalId) return null;
+    return points.find((x) => x.id === deliveryDetailModalId) ?? null;
+  }, [deliveryDetailModalId, points]);
+
   const suggestedPoint = useMemo(() => {
     if (deliveryId !== OTHER_DELIVERY_ID) return null;
     const line = address.trim();
@@ -238,8 +271,13 @@ export default function OrderForm() {
   }, [deliveryId, address, points]);
 
   const resolvedCustomerAddress = useMemo(() => {
-    const line = address.trim();
-    if (line) return line;
+    if (deliveryId === OTHER_DELIVERY_ID) {
+      const main = address.trim();
+      const sup = addressSupplement.trim();
+      if (!main && !sup) return '';
+      if (main && sup) return `${main}\n补充：${sup}`;
+      return main || sup;
+    }
     if (deliveryId && deliveryId !== OTHER_DELIVERY_ID) {
       const p = points.find((x) => x.id === deliveryId);
       if (p) {
@@ -248,7 +286,7 @@ export default function OrderForm() {
       }
     }
     return '';
-  }, [address, deliveryId, points]);
+  }, [address, addressSupplement, deliveryId, points]);
 
   const canGoStep2 =
     canPlaceOrder && name.trim().length > 0 && phone.trim().length > 0;
@@ -508,50 +546,68 @@ export default function OrderForm() {
             </p>
           ) : null}
           <div className="space-y-2">
-            {points.map((p) => (
-              <div key={p.id} className="rounded-xl border border-gray-100 p-3">
-                <label className="flex cursor-pointer items-start gap-3">
-                  <input
-                    type="radio"
-                    name="delivery"
-                    className="mt-1 h-4 w-4"
-                    checked={deliveryId === p.id}
-                    onChange={() => {
-                      setDeliveryId(p.id);
-                      setDismissedSuggestionId(null);
-                    }}
-                  />
-                  <span className="min-w-0 flex-1 text-sm text-gray-900">
-                    {p.name}
-                  </span>
-                </label>
-                <div className="mt-2 pl-7">
-                  <button
-                    type="button"
-                    className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
-                    onClick={() =>
-                      setExpandedId((id) => (id === p.id ? null : p.id))
-                    }
-                  >
-                    {expandedId === p.id ? '收起详情' : '查看详情'}
-                  </button>
-                  {expandedId === p.id ? (
-                    <div className="mt-2 space-y-1 text-xs text-gray-600">
-                      {p.detailAddress ? <p>地址：{p.detailAddress}</p> : null}
-                      {p.deliveryTime ? <p>时间：{p.deliveryTime}</p> : null}
-                      {p.imageUrl ? (
-                        <img
-                          src={p.imageUrl}
-                          alt=""
-                          className="mt-1 max-h-32 w-full rounded-lg object-cover"
-                          loading="lazy"
+            {points.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {points.map((p) => {
+                  const selected = deliveryId === p.id;
+                  return (
+                    <label
+                      key={p.id}
+                      className={`relative flex cursor-pointer flex-col rounded-xl border p-2.5 transition-colors ${
+                        selected
+                          ? 'border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-500/35'
+                          : 'border-gray-100 bg-white hover:border-gray-200'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="delivery"
+                        className="sr-only"
+                        checked={selected}
+                        onChange={() => {
+                          setDeliveryId(p.id);
+                          setDismissedSuggestionId(null);
+                          setAddress('');
+                          setAddressSupplement('');
+                        }}
+                      />
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] leading-tight text-gray-500">
+                            编号{' '}
+                            <span className="font-medium text-gray-700">
+                              {(p.code && p.code.trim()) || '—'}
+                            </span>
+                          </p>
+                          <p className="mt-0.5 truncate text-sm font-medium text-gray-900">
+                            {p.name}
+                          </p>
+                        </div>
+                        <span
+                          className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 ${
+                            selected
+                              ? 'border-emerald-600 bg-emerald-600 ring-2 ring-white ring-inset'
+                              : 'border-gray-300 bg-white'
+                          }`}
+                          aria-hidden
                         />
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="mt-2 w-fit text-left text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDeliveryDetailModalId(p.id);
+                        }}
+                      >
+                        查看详情
+                      </button>
+                    </label>
+                  );
+                })}
               </div>
-            ))}
+            ) : null}
 
             <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/60 p-3">
               <input
@@ -567,24 +623,11 @@ export default function OrderForm() {
               <span className="min-w-0 flex-1 text-sm text-gray-900">
                 以上都不对（其他）
                 <span className="mt-1 block text-xs text-amber-900">
-                  填写你的详细地址；系统将尝试匹配配送点，也可选择按单独地址由商户配送。
+                  填写你的详细地址；系统将尝试匹配配送点，无配送点的商户联系单独配送。
                 </span>
               </span>
             </label>
           </div>
-
-          {deliveryId && deliveryId !== OTHER_DELIVERY_ID ? (
-            <label className="block text-sm text-gray-700">
-              补充地址 / 门牌（选填）
-              <textarea
-                className={`${inputCls} min-h-[88px] resize-y`}
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                autoComplete="street-address"
-                placeholder="如需送货上门请填写栋号、单元；若到配送点自取可留空。"
-              />
-            </label>
-          ) : null}
 
           {deliveryId === OTHER_DELIVERY_ID ? (
             <div className="space-y-3">
@@ -596,6 +639,16 @@ export default function OrderForm() {
                   onChange={(e) => setAddress(e.target.value)}
                   autoComplete="street-address"
                   placeholder="楼栋、门牌、片区等，便于商户或骑手送达。"
+                />
+              </label>
+              <label className="block text-sm text-gray-700">
+                补充地址 / 门牌 <span className="text-gray-400">（选填）</span>
+                <textarea
+                  className={`${inputCls} min-h-[72px] resize-y`}
+                  value={addressSupplement}
+                  onChange={(e) => setAddressSupplement(e.target.value)}
+                  autoComplete="street-address"
+                  placeholder="如需补充栋号、单元、联系人方式等可填写。"
                 />
               </label>
               {suggestedPoint ? (
@@ -656,6 +709,82 @@ export default function OrderForm() {
               下一步：确认
             </button>
           </div>
+
+          {deliveryDetailModalPoint ? (
+            <div
+              className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 sm:items-center sm:p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delivery-detail-title"
+              onClick={() => setDeliveryDetailModalId(null)}
+            >
+              <div
+                className="max-h-[min(85vh,640px)] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:rounded-2xl sm:pb-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-3">
+                  <div className="min-w-0 flex-1">
+                    <h3
+                      id="delivery-detail-title"
+                      className="text-base font-semibold text-gray-900"
+                    >
+                      {deliveryDetailModalPoint.name}
+                    </h3>
+                    {(deliveryDetailModalPoint.code &&
+                      deliveryDetailModalPoint.code.trim()) ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        编号 {deliveryDetailModalPoint.code.trim()}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex h-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                    aria-label="关闭"
+                    onClick={() => setDeliveryDetailModalId(null)}
+                  >
+                    <span className="text-xl leading-none" aria-hidden>
+                      ×
+                    </span>
+                  </button>
+                </div>
+                <div className="space-y-3 py-4 text-sm text-gray-700">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500">详细地址</p>
+                    <p className="mt-1 whitespace-pre-wrap break-words">
+                      {deliveryDetailModalPoint.detailAddress?.trim()
+                        ? deliveryDetailModalPoint.detailAddress
+                        : '暂无'}
+                    </p>
+                  </div>
+                  {deliveryDetailModalPoint.deliveryTime ? (
+                    <div>
+                      <p className="text-xs font-medium text-gray-500">配送时间</p>
+                      <p className="mt-1">{deliveryDetailModalPoint.deliveryTime}</p>
+                    </div>
+                  ) : null}
+                  {deliveryDetailModalPoint.imageUrl ? (
+                    <div>
+                      <p className="text-xs font-medium text-gray-500">示意图</p>
+                      <img
+                        src={deliveryDetailModalPoint.imageUrl}
+                        alt={`${deliveryDetailModalPoint.name} 配送点示意图`}
+                        className="mt-2 w-full max-h-[min(40vh,280px)] rounded-xl object-contain"
+                        loading="lazy"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="mb-1 flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white hover:bg-gray-800 sm:hidden"
+                  onClick={() => setDeliveryDetailModalId(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

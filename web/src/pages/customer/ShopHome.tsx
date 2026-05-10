@@ -1087,10 +1087,8 @@ export default function ShopHome() {
                             );
                           })}
                           <div className="border-t border-dashed border-slate-200 pt-3">
-                            <button
-                              type="button"
-                              className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white disabled:bg-gray-300"
-                              disabled={tool.series.some((series) => {
+                            {(() => {
+                              const bundleAddDisabled = tool.series.some((series) => {
                                 const required = getSeriesRequiredCount(
                                   scheme.requirements,
                                   series
@@ -1098,11 +1096,32 @@ export default function ShopHome() {
                                 if (required <= 0) return false;
                                 const selected = draft.selectedBySeries[series.id] ?? [];
                                 return selected.length !== required;
-                              })}
-                              onClick={() => addBundleToCart(tool.id)}
-                            >
-                              加入套餐
-                            </button>
+                              });
+                              return (
+                                <div className="flex items-center justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    className="min-w-0 flex-1 rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-sm disabled:bg-gray-300 disabled:text-gray-100"
+                                    style={{
+                                      backgroundColor: !bundleAddDisabled
+                                        ? data.themeColor
+                                        : undefined,
+                                    }}
+                                    disabled={bundleAddDisabled}
+                                    onClick={() => addBundleToCart(tool.id)}
+                                  >
+                                    加入购物车
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 active:bg-slate-50"
+                                    onClick={() => setOpenBundleToolId(null)}
+                                  >
+                                    折叠
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       ) : (

@@ -451,6 +451,17 @@ export default function ProjectEdit() {
     [products, bundleTools]
   );
 
+  const removeBundleTool = useCallback((toolId: string) => {
+    if (
+      !window.confirm(
+        '确定删除该套餐工具？将移除其系列、选项、方案与价格等配置；保存草稿或发布后才会写入服务器。'
+      )
+    ) {
+      return;
+    }
+    setBundleTools((prev) => prev.filter((b) => b.id !== toolId));
+  }, []);
+
   const applyLocalDraftIfAny = useCallback((): boolean => {
     if (!draftStorageKey) return false;
     const raw = sessionStorage.getItem(draftStorageKey);
@@ -2111,84 +2122,93 @@ export default function ProjectEdit() {
                       下移
                     </button>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-700">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={!tool.isActive}
-                        onChange={(e) => {
-                          const delist = e.target.checked;
-                          setBundleTools((prev) =>
-                            prev.map((x) => {
-                              if (x.id !== tool.id) return x;
-                              if (delist) {
-                                const next = { ...x, isActive: false };
-                                delete next.scheduledOffAt;
-                                return next;
-                              }
-                              return { ...x, isActive: true };
-                            })
-                          );
-                        }}
-                      />
-                      下架
-                    </label>
-                    <span
-                      className={`flex flex-wrap items-center gap-1.5 ${tool.isActive ? '' : 'cursor-not-allowed opacity-60'}`}
-                      title={
-                        tool.isActive ? undefined : '请先取消「下架」后再设置定时下架'
-                      }
-                    >
-                      <label className="flex items-center gap-1.5">
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-700">
+                    <div className="flex min-w-0 flex-wrap items-center gap-3">
+                      <label className="flex items-center gap-2">
                         <input
                           type="checkbox"
-                          disabled={!tool.isActive}
-                          checked={Boolean(getScheduledOffAtTs(tool))}
+                          checked={!tool.isActive}
                           onChange={(e) => {
-                            const on = e.target.checked;
+                            const delist = e.target.checked;
                             setBundleTools((prev) =>
                               prev.map((x) => {
                                 if (x.id !== tool.id) return x;
-                                if (!on) {
-                                  const next = { ...x };
+                                if (delist) {
+                                  const next = { ...x, isActive: false };
                                   delete next.scheduledOffAt;
                                   return next;
                                 }
-                                const withListing = { ...x, isActive: true };
-                                if (getScheduledOffAtTs(withListing)) return withListing;
-                                return {
-                                  ...withListing,
-                                  scheduledOffAt: Timestamp.fromMillis(
-                                    Date.now() + 60 * 60 * 1000
-                                  ),
-                                };
+                                return { ...x, isActive: true };
                               })
                             );
                           }}
                         />
-                        定时下架
+                        下架
                       </label>
-                      {getScheduledOffAtTs(tool) ? (
-                        <input
-                          type="datetime-local"
-                          disabled={!tool.isActive}
-                          className="max-w-[11rem] rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] text-gray-800 shadow-inner disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-none"
-                          value={tsToDatetimeLocalInput(getScheduledOffAtTs(tool))}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setBundleTools((prev) =>
-                              prev.map((x) => {
-                                if (x.id !== tool.id) return x;
-                                if (!v) return x;
-                                const d = new Date(v);
-                                if (Number.isNaN(d.getTime())) return x;
-                                return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
-                              })
-                            );
-                          }}
-                        />
-                      ) : null}
-                    </span>
+                      <span
+                        className={`flex flex-wrap items-center gap-1.5 ${tool.isActive ? '' : 'cursor-not-allowed opacity-60'}`}
+                        title={
+                          tool.isActive ? undefined : '请先取消「下架」后再设置定时下架'
+                        }
+                      >
+                        <label className="flex items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            disabled={!tool.isActive}
+                            checked={Boolean(getScheduledOffAtTs(tool))}
+                            onChange={(e) => {
+                              const on = e.target.checked;
+                              setBundleTools((prev) =>
+                                prev.map((x) => {
+                                  if (x.id !== tool.id) return x;
+                                  if (!on) {
+                                    const next = { ...x };
+                                    delete next.scheduledOffAt;
+                                    return next;
+                                  }
+                                  const withListing = { ...x, isActive: true };
+                                  if (getScheduledOffAtTs(withListing)) return withListing;
+                                  return {
+                                    ...withListing,
+                                    scheduledOffAt: Timestamp.fromMillis(
+                                      Date.now() + 60 * 60 * 1000
+                                    ),
+                                  };
+                                })
+                              );
+                            }}
+                          />
+                          定时下架
+                        </label>
+                        {getScheduledOffAtTs(tool) ? (
+                          <input
+                            type="datetime-local"
+                            disabled={!tool.isActive}
+                            className="max-w-[11rem] rounded border border-gray-200 bg-white px-1.5 py-1 text-[11px] text-gray-800 shadow-inner disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-none"
+                            value={tsToDatetimeLocalInput(getScheduledOffAtTs(tool))}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setBundleTools((prev) =>
+                                prev.map((x) => {
+                                  if (x.id !== tool.id) return x;
+                                  if (!v) return x;
+                                  const d = new Date(v);
+                                  if (Number.isNaN(d.getTime())) return x;
+                                  return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
+                                })
+                              );
+                            }}
+                          />
+                        ) : null}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded border border-red-200 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                      onClick={() => removeBundleTool(tool.id)}
+                    >
+                      删除该套餐
+                    </button>
                   </div>
 
                   <div className="mt-3 rounded-lg border border-gray-100 bg-white p-3">
@@ -2209,7 +2229,7 @@ export default function ProjectEdit() {
                                       {
                                         id: crypto.randomUUID(),
                                         code: seriesCodeAt(x.series.length),
-                                        name: `${seriesCodeAt(x.series.length)}类`,
+                                        name: '',
                                         sortOrder: x.series.length,
                                         options: [],
                                       },
@@ -2227,9 +2247,11 @@ export default function ProjectEdit() {
                       {tool.series.map((series) => (
                         <div key={series.id} className="rounded border border-gray-100 p-2">
                           <div className="mb-2 flex items-center gap-2">
-                            <span className="text-xs text-gray-500">{series.code}</span>
+                            <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-600">
+                              {series.code}
+                            </span>
                             <input
-                              className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                              className="w-full rounded border border-gray-200 px-2 py-1.5 text-xs placeholder:text-gray-400"
                               value={series.name}
                               onChange={(e) =>
                                 setBundleTools((prev) =>
@@ -2247,30 +2269,171 @@ export default function ProjectEdit() {
                                   )
                                 )
                               }
-                              placeholder="如：荤菜"
+                              placeholder={`${series.code} 类，如荤菜、素菜`}
                             />
                           </div>
-                          <div className="space-y-1">
+                          <div className="space-y-2">
                             {series.options.map((opt) => (
-                              <div key={opt.id} className="grid grid-cols-12 gap-1 rounded border border-gray-100 p-2">
-                                <div className="col-span-2">
-                                  <div className="h-12 w-12 overflow-hidden rounded border border-gray-200 bg-white">
-                                    {opt.imageUrl ? (
-                                      <img src={opt.imageUrl} alt="" className="h-full w-full object-cover" />
-                                    ) : (
-                                      <div className="flex h-full items-center justify-center text-[10px] text-gray-400">无图</div>
-                                    )}
+                              <div
+                                key={opt.id}
+                                className="rounded border border-gray-100 bg-gray-50/80 p-2"
+                              >
+                                <div className="flex gap-2">
+                                  {/* 左：缩略图 + 选择文件 + 删除图 单列纵向，省宽 */}
+                                  <div className="flex w-14 shrink-0 flex-col items-stretch gap-1">
+                                    <div className="h-14 w-full shrink-0 overflow-hidden rounded border border-gray-200 bg-white">
+                                      {opt.imageUrl ? (
+                                        <img src={opt.imageUrl} alt="" className="h-full w-full object-cover" />
+                                      ) : (
+                                        <div className="flex h-full items-center justify-center text-[10px] text-gray-400">
+                                          无图
+                                        </div>
+                                      )}
+                                    </div>
+                                    <label className="cursor-pointer">
+                                      <span className="block rounded border border-gray-300 bg-white px-1 py-0.5 text-center text-[10px] leading-tight text-gray-700 shadow-sm hover:bg-gray-50">
+                                        选择文件
+                                      </span>
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          e.currentTarget.value = '';
+                                          if (!file || !user) return;
+                                          void uploadProjectAsset(user.uid, file, 'bundle-option')
+                                            .then((url) => {
+                                              setBundleTools((prev) =>
+                                                prev.map((x) =>
+                                                  x.id === tool.id
+                                                    ? {
+                                                        ...x,
+                                                        series: x.series.map((s) =>
+                                                          s.id === series.id
+                                                            ? {
+                                                                ...s,
+                                                                options: s.options.map((o) =>
+                                                                  o.id === opt.id
+                                                                    ? { ...o, imageUrl: url }
+                                                                    : o
+                                                                ),
+                                                              }
+                                                            : s
+                                                        ),
+                                                      }
+                                                    : x
+                                                )
+                                              );
+                                            })
+                                            .catch((err: unknown) =>
+                                              setMsg(err instanceof Error ? err.message : '图片上传失败')
+                                            );
+                                        }}
+                                      />
+                                    </label>
+                                    <button
+                                      type="button"
+                                      className="text-center text-[10px] leading-tight text-red-600 underline-offset-2 hover:underline disabled:text-gray-400 disabled:no-underline"
+                                      disabled={!opt.imageUrl}
+                                      onClick={() =>
+                                        setBundleTools((prev) =>
+                                          prev.map((x) =>
+                                            x.id === tool.id
+                                              ? {
+                                                  ...x,
+                                                  series: x.series.map((s) =>
+                                                    s.id === series.id
+                                                      ? {
+                                                          ...s,
+                                                          options: s.options.map((o) =>
+                                                            o.id === opt.id
+                                                              ? { ...o, imageUrl: undefined }
+                                                              : o
+                                                          ),
+                                                        }
+                                                      : s
+                                                  ),
+                                                }
+                                              : x
+                                          )
+                                        )
+                                      }
+                                    >
+                                      删除图
+                                    </button>
                                   </div>
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="mt-1 w-full text-[10px]"
-                                    onChange={(e) => {
-                                      const file = e.target.files?.[0];
-                                      e.currentTarget.value = '';
-                                      if (!file || !user) return;
-                                      void uploadProjectAsset(user.uid, file, 'bundle-option')
-                                        .then((url) => {
+                                  {/* 右：三行 — 选项名 / 备注 / 库存+删除整行 */}
+                                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                                    <input
+                                      className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                      value={opt.name}
+                                      placeholder="选项名"
+                                      onChange={(e) =>
+                                        setBundleTools((prev) =>
+                                          prev.map((x) =>
+                                            x.id === tool.id
+                                              ? {
+                                                  ...x,
+                                                  series: x.series.map((s) =>
+                                                    s.id === series.id
+                                                      ? {
+                                                          ...s,
+                                                          options: s.options.map((o) =>
+                                                            o.id === opt.id
+                                                              ? { ...o, name: e.target.value }
+                                                              : o
+                                                          ),
+                                                        }
+                                                      : s
+                                                  ),
+                                                }
+                                              : x
+                                          )
+                                        )
+                                      }
+                                    />
+                                    <input
+                                      className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs placeholder:text-gray-400"
+                                      value={opt.note ?? ''}
+                                      placeholder="备注"
+                                      onChange={(e) =>
+                                        setBundleTools((prev) =>
+                                          prev.map((x) =>
+                                            x.id === tool.id
+                                              ? {
+                                                  ...x,
+                                                  series: x.series.map((s) =>
+                                                    s.id === series.id
+                                                      ? {
+                                                          ...s,
+                                                          options: s.options.map((o) =>
+                                                            o.id === opt.id
+                                                              ? { ...o, note: e.target.value }
+                                                              : o
+                                                          ),
+                                                        }
+                                                      : s
+                                                  ),
+                                                }
+                                              : x
+                                          )
+                                        )
+                                      }
+                                    />
+                                    <div className="flex min-h-[2.25rem] items-center gap-2">
+                                      <span className="shrink-0 text-[11px] text-gray-500">库存</span>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        inputMode="numeric"
+                                        placeholder="0"
+                                        className="w-[5rem] shrink-0 rounded border border-gray-200 bg-white px-2 py-1.5 text-xs tabular-nums"
+                                        value={opt.stock === 0 ? '' : opt.stock}
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          const n = raw === '' ? 0 : Number(raw);
+                                          if (Number.isNaN(n) || n < 0) return;
                                           setBundleTools((prev) =>
                                             prev.map((x) =>
                                               x.id === tool.id
@@ -2281,9 +2444,7 @@ export default function ProjectEdit() {
                                                         ? {
                                                             ...s,
                                                             options: s.options.map((o) =>
-                                                              o.id === opt.id
-                                                                ? { ...o, imageUrl: url }
-                                                                : o
+                                                              o.id === opt.id ? { ...o, stock: n } : o
                                                             ),
                                                           }
                                                         : s
@@ -2292,158 +2453,36 @@ export default function ProjectEdit() {
                                                 : x
                                             )
                                           );
-                                        })
-                                        .catch((err: unknown) =>
-                                          setMsg(err instanceof Error ? err.message : '图片上传失败')
-                                        );
-                                    }}
-                                  />
-                                  <button
-                                    type="button"
-                                    className="mt-1 text-[10px] text-red-600 disabled:text-gray-400"
-                                    disabled={!opt.imageUrl}
-                                    onClick={() =>
-                                      setBundleTools((prev) =>
-                                        prev.map((x) =>
-                                          x.id === tool.id
-                                            ? {
-                                                ...x,
-                                                series: x.series.map((s) =>
-                                                  s.id === series.id
-                                                    ? {
-                                                        ...s,
-                                                        options: s.options.map((o) =>
-                                                          o.id === opt.id
-                                                            ? { ...o, imageUrl: undefined }
-                                                            : o
-                                                        ),
-                                                      }
-                                                    : s
-                                                ),
-                                              }
-                                            : x
-                                        )
-                                      )
-                                    }
-                                  >
-                                    删除图
-                                  </button>
+                                        }}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="ml-auto shrink-0 rounded border border-red-200 bg-white px-2 py-1.5 text-xs text-red-700"
+                                        onClick={() =>
+                                          setBundleTools((prev) =>
+                                            prev.map((x) =>
+                                              x.id === tool.id
+                                                ? {
+                                                    ...x,
+                                                    series: x.series.map((s) =>
+                                                      s.id === series.id
+                                                        ? {
+                                                            ...s,
+                                                            options: s.options.filter((o) => o.id !== opt.id),
+                                                          }
+                                                        : s
+                                                    ),
+                                                  }
+                                                : x
+                                            )
+                                          )
+                                        }
+                                      >
+                                        删除
+                                      </button>
+                                    </div>
+                                  </div>
                                 </div>
-                                <input
-                                  className="col-span-3 rounded border border-gray-200 px-2 py-1 text-xs"
-                                  value={opt.name}
-                                  placeholder="选项名"
-                                  onChange={(e) =>
-                                    setBundleTools((prev) =>
-                                      prev.map((x) =>
-                                        x.id === tool.id
-                                          ? {
-                                              ...x,
-                                              series: x.series.map((s) =>
-                                                s.id === series.id
-                                                  ? {
-                                                      ...s,
-                                                      options: s.options.map((o) =>
-                                                        o.id === opt.id
-                                                          ? { ...o, name: e.target.value }
-                                                          : o
-                                                      ),
-                                                    }
-                                                  : s
-                                              ),
-                                            }
-                                          : x
-                                      )
-                                    )
-                                  }
-                                />
-                                <input
-                                  className="col-span-4 rounded border border-gray-200 px-2 py-1 text-xs"
-                                  value={opt.note ?? ''}
-                                  placeholder="备注"
-                                  onChange={(e) =>
-                                    setBundleTools((prev) =>
-                                      prev.map((x) =>
-                                        x.id === tool.id
-                                          ? {
-                                              ...x,
-                                              series: x.series.map((s) =>
-                                                s.id === series.id
-                                                  ? {
-                                                      ...s,
-                                                      options: s.options.map((o) =>
-                                                        o.id === opt.id
-                                                          ? { ...o, note: e.target.value }
-                                                          : o
-                                                      ),
-                                                    }
-                                                  : s
-                                              ),
-                                            }
-                                          : x
-                                      )
-                                    )
-                                  }
-                                />
-                                <input
-                                  type="number"
-                                  min={0}
-                                  className="col-span-2 rounded border border-gray-200 px-2 py-1 text-xs"
-                                  value={opt.stock}
-                                  onChange={(e) =>
-                                    setBundleTools((prev) =>
-                                      prev.map((x) =>
-                                        x.id === tool.id
-                                          ? {
-                                              ...x,
-                                              series: x.series.map((s) =>
-                                                s.id === series.id
-                                                  ? {
-                                                      ...s,
-                                                      options: s.options.map((o) =>
-                                                        o.id === opt.id
-                                                          ? {
-                                                              ...o,
-                                                              stock: Number(e.target.value) || 0,
-                                                            }
-                                                          : o
-                                                      ),
-                                                    }
-                                                  : s
-                                              ),
-                                            }
-                                          : x
-                                      )
-                                    )
-                                  }
-                                />
-                                <button
-                                  type="button"
-                                  className="col-span-1 rounded border border-red-200 text-[10px] text-red-700"
-                                  onClick={() =>
-                                    setBundleTools((prev) =>
-                                      prev.map((x) =>
-                                        x.id === tool.id
-                                          ? {
-                                              ...x,
-                                              series: x.series.map((s) =>
-                                                s.id === series.id
-                                                  ? {
-                                                      ...s,
-                                                      options: s.options.filter(
-                                                        (o) => o.id !== opt.id
-                                                      ),
-                                                    }
-                                                  : s
-                                              ),
-                                            }
-                                          : x
-                                      )
-                                    )
-                                  }
-                                >
-                                  删
-                                </button>
                               </div>
                             ))}
                             <button
@@ -2502,7 +2541,7 @@ export default function ProjectEdit() {
                                       ...x.schemes,
                                       {
                                         id: crypto.randomUUID(),
-                                        name: '新方案',
+                                        name: '',
                                         price: 0,
                                         discountPrice: undefined,
                                         discountEnd: null,
@@ -2524,66 +2563,75 @@ export default function ProjectEdit() {
                     </div>
                     <div className="space-y-2">
                       {tool.schemes.map((sch) => (
-                        <div key={sch.id} className="rounded border border-gray-100 p-2">
-                          <div className="grid grid-cols-12 gap-2">
-                            <input
-                              className="col-span-5 rounded border border-gray-200 px-2 py-1 text-xs"
-                              value={sch.name}
-                              placeholder="方案名（可编辑）"
-                              onChange={(e) =>
-                                setBundleTools((prev) =>
-                                  prev.map((x) =>
-                                    x.id === tool.id
-                                      ? {
-                                          ...x,
-                                          schemes: x.schemes.map((s) =>
-                                            s.id === sch.id
-                                              ? { ...s, name: e.target.value }
-                                              : s
-                                          ),
-                                        }
-                                      : x
+                        <div key={sch.id} className="rounded border border-gray-100 bg-gray-50/50 p-2">
+                          <div className="flex flex-wrap items-end gap-x-2 gap-y-2">
+                            <label className="flex min-w-[10rem] flex-[2] basis-[min(100%,18rem)] flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">方案名称</span>
+                              <input
+                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                value={sch.name}
+                                placeholder="如：双人套餐"
+                                onChange={(e) =>
+                                  setBundleTools((prev) =>
+                                    prev.map((x) =>
+                                      x.id === tool.id
+                                        ? {
+                                            ...x,
+                                            schemes: x.schemes.map((s) =>
+                                              s.id === sch.id
+                                                ? { ...s, name: e.target.value }
+                                                : s
+                                            ),
+                                          }
+                                        : x
+                                    )
                                   )
-                                )
-                              }
-                            />
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.1"
-                              className="col-span-3 rounded border border-gray-200 px-2 py-1 text-xs"
-                              value={sch.price}
-                              onChange={(e) =>
-                                setBundleTools((prev) =>
-                                  prev.map((x) =>
-                                    x.id === tool.id
-                                      ? {
-                                          ...x,
-                                          schemes: x.schemes.map((s) =>
-                                            s.id === sch.id
-                                              ? { ...s, price: Number(e.target.value) || 0 }
-                                              : s
-                                          ),
-                                        }
-                                      : x
-                                  )
-                                )
-                              }
-                            />
-                            <input
-                              id={`validation-scheme:${sch.id}`}
-                              type="number"
-                              min={0}
-                              step="0.1"
-                              className={`col-span-2 rounded border px-2 py-1 text-xs ${
-                                validationHighlightKey === `scheme:${sch.id}`
-                                  ? 'border-red-500 ring-2 ring-red-200'
-                                  : 'border-gray-200'
-                              }`}
-                              placeholder="特惠价"
-                              value={sch.discountPrice ?? ''}
-                              onChange={(e) =>
-                                {
+                                }
+                              />
+                            </label>
+                            <label className="flex min-w-[6rem] flex-1 flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">标价 RM</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                placeholder="0"
+                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs tabular-nums"
+                                value={sch.price === 0 ? '' : sch.price}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const n = raw === '' ? 0 : Number(raw);
+                                  if (Number.isNaN(n) || n < 0) return;
+                                  setBundleTools((prev) =>
+                                    prev.map((x) =>
+                                      x.id === tool.id
+                                        ? {
+                                            ...x,
+                                            schemes: x.schemes.map((s) =>
+                                              s.id === sch.id ? { ...s, price: n } : s
+                                            ),
+                                          }
+                                        : x
+                                    )
+                                  );
+                                }}
+                              />
+                            </label>
+                            <label className="flex min-w-[6rem] flex-1 flex-col gap-0.5">
+                              <span className="text-[10px] text-gray-500">优惠价</span>
+                              <input
+                                id={`validation-scheme:${sch.id}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                className={`rounded border bg-white px-2 py-1.5 text-xs tabular-nums ${
+                                  validationHighlightKey === `scheme:${sch.id}`
+                                    ? 'border-red-500 ring-2 ring-red-200'
+                                    : 'border-gray-200'
+                                }`}
+                                placeholder="可选"
+                                value={sch.discountPrice ?? ''}
+                                onChange={(e) => {
                                   setValidationHighlightKey(null);
                                   setBundleTools((prev) =>
                                     prev.map((x) =>
@@ -2605,10 +2653,39 @@ export default function ProjectEdit() {
                                         : x
                                     )
                                   );
+                                }}
+                              />
+                            </label>
+                            <label className="flex w-full min-w-[11rem] max-w-[15rem] flex-col gap-0.5 sm:w-auto sm:flex-none">
+                              <span className="text-[10px] text-gray-500">特惠截止</span>
+                              <input
+                                type="datetime-local"
+                                className="w-full max-w-[15rem] rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                value={tsToDatetimeLocalInput(sch.discountEnd ?? null)}
+                                onChange={(e) =>
+                                  setBundleTools((prev) =>
+                                    prev.map((x) =>
+                                      x.id === tool.id
+                                        ? {
+                                            ...x,
+                                            schemes: x.schemes.map((s) =>
+                                              s.id === sch.id
+                                                ? {
+                                                    ...s,
+                                                    discountEnd: e.target.value
+                                                      ? Timestamp.fromDate(new Date(e.target.value))
+                                                      : null,
+                                                  }
+                                                : s
+                                            ),
+                                          }
+                                        : x
+                                    )
+                                  )
                                 }
-                              }
-                            />
-                            <label className="col-span-3 inline-flex items-center gap-1 text-xs text-gray-700">
+                              />
+                            </label>
+                            <label className="inline-flex shrink-0 items-center gap-1 pb-1 text-xs text-gray-700">
                               <input
                                 type="checkbox"
                                 checked={sch.isActive}
@@ -2633,7 +2710,7 @@ export default function ProjectEdit() {
                             </label>
                             <button
                               type="button"
-                              className="col-span-1 rounded border border-red-200 text-[10px] text-red-700"
+                              className="ml-auto shrink-0 rounded border border-red-200 bg-white px-2.5 py-1.5 text-xs text-red-700 sm:ml-0"
                               onClick={() =>
                                 setBundleTools((prev) =>
                                   prev.map((x) =>
@@ -2647,52 +2724,31 @@ export default function ProjectEdit() {
                                 )
                               }
                             >
-                              删
+                              删除
                             </button>
                           </div>
-                          <div className="mt-2">
-                            <input
-                              type="datetime-local"
-                              className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
-                              value={tsToDatetimeLocalInput(sch.discountEnd ?? null)}
-                              onChange={(e) =>
-                                setBundleTools((prev) =>
-                                  prev.map((x) =>
-                                    x.id === tool.id
-                                      ? {
-                                          ...x,
-                                          schemes: x.schemes.map((s) =>
-                                            s.id === sch.id
-                                              ? {
-                                                  ...s,
-                                                  discountEnd: e.target.value
-                                                    ? Timestamp.fromDate(
-                                                        new Date(e.target.value)
-                                                      )
-                                                    : null,
-                                                }
-                                              : s
-                                          ),
-                                        }
-                                      : x
-                                  )
-                                )
-                              }
-                            />
-                            <p className="mt-1 text-[10px] text-gray-500">
-                              方案规则：不填特惠价=普通；填特惠价=特惠；再填结束时间=早鸟价。
-                            </p>
-                          </div>
+                          <p className="mt-2 text-[10px] text-gray-500">
+                            方案规则：不填特惠价=普通；填特惠价=特惠；再填结束时间=早鸟价。
+                          </p>
                           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
                             {tool.series.map((s) => (
                               <label key={s.id} className="text-[11px] text-gray-600">
-                                {s.name}数量
+                                {(s.name.trim() || `${s.code}类`) + '数量'}
                                 <input
                                   type="number"
                                   min={0}
-                                  className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-xs"
-                                  value={sch.requirements[s.id] ?? 0}
-                                  onChange={(e) =>
+                                  inputMode="numeric"
+                                  placeholder="0"
+                                  className="mt-1 w-full rounded border border-gray-200 px-2 py-1 text-xs tabular-nums"
+                                  value={
+                                    (sch.requirements[s.id] ?? 0) === 0
+                                      ? ''
+                                      : sch.requirements[s.id] ?? 0
+                                  }
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const n = raw === '' ? 0 : Number(raw);
+                                    if (Number.isNaN(n) || n < 0) return;
                                     setBundleTools((prev) =>
                                       prev.map((x) =>
                                         x.id === tool.id
@@ -2704,8 +2760,7 @@ export default function ProjectEdit() {
                                                       ...r,
                                                       requirements: {
                                                         ...r.requirements,
-                                                        [s.id]:
-                                                          Number(e.target.value) || 0,
+                                                        [s.id]: n,
                                                       },
                                                     }
                                                   : r
@@ -2713,8 +2768,8 @@ export default function ProjectEdit() {
                                             }
                                           : x
                                       )
-                                    )
-                                  }
+                                    );
+                                  }}
                                 />
                               </label>
                             ))}
