@@ -5,6 +5,8 @@ import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import {
   cancelCardPurchaseRequest,
+  cardRequestAwaitingCustomerProof,
+  cardRequestNeedsMerchantConfirm,
   listCardRequestsByCustomer,
   listCardTemplatesByShop,
   listCustomerCardsByCustomer,
@@ -128,6 +130,24 @@ export default function CustomerCards() {
   const queryFrom = fromProject ? `?from=${encodeURIComponent(fromProject)}` : '';
 
   const pendingRequests = requests.filter((r) => r.data.status === 'pending');
+  const pendingAwaitingProof = pendingRequests.filter((r) =>
+    cardRequestAwaitingCustomerProof(r.data)
+  );
+  const pendingAwaitingMerchant = pendingRequests.filter((r) =>
+    cardRequestNeedsMerchantConfirm(r.data)
+  );
+
+  function continuePayHref(r: CardPurchaseRequestRow): string {
+    const params = new URLSearchParams();
+    if (fromProject) params.set('from', fromProject);
+    params.set('resumeRequest', r.id);
+    const qs = params.toString();
+    const q = qs ? `?${qs}` : '';
+    if (r.data.kind === 'topup' && r.data.customerCardId) {
+      return `${topupHrefBase}/${encodeURIComponent(r.data.customerCardId)}${q}`;
+    }
+    return `${buyHrefBase}/${encodeURIComponent(r.data.templateId)}${q}`;
+  }
 
   /** 仅展示仍可「首次开通」的模板：已持卡或有待确认的购买请求则不重复列出 */
   const purchasableTemplates = templates.filter((t) => {
@@ -220,19 +240,22 @@ export default function CustomerCards() {
         )}
       </section>
 
-      {/* 待确认的购卡 / 充值 */}
-      {pendingRequests.length > 0 ? (
+      {/* 进行中的购卡 / 充值：未传凭证与已传凭证分开展示 */}
+      {pendingAwaitingProof.length > 0 ? (
         <section className="mb-5">
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">待商户确认</h2>
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">待上传付款凭证</h2>
+          <p className="mb-2 text-xs text-gray-600">
+            已生成付款请求，请完成转账后上传截图；上传后才会进入商户核对。
+          </p>
           <div className="space-y-2">
-            {pendingRequests.map((r) => {
+            {pendingAwaitingProof.map((r) => {
               const isStored = r.data.templateTypeSnapshot === 'stored';
               const gainText = isStored
                 ? `面值 RM ${Number(r.data.gainValue).toFixed(2)}`
                 : `${Number(r.data.gainValue)} 次`;
               return (
                 <div key={r.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1 text-xs text-amber-900">
                       <div className="font-semibold">
                         {r.data.kind === 'topup' ? '充值' : '购买'}：
@@ -243,8 +266,59 @@ export default function CustomerCards() {
                         {Number(r.data.payAmount).toFixed(2)}
                       </div>
                       <div className="text-amber-800">
-                        {r.data.paymentScreenshots?.length ?? 0} 张截图
-                        ·提交于 {fmtTs(r.data.createdAt)}
+                        尚未上传截图 · 创建于 {fmtTs(r.data.createdAt)}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <Link
+                        to={continuePayHref(r)}
+                        className="inline-flex rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white"
+                      >
+                        去上传凭证
+                      </Link>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700"
+                        onClick={() => void handleCancelRequest(r.id)}
+                      >
+                        撤销
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {pendingAwaitingMerchant.length > 0 ? (
+        <section className="mb-5">
+          <h2 className="mb-2 text-sm font-semibold text-gray-900">待商户确认</h2>
+          <p className="mb-2 text-xs text-gray-600">
+            已上传付款截图，等待商户核对到账。
+          </p>
+          <div className="space-y-2">
+            {pendingAwaitingMerchant.map((r) => {
+              const isStored = r.data.templateTypeSnapshot === 'stored';
+              const gainText = isStored
+                ? `面值 RM ${Number(r.data.gainValue).toFixed(2)}`
+                : `${Number(r.data.gainValue)} 次`;
+              return (
+                <div key={r.id} className="rounded-xl border border-sky-200 bg-sky-50 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 text-xs text-sky-950">
+                      <div className="font-semibold">
+                        {r.data.kind === 'topup' ? '充值' : '购买'}：
+                        {r.data.templateNameSnapshot}
+                      </div>
+                      <div>
+                        到账 {gainText} · 实付 RM{' '}
+                        {Number(r.data.payAmount).toFixed(2)}
+                      </div>
+                      <div className="text-sky-900">
+                        {r.data.paymentScreenshots?.length ?? 0} 张截图 · 创建于{' '}
+                        {fmtTs(r.data.createdAt)}
                       </div>
                     </div>
                     <button
@@ -274,7 +348,7 @@ export default function CustomerCards() {
           </p>
         ) : purchasableTemplates.length === 0 ? (
           <p className="rounded-xl border border-dashed border-gray-300 px-3 py-5 text-center text-xs text-gray-500">
-            当前暂无可首购的卡；已持卡请在上方「我的卡片」充值，有待确认的开通请在「待商户确认」查看。
+            当前暂无可首购的卡；已持卡请在上方「我的卡片」充值。若有进行中的开通/充值，请在「待上传付款凭证」或「待商户确认」查看。
           </p>
         ) : (
           <div className="space-y-2">

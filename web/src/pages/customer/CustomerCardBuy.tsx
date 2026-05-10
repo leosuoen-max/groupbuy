@@ -40,6 +40,8 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
   const navigate = useNavigate();
   const [search] = useSearchParams();
   const fromProject = search.get('from') ?? '';
+  /** 从「我的卡片」返回继续上传凭证时携带，与 pending 请求 id 一致则进入付款页而非拦截 */
+  const resumeRequestId = search.get('resumeRequest')?.trim() ?? '';
   const customerKey = useMemo(() => getOrCreateCustomerKey(), []);
 
   const [shop, setShop] = useState<ShopRow | null>(null);
@@ -108,10 +110,15 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
             if (activeWallet) {
               setWalletBlock({ kind: 'has_active', cardId: activeWallet.id });
             } else if (pendingPurchase) {
-              setWalletBlock({
-                kind: 'has_pending',
-                requestId: pendingPurchase.id,
-              });
+              if (resumeRequestId && resumeRequestId === pendingPurchase.id) {
+                setRequestId(pendingPurchase.id);
+                setRequest(pendingPurchase);
+              } else {
+                setWalletBlock({
+                  kind: 'has_pending',
+                  requestId: pendingPurchase.id,
+                });
+              }
             }
           } else if (t.data.type === 'pass') {
             const [cards, reqs] = await Promise.all([
@@ -135,10 +142,15 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
             );
             if (cancelled) return;
             if (pendingPur) {
-              setPassBlock({
-                kind: 'has_pending',
-                requestId: pendingPur.id,
-              });
+              if (resumeRequestId && resumeRequestId === pendingPur.id) {
+                setRequestId(pendingPur.id);
+                setRequest(pendingPur);
+              } else {
+                setPassBlock({
+                  kind: 'has_pending',
+                  requestId: pendingPur.id,
+                });
+              }
             } else if (owned.length > 0) {
               const targetId = rechargeable?.id ?? owned[0]!.id;
               setPassBlock({ kind: 'has_card', cardId: targetId });
@@ -154,6 +166,21 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           const t = await getCardTemplate(c.data.templateId);
           if (!t) throw new Error('对应卡模板不存在');
           if (!cancelled) setTemplate(t);
+          if (resumeRequestId) {
+            const reqs = await listCardRequestsByCustomer(customerKey, row.id, {
+              status: 'pending',
+            });
+            const pendingTopup = reqs.find(
+              (r) =>
+                r.id === resumeRequestId &&
+                r.data.kind === 'topup' &&
+                r.data.customerCardId === params.cardId
+            );
+            if (!cancelled && pendingTopup) {
+              setRequestId(pendingTopup.id);
+              setRequest(pendingTopup);
+            }
+          }
         }
       } catch (e) {
         if (!cancelled) setBootErr(e instanceof Error ? e.message : '加载失败');
@@ -164,7 +191,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     return () => {
       cancelled = true;
     };
-  }, [slug, mode, params.templateId, params.cardId, customerKey]);
+  }, [slug, mode, params.templateId, params.cardId, customerKey, resumeRequestId]);
 
   // 计算"应付 / 到账"
   const tplData = template?.data;
@@ -401,9 +428,9 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
               </>
             ) : (
               <>
-                <p className="font-semibold">你还有一笔待商户确认的购买</p>
+                <p className="font-semibold">你还有一笔进行中的钱包开通</p>
                 <p className="mt-1 text-xs">
-                  请先回到卡片首页查看 / 撤销，再决定是否重新发起。
+                  若尚未上传付款截图，请在卡片首页进入「待上传付款凭证」继续上传；若已上传，请等待商户确认。也可在首页撤销后重新发起。
                 </p>
                 <Link
                   to={cardsHref}
@@ -418,9 +445,9 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           <section className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             {passBlock.kind === 'has_pending' ? (
               <>
-                <p className="font-semibold">你还有一笔待商户确认的次卡首购</p>
+                <p className="font-semibold">你还有一笔进行中的次卡首购</p>
                 <p className="mt-1 text-xs">
-                  请先回到卡片首页查看 / 撤销；首购价仅首笔购买可享受。
+                  若尚未上传付款截图，请在卡片首页「待上传付款凭证」继续上传；若已上传则等待商户确认。首购价仅首笔可享受；也可撤销后重新发起。
                 </p>
                 <Link
                   to={cardsHref}
