@@ -490,6 +490,17 @@ export async function customerUploadPaymentScreenshot(input: {
   }
 
   const md5 = await computeImageFileMd5Hex(input.file);
+
+  /** 本单内 MD5 重复：仅打旗标提示风险，不拦截上传 */
+  const existingShots = Array.isArray(order.paymentScreenshots)
+    ? order.paymentScreenshots
+    : [];
+  const dupSameOrder = existingShots.some((s) => {
+    if (!s || typeof s !== 'object') return false;
+    const h = (s as Record<string, unknown>).md5Hash;
+    return typeof h === 'string' && h === md5;
+  });
+
   const dup = await md5DuplicateInShopOtherOrders(
     order.shopId,
     input.orderFirestoreId,
@@ -505,6 +516,10 @@ export async function customerUploadPaymentScreenshot(input: {
   if (dup) {
     flag = 'red';
     flagReason = 'MD5 与该商户其他订单截图重复';
+  } else if (dupSameOrder) {
+    flag = 'yellow';
+    flagReason =
+      '本订单已存在相同内容的截图（MD5 一致），请核对是否重复使用凭证';
   } else if (uploadMs < createdMs) {
     flag = 'yellow';
     flagReason = '截图上传时间早于下单时间';
