@@ -661,6 +661,32 @@ export default function OrderForm() {
                       参考：{suggestedPoint.detailAddress}
                     </p>
                   ) : null}
+                  {suggestedPoint.imageUrl ? (
+                    <button
+                      type="button"
+                      className="mt-2 w-full overflow-hidden rounded-lg border border-indigo-100 bg-white/90 text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      onClick={() => setDeliveryDetailModalId(suggestedPoint.id)}
+                      aria-label="查看配送点示意图与完整说明"
+                    >
+                      <img
+                        src={suggestedPoint.imageUrl}
+                        alt={`${suggestedPoint.name} 配送点示意图`}
+                        className="max-h-[9rem] w-full object-contain"
+                        loading="lazy"
+                      />
+                      <span className="block px-2 py-1.5 text-center text-xs font-medium text-indigo-900">
+                        查看大图与完整说明
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="mt-2 text-xs font-medium text-indigo-700 underline-offset-2 hover:underline"
+                      onClick={() => setDeliveryDetailModalId(suggestedPoint.id)}
+                    >
+                      查看配送点详情
+                    </button>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
