@@ -5,6 +5,7 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import {
   canDeleteProject,
+  copyProjectFromCustomerLinkAsDraft,
   createDraftProject,
   deleteProjectIfAllowed,
   listProjectsByShopId,
@@ -56,8 +57,11 @@ export default function ProjectList() {
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
+  const [copyLinkInput, setCopyLinkInput] = useState('');
+  const [copyingFromLink, setCopyingFromLink] = useState(false);
 
   const slug = decodeURIComponent(shopSlug);
+  const dashboardBase = `/dashboard/${encodeURIComponent(slug)}`;
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -103,9 +107,7 @@ export default function ProjectList() {
     setErr(null);
     try {
       const id = await createDraftProject(shopId);
-      navigate(
-        `/dashboard/${encodeURIComponent(slug)}/projects/${encodeURIComponent(id)}`
-      );
+      navigate(`${dashboardBase}/projects/${encodeURIComponent(id)}`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '创建失败');
     } finally {
@@ -158,6 +160,25 @@ export default function ProjectList() {
   const switchLabel = useMemo(() => {
     return '发布';
   }, []);
+
+  const handleCopyProjectFromLink = async () => {
+    if (!shopId) return;
+    setCopyingFromLink(true);
+    setErr(null);
+    try {
+      const { newProjectId } = await copyProjectFromCustomerLinkAsDraft({
+        linkOrPath: copyLinkInput,
+        targetShopId: shopId,
+      });
+      setCopyLinkInput('');
+      await refresh();
+      navigate(`${dashboardBase}/projects/${encodeURIComponent(newProjectId)}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '拷贝失败');
+    } finally {
+      setCopyingFromLink(false);
+    }
+  };
 
   const handleCopyCustomerLink = async (p: ProjectRow) => {
     const url = customerShopHomeUrl(slug, p.id);
@@ -223,8 +244,6 @@ export default function ProjectList() {
     );
   }
 
-  const base = `/dashboard/${encodeURIComponent(slug)}`;
-
   return (
     <PageShell title="项目列表" subtitle={shopName}>
       {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
@@ -238,12 +257,35 @@ export default function ProjectList() {
           {creating ? '创建中…' : '+ 新建项目（草稿）'}
         </button>
         <Link
-          to={base}
+          to={dashboardBase}
           className="inline-flex h-11 items-center justify-center rounded-xl border border-gray-200 px-4 text-sm font-medium text-gray-800"
         >
           返回 Dashboard
         </Link>
       </div>
+
+      <section className="mb-6 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+        <h2 className="mb-1 text-sm font-semibold text-gray-900">从链接拷贝为草稿</h2>
+        <p className="mb-3 text-xs leading-relaxed text-gray-600">
+          粘贴任意<strong>顾客进店链接</strong>（本店或他店均可）。会在<strong>当前店铺</strong>下新建一条草稿，并带入文案、图片、商品与套餐等；若来源是<strong>他店</strong>，配送点与次卡抵扣需在本店重新配置。
+        </p>
+        <textarea
+          value={copyLinkInput}
+          onChange={(e) => setCopyLinkInput(e.target.value)}
+          rows={3}
+          disabled={copyingFromLink || !shopId}
+          placeholder="例如：https://你的域名/shop/店铺slug/项目ID"
+          className="mb-2 w-full resize-y rounded-lg border border-gray-200 bg-white p-2 font-mono text-[12px] text-gray-800 outline-none focus:border-indigo-300"
+        />
+        <button
+          type="button"
+          disabled={copyingFromLink || !shopId || !copyLinkInput.trim()}
+          onClick={() => void handleCopyProjectFromLink()}
+          className="inline-flex h-10 items-center justify-center rounded-lg bg-indigo-600 px-4 text-sm font-semibold text-white disabled:bg-gray-300"
+        >
+          {copyingFromLink ? '拷贝中…' : '拷贝为草稿并打开编辑'}
+        </button>
+      </section>
 
       {projects.length === 0 ? (
         <p className="text-sm text-gray-600">还没有项目，点上方新建。</p>
@@ -258,7 +300,7 @@ export default function ProjectList() {
                 <div className="space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
-                      <Link to={`${base}/projects/${encodeURIComponent(p.id)}`}>
+                      <Link to={`${dashboardBase}/projects/${encodeURIComponent(p.id)}`}>
                         <span className="block break-words font-medium leading-snug text-gray-900">
                           {p.data.title || '未命名'}
                         </span>

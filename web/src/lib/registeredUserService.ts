@@ -63,6 +63,14 @@ export async function isPlatformAdmin(uid: string): Promise<boolean> {
   return snap.exists();
 }
 
+/** 读取 `registered_users` 中的脱敏手机（如 ****5678）；无记录或未登录同步过则为 null */
+export async function getRegisteredUserPhoneMasked(uid: string): Promise<string | null> {
+  const snap = await getDoc(doc(getDb(), REGISTERED_USERS, uid));
+  if (!snap.exists()) return null;
+  const d = snap.data() as RegisteredUserDoc;
+  return d.phoneMasked ?? null;
+}
+
 export type RegisteredUserRow = { id: string; data: RegisteredUserDoc };
 
 /** 按首次出现时间倒序列出（需 composite index：firstSeenAt DESC） */

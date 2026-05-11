@@ -15,6 +15,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { compressImageFileForUpload } from './imageCompress';
 import { getDb, getStorageClient } from './firebase';
+import { getShopBySlug } from './shopService';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
 export type ProjectRow = { id: string; data: ProjectDoc };
@@ -83,6 +84,156 @@ export async function createDraftProject(shopId: string): Promise<string> {
     updatedAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+/**
+ * 从顾客进店链接（或路径）解析出店铺 slug 与项目 ID。
+ * 支持 `https://域名/shop/slug/projectId`、`/shop/slug/projectId/order` 等。
+ */
+export function parseShopProjectFromCustomerUrl(raw: string): {
+  shopSlug: string;
+  projectId: string;
+} | null {
+  const t = raw.trim();
+  if (!t) return null;
+  let pathname = t;
+  if (/^https?:\/\//i.test(t)) {
+    try {
+      pathname = new URL(t).pathname;
+    } catch {
+      return null;
+    }
+  }
+  const m = pathname.match(/\/shop\/([^/]+)\/([^/]+)/);
+  if (!m?.[1] || !m[2]) return null;
+  try {
+    return {
+      shopSlug: decodeURIComponent(m[1]),
+      projectId: decodeURIComponent(m[2]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function cloneProductsForCopy(
+  products: ProjectProduct[],
+  stripCardTemplates: boolean
+): ProjectProduct[] {
+  return (products ?? []).map((p) => {
+    if (!stripCardTemplates) return { ...p };
+    const { applicableCardTemplateIds: _a, ...rest } = p;
+    return { ...rest };
+  });
+}
+
+function cloneBundleToolsForCopy(
+  tools: BundleToolDoc[] | undefined,
+  stripCardTemplates: boolean
+): BundleToolDoc[] {
+  if (!tools?.length) return [];
+  return tools.map((tool) => ({
+    ...tool,
+    series: tool.series.map((s) => ({
+      ...s,
+      options: s.options.map((o) => ({ ...o })),
+    })),
+    schemes: tool.schemes.map((sch) => {
+      if (!stripCardTemplates) return { ...sch };
+      const { applicableCardTemplateIds: _a, ...schRest } = sch;
+      return { ...schRest };
+    }),
+  }));
+}
+
+function resolveCopyClosesAt(src: Timestamp | undefined): Timestamp {
+  const fallback = Timestamp.fromDate(new Date(Date.now() + 24 * 60 * 60 * 1000));
+  if (!src?.toDate) return fallback;
+  try {
+    const d = src.toDate();
+    if (d.getTime() > Date.now() + 60_000) return src;
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+/**
+ * 将「顾客进店链接」对应的项目整份拷贝为**当前店铺**下的新草稿（新文档 ID）。
+ * - 跨店拷贝时：清空 `deliveryPointIds`、去掉商品/套餐上的次卡模板抵扣配置（避免指向他店模板）。
+ * - 同店拷贝：保留配送点与次卡适用模板。
+ * - 统计字段归零；状态为 draft；标题后缀「（拷贝）」。
+ */
+export async function copyProjectFromCustomerLinkAsDraft(params: {
+  linkOrPath: string;
+  targetShopId: string;
+}): Promise<{ newProjectId: string }> {
+  const parsed = parseShopProjectFromCustomerUrl(params.linkOrPath);
+  if (!parsed) {
+    throw new Error(
+      '无法识别链接：请粘贴完整顾客链接（需包含 /shop/店铺slug/项目ID）'
+    );
+  }
+  const { shopSlug, projectId } = parsed;
+  const shopRow = await getShopBySlug(shopSlug);
+  if (!shopRow) throw new Error('链接中的店铺不存在或 slug 有误');
+  const projRow = await getProject(projectId);
+  if (!projRow) throw new Error('链接中的项目不存在或无权读取');
+  if (projRow.data.shopId !== shopRow.id) {
+    throw new Error('链接与项目数据不一致，请检查是否复制完整');
+  }
+
+  const src = projRow.data;
+  const stripCardTemplates = shopRow.id !== params.targetShopId;
+  const deliveryPointIds = stripCardTemplates ? [] : [...(src.deliveryPointIds ?? [])];
+
+  const baseTitle = (src.title || '未命名项目').trim();
+  const title = baseTitle.endsWith('（拷贝）') ? baseTitle : `${baseTitle}（拷贝）`;
+
+  const def = defaultProjectPayload(params.targetShopId);
+  const ff = src.formFields;
+  const os = src.orderSettings;
+  const payload: Omit<ProjectDoc, 'createdAt' | 'updatedAt'> = {
+    shopId: params.targetShopId,
+    title,
+    status: 'draft',
+    closesAt: resolveCopyClosesAt(src.closesAt),
+    maxParticipants: src.maxParticipants ?? null,
+    textContent: src.textContent ?? '',
+    imageBlocks: [...(src.imageBlocks ?? [])].map((b) => ({ ...b })),
+    products: cloneProductsForCopy(src.products ?? [], stripCardTemplates),
+    bundleTools: cloneBundleToolsForCopy(src.bundleTools, stripCardTemplates),
+    deliveryPointIds,
+    formFields: {
+      name: { required: ff?.name?.required ?? def.formFields.name.required },
+      phone: { required: ff?.phone?.required ?? def.formFields.phone.required },
+      address: { required: ff?.address?.required ?? def.formFields.address.required },
+      note: { required: ff?.note?.required ?? def.formFields.note.required },
+    },
+    orderSettings: {
+      maxOrdersPerCustomer: os?.maxOrdersPerCustomer ?? def.orderSettings.maxOrdersPerCustomer,
+      visibility: os?.visibility ?? def.orderSettings.visibility,
+      allowEdit: os?.allowEdit ?? def.orderSettings.allowEdit,
+      allowCancel: os?.allowCancel ?? def.orderSettings.allowCancel,
+    },
+    stats: {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    },
+    publishedAt: null,
+  };
+
+  const db = getDb();
+  const ref = await addDoc(collection(db, 'projects'), {
+    ...payload,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return { newProjectId: ref.id };
 }
 
 export async function updateProjectDoc(

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
-import { isPlatformAdmin } from '../lib/registeredUserService';
+import { getRegisteredUserPhoneMasked, isPlatformAdmin } from '../lib/registeredUserService';
 import { createSignupInvite } from '../lib/signupInviteService';
 import {
   createShopByPlatformAdmin,
@@ -43,6 +43,8 @@ export default function PlatformShops() {
   const { user, loading: authLoading } = useAuthUser();
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [rows, setRows] = useState<ShopRow[]>([]);
+  /** ownerId → 脱敏手机（来自 registered_users，店主需至少登录过一次） */
+  const [ownerPhoneMasked, setOwnerPhoneMasked] = useState<Record<string, string | null>>({});
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ownerUid, setOwnerUid] = useState('');
@@ -60,12 +62,23 @@ export default function PlatformShops() {
       setAllowed(ok);
       if (!ok) {
         setRows([]);
+        setOwnerPhoneMasked({});
         return;
       }
-      setRows(await listAllShopsForPlatform(user.uid));
+      const shopRows = await listAllShopsForPlatform(user.uid);
+      setRows(shopRows);
+      const ownerIds = [...new Set(shopRows.map((r) => r.data.ownerId).filter(Boolean))];
+      const pairs = await Promise.all(
+        ownerIds.map(async (oid) => {
+          const masked = await getRegisteredUserPhoneMasked(oid);
+          return [oid, masked] as const;
+        })
+      );
+      setOwnerPhoneMasked(Object.fromEntries(pairs));
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : '加载失败');
       setRows([]);
+      setOwnerPhoneMasked({});
     } finally {
       setBusy(false);
     }
@@ -312,6 +325,7 @@ export default function PlatformShops() {
               <th className="px-3 py-2 font-semibold">名称</th>
               <th className="px-3 py-2 font-semibold">slug / 后台</th>
               <th className="px-3 py-2 font-semibold">店主 UID</th>
+              <th className="whitespace-nowrap px-3 py-2 font-semibold">手机（脱敏）</th>
               <th className="whitespace-nowrap px-3 py-2 font-semibold">状态</th>
               <th className="whitespace-nowrap px-3 py-2 font-semibold">创建</th>
               <th className="px-3 py-2 font-semibold">操作</th>
@@ -320,7 +334,7 @@ export default function PlatformShops() {
           <tbody className="divide-y divide-gray-100 text-gray-800">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-8 text-center text-gray-500">
+                <td colSpan={7} className="px-3 py-8 text-center text-gray-500">
                   暂无商户。
                 </td>
               </tr>
@@ -344,6 +358,9 @@ export default function PlatformShops() {
                     </td>
                     <td className="max-w-[10rem] truncate px-3 py-2 font-mono text-[11px]" title={r.data.ownerId}>
                       …{r.data.ownerId.slice(-8)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-gray-600" title="店主登录后写入登记；完整号码仅在 Firebase 控制台 Authentication">
+                      {ownerPhoneMasked[r.data.ownerId] ?? '—'}
                     </td>
                     <td className="px-3 py-2">
                       {open ? (
