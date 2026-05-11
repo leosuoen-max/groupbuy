@@ -205,6 +205,18 @@ export async function syncPublishedProjectToProductLibrary(
         kind: 'bundle_scheme',
       });
     }
+    for (const series of tool.series ?? []) {
+      for (const opt of series.options ?? []) {
+        if (!opt.name?.trim()) continue;
+        await upsertProductLibraryItem(shopId, ownerId, {
+          name: opt.name,
+          imageUrl: opt.imageUrl?.trim() ? opt.imageUrl.trim() : '',
+          retailPrice: 0,
+          note: opt.note?.trim() ? opt.note.trim() : '',
+          kind: 'bundle_option',
+        });
+      }
+    }
   }
 }
 

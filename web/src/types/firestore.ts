@@ -171,8 +171,13 @@ export type PlatformAdminDoc = {
 
 export type CardType = 'stored' | 'pass';
 
-/** 店铺级产品库：同名（规范化后）视为同一产品，用于项目编辑时快速选用 */
-export type ProductLibraryKind = 'product' | 'bundle_scheme';
+/**
+ * 店铺级产品库：同名（规范化后）同类型内唯一，用于项目编辑时快速选用。
+ * - product：普通商品
+ * - bundle_scheme：套餐方案
+ * - bundle_option：套餐系列内的品项（选项名、图、备注；无单价时 retailPrice 存 0）
+ */
+export type ProductLibraryKind = 'product' | 'bundle_scheme' | 'bundle_option';
 
 export type ProductLibraryItemDoc = {
   shopId: string;

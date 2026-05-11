@@ -2513,11 +2513,32 @@ export default function ProjectEdit() {
                                   </div>
                                   {/* 右：三行 — 选项名 / 备注 / 库存+删除整行 */}
                                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                                    <input
-                                      className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                    <ProductLibraryCombobox
+                                      items={libraryRows}
+                                      kindFilter="bundle_option"
                                       value={opt.name}
-                                      placeholder="选项名"
-                                      onChange={(e) =>
+                                      onChangeValue={(v) =>
+                                        setBundleTools((prev) =>
+                                          prev.map((x) =>
+                                            x.id === tool.id
+                                              ? {
+                                                  ...x,
+                                                  series: x.series.map((s) =>
+                                                    s.id === series.id
+                                                      ? {
+                                                          ...s,
+                                                          options: s.options.map((o) =>
+                                                            o.id === opt.id ? { ...o, name: v } : o
+                                                          ),
+                                                        }
+                                                      : s
+                                                  ),
+                                                }
+                                              : x
+                                          )
+                                        )
+                                      }
+                                      onPickRow={(row) => {
                                         setBundleTools((prev) =>
                                           prev.map((x) =>
                                             x.id === tool.id
@@ -2529,7 +2550,12 @@ export default function ProjectEdit() {
                                                           ...s,
                                                           options: s.options.map((o) =>
                                                             o.id === opt.id
-                                                              ? { ...o, name: e.target.value }
+                                                              ? {
+                                                                  ...o,
+                                                                  name: row.data.name,
+                                                                  imageUrl: row.data.imageUrl,
+                                                                  note: row.data.note ?? '',
+                                                                }
                                                               : o
                                                           ),
                                                         }
@@ -2538,8 +2564,11 @@ export default function ProjectEdit() {
                                                 }
                                               : x
                                           )
-                                        )
-                                      }
+                                        );
+                                        setMsg('已从商品库套用套餐品项');
+                                      }}
+                                      inputClassName="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                      placeholder="选项名（输入筛选商品库）"
                                     />
                                     <input
                                       className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs placeholder:text-gray-400"

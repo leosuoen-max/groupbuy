@@ -130,14 +130,20 @@ export default function ProductLibrary() {
       setMsg('请填写名称');
       return;
     }
-    const retail = Number(draftRetail) || 0;
+    const isOption = draftKind === 'bundle_option';
+    const retail = isOption ? 0 : Number(draftRetail) || 0;
+    if (draftKind === 'product' && retail <= 0) {
+      setMsg('普通商品请填写大于 0 的零售价');
+      return;
+    }
     setSaving(true);
     try {
       await upsertProductLibraryItem(shop.id, shop.data.ownerId, {
         name,
         retailPrice: retail,
-        purchaseCost:
-          draftCost.trim() === ''
+        purchaseCost: isOption
+          ? undefined
+          : draftCost.trim() === ''
             ? undefined
             : Math.max(0, Number(draftCost) || 0),
         note: draftNote || undefined,
@@ -173,7 +179,8 @@ export default function ProductLibrary() {
       <section className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <h2 className="mb-3 text-sm font-semibold text-gray-900">新增 / 更新条目</h2>
         <p className="mb-3 text-xs text-gray-500">
-          名称相同视为同一产品并更新字段。套餐方案（如「1 荤 1 素」）请选择「套餐方案」类型。
+          名称相同且类型相同视为同一条并更新字段。套餐方案选「套餐方案」；套餐里可复用的选项（荤菜 A、饮料 B
+          等）选「套餐品项」。
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="text-xs text-gray-700">
@@ -196,31 +203,36 @@ export default function ProductLibrary() {
             >
               <option value="product">普通商品</option>
               <option value="bundle_scheme">套餐方案</option>
+              <option value="bundle_option">套餐品项</option>
             </select>
           </label>
-          <label className="text-xs text-gray-700">
-            零售价 (RM) *
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputCls}
-              value={draftRetail}
-              onChange={(e) => setDraftRetail(e.target.value)}
-            />
-          </label>
-          <label className="text-xs text-gray-700">
-            采购成本 (RM)
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              className={inputCls}
-              placeholder="可选"
-              value={draftCost}
-              onChange={(e) => setDraftCost(e.target.value)}
-            />
-          </label>
+          {draftKind === 'bundle_option' ? null : (
+            <>
+              <label className="text-xs text-gray-700">
+                零售价 (RM) *
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className={inputCls}
+                  value={draftRetail}
+                  onChange={(e) => setDraftRetail(e.target.value)}
+                />
+              </label>
+              <label className="text-xs text-gray-700">
+                采购成本 (RM)
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className={inputCls}
+                  placeholder="可选"
+                  value={draftCost}
+                  onChange={(e) => setDraftCost(e.target.value)}
+                />
+              </label>
+            </>
+          )}
           <label className="col-span-full text-xs text-gray-700">
             备注
             <textarea
@@ -247,12 +259,15 @@ export default function ProductLibrary() {
                 }
                 void uploadProjectAsset(user.uid, file, 'product')
                   .then(async (url) => {
+                    const optKind = draftKind === 'bundle_option';
+                    const rPrice = optKind ? 0 : Number(draftRetail) || 0;
                     await upsertProductLibraryItem(shop.id, shop.data.ownerId, {
                       name: nameSnapshot,
                       imageUrl: url,
-                      retailPrice: Number(draftRetail) || 0,
-                      purchaseCost:
-                        draftCost.trim() === ''
+                      retailPrice: rPrice,
+                      purchaseCost: optKind
+                        ? undefined
+                        : draftCost.trim() === ''
                           ? undefined
                           : Math.max(0, Number(draftCost) || 0),
                       note: draftNote || undefined,
@@ -289,7 +304,7 @@ export default function ProductLibrary() {
         <p className="text-sm text-gray-500">加载中…</p>
       ) : rows.length === 0 ? (
         <p className="text-sm text-gray-500">
-          暂无记录。可在上方添加；编辑项目并<strong>发布</strong>后，当前商品与套餐方案会自动同步到商品库（同名覆盖）。
+          暂无记录。可在上方添加；编辑项目并<strong>发布</strong>后，当前商品、套餐方案与<strong>套餐系列品项</strong>会自动同步到商品库（同名同类型覆盖）。
         </p>
       ) : (
         <ul className="space-y-2">
@@ -307,7 +322,11 @@ export default function ProductLibrary() {
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[10px] text-gray-400">
-                    {r.data.kind === 'bundle_scheme' ? '套餐' : '无图'}
+                    {r.data.kind === 'bundle_scheme'
+                      ? '套餐'
+                      : r.data.kind === 'bundle_option'
+                        ? '品项'
+                        : '无图'}
                   </div>
                 )}
               </div>
@@ -315,17 +334,25 @@ export default function ProductLibrary() {
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                   <span className="font-medium text-gray-900">{r.data.name}</span>
                   <span className="rounded bg-white px-1.5 py-0.5 text-[10px] text-gray-600 ring-1 ring-gray-200">
-                    {r.data.kind === 'bundle_scheme' ? '套餐方案' : '商品'}
+                    {r.data.kind === 'bundle_scheme'
+                      ? '套餐方案'
+                      : r.data.kind === 'bundle_option'
+                        ? '套餐品项'
+                        : '商品'}
                   </span>
                 </div>
-                <div className="mt-1 text-xs text-gray-600">
-                  零售 {formatMYR(r.data.retailPrice)}
-                  {typeof r.data.purchaseCost === 'number' ? (
-                    <span className="ml-2">
-                      成本 {formatMYR(r.data.purchaseCost)}
-                    </span>
-                  ) : null}
-                </div>
+                {r.data.kind === 'bundle_option' ? (
+                  <p className="mt-1 text-xs text-gray-500">无固定零售价；用于系列选项名、图、备注复用。</p>
+                ) : (
+                  <div className="mt-1 text-xs text-gray-600">
+                    零售 {formatMYR(r.data.retailPrice)}
+                    {typeof r.data.purchaseCost === 'number' ? (
+                      <span className="ml-2">
+                        成本 {formatMYR(r.data.purchaseCost)}
+                      </span>
+                    ) : null}
+                  </div>
+                )}
                 {r.data.note ? (
                   <p className="mt-1 text-xs text-gray-500">{r.data.note}</p>
                 ) : null}

@@ -3,7 +3,7 @@ import type { ProductLibraryRow } from '../../lib/productLibraryService';
 
 type Props = {
   items: ProductLibraryRow[];
-  kindFilter: 'product' | 'bundle_scheme';
+  kindFilter: 'product' | 'bundle_scheme' | 'bundle_option';
   value: string;
   onChangeValue: (next: string) => void;
   onPickRow: (row: ProductLibraryRow) => void;
@@ -79,7 +79,7 @@ export function ProductLibraryCombobox({
                   setOpen(false);
                 }}
               >
-                {r.data.imageUrl && kindFilter === 'product' ? (
+                {r.data.imageUrl ? (
                   <img
                     src={r.data.imageUrl}
                     alt=""
@@ -87,14 +87,20 @@ export function ProductLibraryCombobox({
                   />
                 ) : (
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-gray-100 text-[10px] text-gray-400">
-                    {kindFilter === 'bundle_scheme' ? '套' : '库'}
+                    {kindFilter === 'bundle_scheme'
+                      ? '套'
+                      : kindFilter === 'bundle_option'
+                        ? '选'
+                        : '库'}
                   </span>
                 )}
                 <span className="min-w-0 flex-1">
                   <span className="font-medium text-gray-900">{r.data.name}</span>
-                  <span className="ml-1 tabular-nums text-gray-600">
-                    RM {Number(r.data.retailPrice ?? 0).toFixed(2)}
-                  </span>
+                  {kindFilter === 'bundle_option' ? null : (
+                    <span className="ml-1 tabular-nums text-gray-600">
+                      RM {Number(r.data.retailPrice ?? 0).toFixed(2)}
+                    </span>
+                  )}
                   {r.data.note ? (
                     <span className="mt-0.5 block truncate text-[10px] text-gray-500">
                       {r.data.note}
