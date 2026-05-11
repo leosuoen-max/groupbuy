@@ -99,9 +99,15 @@ export default function HomeLinks() {
             </Link>
           </li>
           <li className="text-sm text-gray-700">
-            新商户自助注册已关闭。需开店请{' '}
-            <span className="font-medium text-gray-900">联系站长</span>：{' '}
-            <span className="whitespace-pre-wrap break-words">{getCustomShopContactLine()}</span>
+            新商户自助注册已关闭。需开店请 <span className="font-medium text-gray-900">联系站长</span>。
+            <details className="mt-1.5">
+              <summary className="cursor-pointer list-none text-indigo-600 underline-offset-2 hover:underline [&::-webkit-details-marker]:hidden">
+                查看联系方式
+              </summary>
+              <p className="mt-2 whitespace-pre-wrap break-words rounded-md bg-gray-50 px-2 py-2 text-sm text-gray-800">
+                {getCustomShopContactLine()}
+              </p>
+            </details>
           </li>
           <li>
             <Link className={link} to="/invite/demo-code">

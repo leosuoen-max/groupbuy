@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { CustomShopContactModal } from '../components/CustomShopContactModal';
+import { CUSTOM_SHOP_CONTACT_TEASER } from '../config/siteContact';
 import { useAuthUser } from '../hooks/useAuthUser';
-import { getCustomShopContactLine } from '../config/siteContact';
 
 /**
  * 站点根路径：默认面向顾客说明；已登录用户进入后台或店铺相关流程。
@@ -9,6 +10,7 @@ import { getCustomShopContactLine } from '../config/siteContact';
 export default function MerchantEntry() {
   const { user, loading } = useAuthUser();
   const navigate = useNavigate();
+  const [contactModalOpen, setContactModalOpen] = useState(false);
 
   useEffect(() => {
     if (!loading && user) {
@@ -43,11 +45,17 @@ export default function MerchantEntry() {
         </p>
 
         <div className="mb-6 rounded-xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-center">
-          <p className="text-sm font-medium text-emerald-950">想定制自己的店？立即联系</p>
-          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-emerald-900">
-            {getCustomShopContactLine()}
-          </p>
+          <button
+            type="button"
+            onClick={() => setContactModalOpen(true)}
+            className="w-full text-sm font-medium text-emerald-950 underline decoration-emerald-200 underline-offset-2 transition hover:text-emerald-900 hover:decoration-emerald-400"
+          >
+            {CUSTOM_SHOP_CONTACT_TEASER}
+          </button>
+          <p className="mt-2 text-xs text-emerald-800/80">点按上方查看微信与电话</p>
         </div>
+
+        <CustomShopContactModal open={contactModalOpen} onClose={() => setContactModalOpen(false)} />
 
         <div className="space-y-3">
           <Link

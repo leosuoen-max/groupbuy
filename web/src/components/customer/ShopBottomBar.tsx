@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProjectStatus } from '../../data/mockShopHome';
-import { getCustomShopContactLine } from '../../config/siteContact';
+import { CustomShopContactModal } from '../CustomShopContactModal';
+import { CUSTOM_SHOP_CONTACT_TEASER } from '../../config/siteContact';
 import { formatMYR } from '../../lib/formatMYR';
 import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import { ShopMoreMenuSheet } from './ShopMoreMenuSheet';
@@ -56,6 +57,7 @@ export function ShopBottomBar({
   const closed = projectStatus === 'closed' || projectStatus === 'full';
   const canSubmit = !closed && totalQty > 0 && !forceDisableSubmit;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
   let primaryLabel = '请选择商品';
@@ -136,13 +138,17 @@ export function ShopBottomBar({
           {primaryLabel}
         </button>
       </div>
-      <p
-        className={`pointer-events-auto mt-2 block px-4 text-center text-xs leading-relaxed text-gray-500 ${H5_COLUMN_CLASS}`}
-      >
-        <span className="font-medium text-gray-600">想定制自己的店？立即联系</span>
-        <br />
-        <span className="whitespace-pre-wrap break-words">{getCustomShopContactLine()}</span>
-      </p>
+      <div className={`pointer-events-auto mt-2 px-4 text-center ${H5_COLUMN_CLASS}`}>
+        <button
+          type="button"
+          className="text-xs font-medium leading-relaxed text-gray-600 underline decoration-gray-300 underline-offset-2 transition hover:text-gray-800 hover:decoration-gray-400"
+          onClick={() => setContactModalOpen(true)}
+        >
+          {CUSTOM_SHOP_CONTACT_TEASER}
+        </button>
+      </div>
+
+      <CustomShopContactModal open={contactModalOpen} onClose={() => setContactModalOpen(false)} />
 
       <ShopMoreMenuSheet
         open={menuOpen}
