@@ -16,6 +16,7 @@ import { deriveDisplayOrderStatus } from '../../lib/paymentGroupView';
 import {
   getOrderByNumber,
   merchantAppendInternalNote,
+  merchantAssignManualDeliveryMatch,
   merchantConfirmAppendBatch,
   merchantConfirmPayment,
   merchantConfirmPendingAppendBatches,
@@ -23,6 +24,11 @@ import {
   merchantWaiveAppendBatchScreenshot,
   type OrderRow,
 } from '../../lib/orderService';
+import {
+  listDeliveryPointsByOwnerId,
+  type DeliveryPointRow,
+} from '../../lib/deliveryPointService';
+import { getShopBySlug } from '../../lib/shopService';
 import {
   cardApplicationsForAppendBatch,
   listOrderCardPaymentApplications,
@@ -257,6 +263,16 @@ export default function MerchantOrderDetail() {
   >(null);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const [dpModalOpen, setDpModalOpen] = useState(false);
+  const [dpModalLoading, setDpModalLoading] = useState(false);
+  const [dpModalSubmitting, setDpModalSubmitting] = useState(false);
+  const [dpModalErr, setDpModalErr] = useState<string | null>(null);
+  const [deliveryPointRows, setDeliveryPointRows] = useState<DeliveryPointRow[]>(
+    []
+  );
+  /** 选中的配送点 id；特殊值 __nomatch__ 表示匹配不成功 */
+  const [dpPick, setDpPick] = useState<string>('');
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -281,6 +297,78 @@ export default function MerchantOrderDetail() {
       void refresh();
     });
   }, [refresh]);
+
+  useEffect(() => {
+    if (!dpModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDpModalOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dpModalOpen]);
+
+  useEffect(() => {
+    if (!dpModalOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [dpModalOpen]);
+
+  const openDeliveryPointModal = useCallback(async () => {
+    setDpModalErr(null);
+    setDpPick('');
+    setDpModalOpen(true);
+    setDpModalLoading(true);
+    try {
+      const shop = await getShopBySlug(slug);
+      if (!shop) {
+        setDpModalErr('未找到店铺');
+        setDeliveryPointRows([]);
+        return;
+      }
+      const rows = await listDeliveryPointsByOwnerId(shop.data.ownerId, {
+        fallbackShopId: shop.id,
+        includeInactive: true,
+      });
+      setDeliveryPointRows(rows);
+    } catch (e) {
+      setDpModalErr(e instanceof Error ? e.message : '加载配送点失败');
+      setDeliveryPointRows([]);
+    } finally {
+      setDpModalLoading(false);
+    }
+  }, [slug]);
+
+  const submitDeliveryPointPick = async () => {
+    if (!user || !row) return;
+    if (!dpPick) {
+      setDpModalErr('请选择配送点或「匹配不成功」');
+      return;
+    }
+    setDpModalErr(null);
+    setDpModalSubmitting(true);
+    try {
+      const dpId = dpPick === '__nomatch__' ? null : dpPick;
+      await merchantAssignManualDeliveryMatch({
+        orderFirestoreId: row.id,
+        actorUserId: user.uid,
+        deliveryPointId: dpId,
+      });
+      setMsg(
+        dpId
+          ? '已关联配送点'
+          : '已记录为按原地址配送（未关联配送点）'
+      );
+      setDpModalOpen(false);
+      await refresh();
+    } catch (e) {
+      setDpModalErr(e instanceof Error ? e.message : '操作失败');
+    } finally {
+      setDpModalSubmitting(false);
+    }
+  };
 
   const handleConfirmAll = async (includeInitialPayment = false) => {
     if (!user || !row) return;
@@ -1066,7 +1154,18 @@ export default function MerchantOrderDetail() {
         </div>
 
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-gray-900">配送</h2>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-gray-900">配送</h2>
+            {order.isManualMatch ? (
+              <button
+                type="button"
+                className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100"
+                onClick={() => void openDeliveryPointModal()}
+              >
+                配送点
+              </button>
+            ) : null}
+          </div>
           <p className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
             {order.deliveryPointSnapshot?.name ?? '未填写'}
           </p>
@@ -1132,6 +1231,137 @@ export default function MerchantOrderDetail() {
             {busy === 'note' ? '保存中…' : '保存备注'}
           </ActionButton>
         </div>
+
+        {dpModalOpen ? (
+          <div
+            className="fixed inset-0 z-[120] flex items-end justify-center bg-black/45 sm:items-center sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="order-dp-match-title"
+            onClick={() => !dpModalSubmitting && setDpModalOpen(false)}
+          >
+            <div
+              className="max-h-[min(88vh,620px)] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl sm:rounded-2xl sm:pb-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-2 border-b border-gray-100 pb-3">
+                <h3
+                  id="order-dp-match-title"
+                  className="text-base font-semibold text-gray-900"
+                >
+                  关联配送点
+                </h3>
+                <button
+                  type="button"
+                  className="inline-flex h-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-40"
+                  aria-label="关闭"
+                  disabled={dpModalSubmitting}
+                  onClick={() => setDpModalOpen(false)}
+                >
+                  <span className="text-xl leading-none" aria-hidden>
+                    ×
+                  </span>
+                </button>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-800">
+                <p className="text-xs font-medium text-gray-500">顾客地址</p>
+                <p className="mt-1 whitespace-pre-wrap break-words">
+                  {order.customerAddress?.trim() || '—'}
+                </p>
+              </div>
+
+              {dpModalErr ? (
+                <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {dpModalErr}
+                </p>
+              ) : null}
+
+              {dpModalLoading ? (
+                <p className="mt-4 text-sm text-gray-600">加载配送点…</p>
+              ) : (
+                <fieldset className="mt-4 space-y-2 border-0 p-0">
+                  <legend className="sr-only">选择配送点</legend>
+                  <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-100 bg-white px-3 py-2.5 text-sm hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      name="dp-pick"
+                      className="mt-1"
+                      checked={dpPick === '__nomatch__'}
+                      onChange={() => setDpPick('__nomatch__')}
+                      disabled={dpModalSubmitting}
+                    />
+                    <span>
+                      <span className="font-medium text-gray-900">
+                        匹配不成功，按原地址配送
+                      </span>
+                      <span className="mt-0.5 block text-xs text-gray-600">
+                        不修改顾客地址，仅在订单上留痕
+                      </span>
+                    </span>
+                  </label>
+                  {deliveryPointRows.map((p) => {
+                    const inactive = p.data.isActive === false;
+                    const code = (p.data.code ?? '').trim();
+                    const label =
+                      (p.data.shortName ?? p.data.name ?? '').trim() || p.id;
+                    return (
+                      <label
+                        key={p.id}
+                        className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-100 bg-white px-3 py-2.5 text-sm hover:bg-gray-50"
+                      >
+                        <input
+                          type="radio"
+                          name="dp-pick"
+                          className="mt-1"
+                          checked={dpPick === p.id}
+                          onChange={() => setDpPick(p.id)}
+                          disabled={dpModalSubmitting}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="font-medium text-gray-900">
+                            {code ? `[${code}] ${label}` : label}
+                            {inactive ? (
+                              <span className="ml-1 text-xs font-normal text-amber-800">
+                                （已停用）
+                              </span>
+                            ) : null}
+                          </span>
+                          {p.data.detailAddress?.trim() ? (
+                            <span className="mt-0.5 block text-xs text-gray-600">
+                              {p.data.detailAddress.trim()}
+                            </span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              )}
+
+              <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+                <button
+                  type="button"
+                  className="inline-flex h-11 flex-1 min-w-[8rem] items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white disabled:bg-gray-300"
+                  disabled={
+                    dpModalSubmitting || dpModalLoading || !dpPick
+                  }
+                  onClick={() => void submitDeliveryPointPick()}
+                >
+                  {dpModalSubmitting ? '提交中…' : '确定'}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-4 text-sm font-medium text-gray-800 disabled:opacity-50"
+                  disabled={dpModalSubmitting}
+                  onClick={() => setDpModalOpen(false)}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap gap-2 pt-2">
           <Link
