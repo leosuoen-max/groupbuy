@@ -4,34 +4,41 @@ import type { ProductLibraryRow } from '../../lib/productLibraryService';
 type Props = {
   items: ProductLibraryRow[];
   kindFilter: 'product' | 'bundle_scheme';
+  value: string;
+  onChangeValue: (next: string) => void;
+  onPickRow: (row: ProductLibraryRow) => void;
   disabled?: boolean;
-  onPick: (row: ProductLibraryRow) => void;
+  placeholder?: string;
+  inputClassName: string;
+  /** 供校验滚动/聚焦（如 `validation-scheme-dup:…`） */
+  inputId?: string;
   className?: string;
 };
 
-export function ProductLibraryPicker({
+/** 在名称输入框内输入即筛选商品库，下拉点选套用 */
+export function ProductLibraryCombobox({
   items,
   kindFilter,
+  value,
+  onChangeValue,
+  onPickRow,
   disabled,
-  onPick,
+  placeholder = '名称',
+  inputClassName,
+  inputId,
   className = '',
 }: Props) {
-  const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
     const pool = items.filter((r) => r.data.kind === kindFilter);
-    const s = q.trim().toLowerCase();
+    const s = value.trim().toLowerCase();
     if (!s) return pool.slice(0, 40);
     return pool
-      .filter(
-        (r) =>
-          r.data.name.toLowerCase().includes(s) ||
-          (r.data.note && r.data.note.toLowerCase().includes(s))
-      )
+      .filter((r) => r.data.name.toLowerCase().includes(s))
       .slice(0, 60);
-  }, [items, kindFilter, q]);
+  }, [items, kindFilter, value]);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -41,21 +48,25 @@ export function ProductLibraryPicker({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  const showList = open && (filtered.length > 0 || value.trim().length > 0);
+
   return (
     <div ref={rootRef} className={`relative ${className}`}>
       <input
+        id={inputId}
         type="text"
         disabled={disabled}
-        className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-800 placeholder:text-gray-400"
-        placeholder="从商品库按名称搜索并套用…"
-        value={q}
+        className={inputClassName}
+        placeholder={placeholder}
+        value={value}
         onChange={(e) => {
-          setQ(e.target.value);
+          onChangeValue(e.target.value);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        autoComplete="off"
       />
-      {open && filtered.length > 0 ? (
+      {showList ? (
         <ul className="absolute z-30 mt-0.5 max-h-52 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 text-xs shadow-lg">
           {filtered.map((r) => (
             <li key={r.id}>
@@ -64,8 +75,7 @@ export function ProductLibraryPicker({
                 className="flex w-full items-start gap-2 px-2 py-1.5 text-left hover:bg-indigo-50"
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  onPick(r);
-                  setQ('');
+                  onPickRow(r);
                   setOpen(false);
                 }}
               >
@@ -94,12 +104,12 @@ export function ProductLibraryPicker({
               </button>
             </li>
           ))}
+          {filtered.length === 0 && value.trim() ? (
+            <li className="px-2 py-2 text-[11px] text-gray-500">
+              无匹配商品名，可直接使用当前输入；发布后会写入商品库。
+            </li>
+          ) : null}
         </ul>
-      ) : null}
-      {open && q.trim() && filtered.length === 0 ? (
-        <div className="absolute z-30 mt-0.5 w-full rounded-lg border border-gray-100 bg-white px-2 py-2 text-[11px] text-gray-500 shadow">
-          无匹配项，可手动填写或到「产品库」页添加。
-        </div>
       ) : null}
     </div>
   );

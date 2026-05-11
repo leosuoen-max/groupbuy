@@ -26,11 +26,12 @@ import {
   type CardTemplateRow,
 } from '../../lib/cardService';
 import {
+  dedupeProductLibraryByShop,
   listProductLibraryByShop,
-  upsertProductLibraryItem,
+  syncPublishedProjectToProductLibrary,
   type ProductLibraryRow,
 } from '../../lib/productLibraryService';
-import { ProductLibraryPicker } from '../../components/merchant/ProductLibraryPicker';
+import { ProductLibraryCombobox } from '../../components/merchant/ProductLibraryCombobox';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
 import {
   DescriptionLineEditor,
@@ -1311,7 +1312,24 @@ export default function ProjectEdit() {
       }
       if (draftStorageKey) sessionStorage.removeItem(draftStorageKey);
       setStatus('published');
-      setMsg('已发布（顾客端读 Firestore 将在下一步接上）');
+      let pubMsg = '已发布（顾客端读 Firestore 将在下一步接上）';
+      if (shopRow?.id) {
+        try {
+          await syncPublishedProjectToProductLibrary(
+            shopRow.id,
+            shopRow.data.ownerId,
+            normalizedProducts,
+            normalizedBundleTools
+          );
+          await dedupeProductLibraryByShop(shopRow.id);
+          void refreshLibrary();
+          pubMsg =
+            '已发布；商品库已自动同步当前上架商品与套餐方案（同名覆盖，无重名）';
+        } catch {
+          pubMsg = '已发布；商品库自动同步失败，请稍后在「商品库」页检查';
+        }
+      }
+      setMsg(pubMsg);
     } catch (e) {
       if (e instanceof FirebaseError) {
         setMsg(`发布失败（${e.code}）：${e.message}`);
@@ -1941,11 +1959,19 @@ export default function ProjectEdit() {
                     </button>
                   </div>
                 </div>
-                <div className="mb-2 space-y-1">
-                  <ProductLibraryPicker
+                <label className="mb-2 block text-xs text-gray-700">
+                  名称（输入即筛选商品库，点选套用）
+                  <ProductLibraryCombobox
+                    className="mt-1"
                     items={libraryRows}
                     kindFilter="product"
-                    onPick={(row) => {
+                    value={p.name}
+                    onChangeValue={(v) =>
+                      setProducts((prev) =>
+                        prev.map((x) => (x.id === p.id ? { ...x, name: v } : x))
+                      )
+                    }
+                    onPickRow={(row) => {
                       setProducts((prev) =>
                         prev.map((x) =>
                           x.id === p.id
@@ -1962,54 +1988,10 @@ export default function ProjectEdit() {
                       );
                       setMsg('已从商品库套用');
                     }}
+                    inputClassName={input}
+                    placeholder="名称"
                   />
-                  <button
-                    type="button"
-                    className="text-xs font-medium text-indigo-600"
-                    onClick={() => {
-                      if (!shopRow || !user) return;
-                      if (!p.name.trim()) {
-                        setMsg('请先填写商品名称再存入商品库');
-                        return;
-                      }
-                      void upsertProductLibraryItem(
-                        shopRow.id,
-                        shopRow.data.ownerId,
-                        {
-                          name: p.name,
-                          imageUrl: p.imageUrl,
-                          purchaseCost: p.purchaseCost,
-                          retailPrice: p.price,
-                          note: p.description,
-                          kind: 'product',
-                        }
-                      )
-                        .then(() => {
-                          setMsg('已同步到商品库（同名会合并）');
-                          void refreshLibrary();
-                        })
-                        .catch((err: unknown) =>
-                          setMsg(
-                            err instanceof Error ? err.message : '写入商品库失败'
-                          )
-                        );
-                    }}
-                  >
-                    将本行存入商品库
-                  </button>
-                </div>
-                <input
-                  className={input}
-                  placeholder="名称"
-                  value={p.name}
-                  onChange={(e) =>
-                    setProducts((prev) =>
-                      prev.map((x) =>
-                        x.id === p.id ? { ...x, name: e.target.value } : x
-                      )
-                    )
-                  }
-                />
+                </label>
                 <textarea
                   className={`${input} mt-2 min-h-[3rem]`}
                   placeholder="说明文字（显示在名称下方）"
@@ -2730,117 +2712,78 @@ export default function ProjectEdit() {
                     <div className="space-y-2">
                       {tool.schemes.map((sch) => (
                         <div key={sch.id} className="rounded border border-gray-100 bg-gray-50/50 p-2">
-                          <div className="mb-2 space-y-1">
-                            <ProductLibraryPicker
-                              items={libraryRows}
-                              kindFilter="bundle_scheme"
-                              onPick={(row) => {
-                                const picked = normalizeBundleSchemeDisplayName(
-                                  row.data.name ?? ''
-                                );
-                                if (picked) {
-                                  const dup = tool.schemes.some(
-                                    (s) =>
-                                      s.id !== sch.id &&
-                                      normalizeBundleSchemeDisplayName(s.name ?? '') ===
-                                        picked
-                                  );
-                                  if (dup) {
-                                    setMsg(
-                                      `该套餐内已有同名方案「${picked}」，请先改名或删除重复项后再套用`
-                                    );
-                                    return;
-                                  }
-                                }
-                                setBundleTools((prev) =>
-                                  prev.map((x) =>
-                                    x.id === tool.id
-                                      ? {
-                                          ...x,
-                                          schemes: x.schemes.map((s) =>
-                                            s.id === sch.id
-                                              ? {
-                                                  ...s,
-                                                  name: row.data.name,
-                                                  price: row.data.retailPrice,
-                                                  purchaseCost: row.data.purchaseCost,
-                                                  note: row.data.note,
-                                                }
-                                              : s
-                                          ),
-                                        }
-                                      : x
-                                  )
-                                );
-                                setMsg('已从商品库套用方案');
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="text-xs font-medium text-indigo-600"
-                              onClick={() => {
-                                if (!shopRow || !user) return;
-                                if (!sch.name.trim()) {
-                                  setMsg('请先填写方案名称再存入商品库');
-                                  return;
-                                }
-                                void upsertProductLibraryItem(
-                                  shopRow.id,
-                                  shopRow.data.ownerId,
-                                  {
-                                    name: sch.name,
-                                    retailPrice: sch.price,
-                                    purchaseCost: sch.purchaseCost,
-                                    note: sch.note,
-                                    kind: 'bundle_scheme',
-                                  }
-                                )
-                                  .then(() => {
-                                    setMsg('已同步套餐方案到商品库（同名会合并）');
-                                    void refreshLibrary();
-                                  })
-                                  .catch((err: unknown) =>
-                                    setMsg(
-                                      err instanceof Error
-                                        ? err.message
-                                        : '写入商品库失败'
-                                    )
-                                  );
-                              }}
-                            >
-                              将本方案存入商品库
-                            </button>
-                          </div>
                           <div className="flex flex-wrap items-end gap-x-2 gap-y-2">
                             <label className="flex min-w-[10rem] flex-[2] basis-[min(100%,18rem)] flex-col gap-0.5">
-                              <span className="text-[10px] text-gray-500">方案名称</span>
-                              <input
-                                id={`validation-scheme-dup:${sch.id}`}
-                                className={`rounded border bg-white px-2 py-1.5 text-xs ${
-                                  validationHighlightKey === `scheme-dup:${sch.id}`
-                                    ? 'border-red-500 ring-2 ring-red-200'
-                                    : 'border-gray-200'
-                                }`}
-                                value={sch.name}
-                                placeholder="如：双人套餐"
-                                onChange={(e) => {
-                                  setValidationHighlightKey(null);
-                                  setBundleTools((prev) =>
-                                    prev.map((x) =>
-                                      x.id === tool.id
-                                        ? {
-                                            ...x,
-                                            schemes: x.schemes.map((s) =>
-                                              s.id === sch.id
-                                                ? { ...s, name: e.target.value }
-                                                : s
-                                            ),
-                                          }
-                                        : x
-                                    )
-                                  );
-                                }}
-                              />
+                              <span className="text-[10px] text-gray-500">
+                                方案名称（输入即筛选商品库，点选套用）
+                              </span>
+                              <ProductLibraryCombobox
+                                  inputId={`validation-scheme-dup:${sch.id}`}
+                                  items={libraryRows}
+                                  kindFilter="bundle_scheme"
+                                  value={sch.name}
+                                  onChangeValue={(v) => {
+                                    setValidationHighlightKey(null);
+                                    setBundleTools((prev) =>
+                                      prev.map((x) =>
+                                        x.id === tool.id
+                                          ? {
+                                              ...x,
+                                              schemes: x.schemes.map((s) =>
+                                                s.id === sch.id ? { ...s, name: v } : s
+                                              ),
+                                            }
+                                          : x
+                                      )
+                                    );
+                                  }}
+                                  onPickRow={(row) => {
+                                    const picked = normalizeBundleSchemeDisplayName(
+                                      row.data.name ?? ''
+                                    );
+                                    if (picked) {
+                                      const dup = tool.schemes.some(
+                                        (s) =>
+                                          s.id !== sch.id &&
+                                          normalizeBundleSchemeDisplayName(s.name ?? '') ===
+                                            picked
+                                      );
+                                      if (dup) {
+                                        setMsg(
+                                          `该套餐内已有同名方案「${picked}」，请先改名或删除重复项后再套用`
+                                        );
+                                        return;
+                                      }
+                                    }
+                                    setBundleTools((prev) =>
+                                      prev.map((x) =>
+                                        x.id === tool.id
+                                          ? {
+                                              ...x,
+                                              schemes: x.schemes.map((s) =>
+                                                s.id === sch.id
+                                                  ? {
+                                                      ...s,
+                                                      name: row.data.name,
+                                                      price: row.data.retailPrice,
+                                                      purchaseCost: row.data.purchaseCost,
+                                                      note: row.data.note,
+                                                    }
+                                                  : s
+                                              ),
+                                            }
+                                          : x
+                                      )
+                                    );
+                                    setMsg('已从商品库套用方案');
+                                  }}
+                                  inputClassName={`w-full rounded border bg-white px-2 py-1.5 text-xs ${
+                                    validationHighlightKey === `scheme-dup:${sch.id}`
+                                      ? 'border-red-500 ring-2 ring-red-200'
+                                      : 'border-gray-200'
+                                  }`}
+                                  placeholder="如：双人套餐"
+                                />
                             </label>
                             <label className="flex w-full basis-full flex-col gap-0.5">
                               <span className="text-[10px] text-gray-500">备注（可选）</span>

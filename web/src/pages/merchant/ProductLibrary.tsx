@@ -4,6 +4,7 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import {
+  dedupeProductLibraryByShop,
   deleteProductLibraryItem,
   listProductLibraryByShop,
   upsertProductLibraryItem,
@@ -34,6 +35,7 @@ export default function ProductLibrary() {
   const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async (shopId: string) => {
+    await dedupeProductLibraryByShop(shopId);
     const list = await listProductLibraryByShop(shopId);
     setRows(list);
   }, []);
@@ -287,7 +289,7 @@ export default function ProductLibrary() {
         <p className="text-sm text-gray-500">加载中…</p>
       ) : rows.length === 0 ? (
         <p className="text-sm text-gray-500">
-          暂无记录。可在上方添加，或在编辑项目时点击「将本行存入商品库」。
+          暂无记录。可在上方添加；编辑项目并<strong>发布</strong>后，当前商品与套餐方案会自动同步到商品库（同名覆盖）。
         </p>
       ) : (
         <ul className="space-y-2">
