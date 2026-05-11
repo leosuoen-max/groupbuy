@@ -39,9 +39,12 @@ export default function HomeLinks() {
         const shops = await listShopsByOwner(user.uid);
         const sorted = sortShopsByCreatedAt(shops);
         const slugs = sorted.map((s) => s.data.slug).filter(Boolean);
+        const projectLists = await Promise.all(
+          sorted.map((s) => listProjectsByShopId(s.id))
+        );
         const entries: CustomerEntry[] = [];
-        for (const s of sorted) {
-          const projects = await listProjectsByShopId(s.id);
+        sorted.forEach((s, i) => {
+          const projects = projectLists[i] ?? [];
           for (const p of projects) {
             if (p.data.status === 'draft') continue;
             entries.push({
@@ -51,7 +54,7 @@ export default function HomeLinks() {
               projectTitle: p.data.title?.trim() || p.id,
             });
           }
-        }
+        });
         if (!cancelled) {
           setShopSlugs(slugs);
           setCustomerEntries(entries);

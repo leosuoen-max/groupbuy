@@ -38,6 +38,9 @@ import {
   type DescriptionLineEditorHandle,
 } from '../../components/merchant/DescriptionLineEditor';
 
+/** 本地草稿写入 sessionStorage 的防抖间隔（毫秒），减轻主线程 JSON 序列化压力 */
+const PROJECT_EDIT_DRAFT_DEBOUNCE_MS = 400;
+
 function toDatetimeLocalValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -399,6 +402,9 @@ export default function ProjectEdit() {
     selectedDpIds: string[];
   };
 
+  /** 供防抖落盘与 pagehide 时立即写入，避免主线程被频繁 JSON.stringify 阻塞 */
+  const draftPersistRef = useRef<{ key: string; payload: ProjectEditDraft } | null>(null);
+
   const DRAFT_TTL_MS = 30 * 60 * 1000;
 
   const reindexProducts = useCallback(
@@ -664,7 +670,10 @@ export default function ProjectEdit() {
   }, [authLoading, user, slug, isNew, navigate, projectId, refreshFromServer]);
 
   useEffect(() => {
-    if (!draftStorageKey || booting || !draftHydrated) return;
+    if (!draftStorageKey || booting || !draftHydrated) {
+      draftPersistRef.current = null;
+      return;
+    }
     const payload: ProjectEditDraft = {
       savedAt: Date.now(),
       title,
@@ -675,7 +684,15 @@ export default function ProjectEdit() {
       bundleTools,
       selectedDpIds,
     };
-    sessionStorage.setItem(draftStorageKey, JSON.stringify(payload));
+    draftPersistRef.current = { key: draftStorageKey, payload };
+    const timer = window.setTimeout(() => {
+      try {
+        sessionStorage.setItem(draftStorageKey, JSON.stringify(payload));
+      } catch {
+        /* 配额或隐私模式等：忽略 */
+      }
+    }, PROJECT_EDIT_DRAFT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
   }, [
     draftStorageKey,
     booting,
@@ -688,6 +705,40 @@ export default function ProjectEdit() {
     bundleTools,
     selectedDpIds,
   ]);
+
+  useEffect(() => {
+    const flush = () => {
+      const cur = draftPersistRef.current;
+      if (!cur) return;
+      try {
+        sessionStorage.setItem(cur.key, JSON.stringify(cur.payload));
+      } catch {
+        /* ignore */
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      const cur = draftPersistRef.current;
+      if (!cur) return;
+      try {
+        sessionStorage.setItem(cur.key, JSON.stringify(cur.payload));
+      } catch {
+        /* ignore */
+      }
+    },
+    []
+  );
 
   const activeDeliveryIds = useMemo(() => {
     const set = new Set<string>();

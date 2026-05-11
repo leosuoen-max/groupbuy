@@ -13,6 +13,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { compressImageFileForUpload } from './imageCompress';
 import { getDb, getStorageClient } from './firebase';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
@@ -141,12 +142,14 @@ export async function uploadProjectAsset(
   if (scope !== 'description' && !file.type.startsWith('image/')) {
     throw new Error('请上传图片文件');
   }
-  const rawExt = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const toUpload =
+    file.type.startsWith('image/') ? await compressImageFileForUpload(file) : file;
+  const rawExt = toUpload.name.split('.').pop()?.toLowerCase() ?? '';
   const safeExt = rawExt && /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
   const name = `${globalThis.crypto.randomUUID()}.${safeExt}`;
   const path = `projects/${ownerId}/${scope}/${name}`;
   const storageRef = ref(getStorageClient(), path);
-  const contentType = file.type || 'application/octet-stream';
-  await uploadBytes(storageRef, file, { contentType });
+  const contentType = toUpload.type || 'application/octet-stream';
+  await uploadBytes(storageRef, toUpload, { contentType });
   return getDownloadURL(storageRef);
 }
