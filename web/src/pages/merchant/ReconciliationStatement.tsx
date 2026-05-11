@@ -35,13 +35,17 @@ import {
 import { getProject } from '../../lib/projectService';
 import type { ProjectDoc } from '../../types/firestore';
 import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
-import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
+import {
+  listOrdersByShopId,
+  merchantAssignManualDeliveryMatch,
+  type OrderRow,
+} from '../../lib/orderService';
 import {
   listDeliveryPointsByOwnerId,
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
 import { getShopBySlug } from '../../lib/shopService';
-import type { OrderLineDoc, OrderStatus } from '../../types/firestore';
+import type { OrderDoc, OrderLineDoc, OrderStatus } from '../../types/firestore';
 
 function statusLabel(s: OrderStatus): string {
   if (s === 'unpaid') return '待付款';
@@ -82,6 +86,33 @@ function splitDpLabel(label: string): { code: string; name: string } {
   return { code: '', name: raw };
 }
 
+/** 「其他地址」订单合并到同一分组用的稳定 key */
+const SECTION_MANUAL_OTHER = '__manual_other_address__';
+
+function stripManualDispatchPrefix(text: string): string {
+  return text
+    .replace(/^其他[（(]将按地址手动匹配[）)]\s*[:：]\s*/u, '')
+    .trim();
+}
+
+/** 对账单第一列：手动匹配订单只展示顾客填写的地址 */
+function manualOrderAddressDisplay(o: OrderDoc): string {
+  const addr = o.customerAddress?.trim();
+  if (addr) return addr;
+  const snap = o.deliveryPointSnapshot?.name?.trim() ?? '';
+  const stripped = stripManualDispatchPrefix(snap);
+  return stripped || snap || '—';
+}
+
+type ReconciliationTableItem = {
+  row: OrderRow;
+  groups: ReturnType<typeof listOrderPaymentGroups>;
+  dp: string;
+  dpDisplay: string;
+  sectionKey: string;
+  scopedAmt: number;
+};
+
 export default function ReconciliationStatement() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const slug = decodeURIComponent(shopSlug);
@@ -98,6 +129,13 @@ export default function ReconciliationStatement() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [copyOk, setCopyOk] = useState(false);
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualModalItems, setManualModalItems] = useState<
+    ReconciliationTableItem[]
+  >([]);
+  const [manualModalBusyId, setManualModalBusyId] = useState<string | null>(null);
+  const [manualModalErr, setManualModalErr] = useState<string | null>(null);
+  const [manualDpChoice, setManualDpChoice] = useState<Record<string, string>>({});
   const [bucketSelection, setBucketSelection] = useState<BucketSelection>(
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
@@ -255,26 +293,28 @@ export default function ReconciliationStatement() {
       : '全部项目';
 
   const tableRows = useMemo(() => {
-    type Row = {
-      row: OrderRow;
-      groups: ReturnType<typeof listOrderPaymentGroups>;
-      dp: string;
-      scopedAmt: number;
-    };
-    const acc: Row[] = [];
+    const acc: ReconciliationTableItem[] = [];
     for (const r of scopedOrders) {
       if (r.data.status === 'cancelled') continue;
       const groups = listOrderPaymentGroups(r.data);
       if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
+      const dp = deliveryPointReconciliationLabel(r.data, deliveryPointLookup);
+      const manual = r.data.isManualMatch === true;
+      const sectionKey = manual ? SECTION_MANUAL_OTHER : dp;
+      const dpDisplay = manual
+        ? manualOrderAddressDisplay(r.data)
+        : dp;
       acc.push({
         row: r,
         groups,
-        dp: deliveryPointReconciliationLabel(r.data, deliveryPointLookup),
+        dp,
+        dpDisplay,
+        sectionKey,
         scopedAmt: scopedGroupAmount(groups, bucketSelection),
       });
     }
     acc.sort((a, b) => {
-      const c = a.dp.localeCompare(b.dp, 'zh-CN');
+      const c = a.sectionKey.localeCompare(b.sectionKey, 'zh-CN');
       if (c !== 0) return c;
       const ta = a.row.data.createdAt?.toMillis?.() ?? 0;
       const tb = b.row.data.createdAt?.toMillis?.() ?? 0;
@@ -284,12 +324,20 @@ export default function ReconciliationStatement() {
   }, [scopedOrders, bucketSelection, deliveryPointLookup]);
 
   const sectionsByDp = useMemo(() => {
-    const m = new Map<string, typeof tableRows>();
+    const m = new Map<string, ReconciliationTableItem[]>();
     for (const item of tableRows) {
-      if (!m.has(item.dp)) m.set(item.dp, []);
-      m.get(item.dp)!.push(item);
+      if (!m.has(item.sectionKey)) m.set(item.sectionKey, []);
+      m.get(item.sectionKey)!.push(item);
     }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'));
+    return [...m.entries()].sort((a, b) => {
+      if (a[0] === SECTION_MANUAL_OTHER && b[0] !== SECTION_MANUAL_OTHER) {
+        return 1;
+      }
+      if (b[0] === SECTION_MANUAL_OTHER && a[0] !== SECTION_MANUAL_OTHER) {
+        return -1;
+      }
+      return a[0].localeCompare(b[0], 'zh-CN');
+    });
   }, [tableRows]);
 
   const handleCopy = async () => {
@@ -364,6 +412,44 @@ export default function ReconciliationStatement() {
   }
 
   const baseDash = `/dashboard/${encodeURIComponent(slug)}`;
+
+  const activeDeliveryPoints = useMemo(
+    () => deliveryPoints.filter((p) => p.data.isActive !== false),
+    [deliveryPoints]
+  );
+
+  const openManualMatchModal = useCallback((items: ReconciliationTableItem[]) => {
+    setManualModalErr(null);
+    setManualDpChoice({});
+    setManualModalItems(items);
+    setManualModalOpen(true);
+  }, []);
+
+  const runManualAssign = useCallback(
+    async (item: ReconciliationTableItem, deliveryPointId: string | null) => {
+      if (!user) return;
+      setManualModalErr(null);
+      setManualModalBusyId(item.row.id);
+      try {
+        await merchantAssignManualDeliveryMatch({
+          orderFirestoreId: item.row.id,
+          actorUserId: user.uid,
+          deliveryPointId,
+        });
+        await refresh();
+        setManualModalItems((prev) => {
+          const next = prev.filter((x) => x.row.id !== item.row.id);
+          if (next.length === 0) setManualModalOpen(false);
+          return next;
+        });
+      } catch (e) {
+        setManualModalErr(e instanceof Error ? e.message : '操作失败');
+      } finally {
+        setManualModalBusyId(null);
+      }
+    },
+    [user, refresh]
+  );
 
   if (authLoading || (user && loading)) {
     return (
@@ -786,23 +872,36 @@ export default function ReconciliationStatement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {sectionsByDp.map(([dpLabel, items]) => (
-                <Fragment key={dpLabel}>
-                  <tr className="bg-gray-100/90">
-                    <td colSpan={8} className="px-2 py-2 text-xs font-semibold leading-snug text-gray-800">
-                      {(() => {
-                        const { code, name } = splitDpLabel(dpLabel);
-                        if (!code) return <span className="break-words">{name}</span>;
-                        return (
-                          <span className="inline-flex flex-col leading-tight">
-                            <span className="font-extrabold text-gray-900">{code}</span>
-                            <span className="break-words">{name}</span>
+              {sectionsByDp.map(([sectionKey, items]) => (
+                <Fragment key={sectionKey}>
+                  {sectionKey === SECTION_MANUAL_OTHER ? (
+                    <tr className="bg-gray-50/90">
+                      <td colSpan={8} className="px-2 py-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-2">
+                          <span className="text-xs font-semibold text-gray-800">
+                            其他地址
                           </span>
-                        );
-                      })()}
-                    </td>
-                  </tr>
-                  {items.map(({ row, groups, scopedAmt, dp }) => {
+                          <button
+                            type="button"
+                            className="rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-xs font-medium text-indigo-800 shadow-sm hover:bg-indigo-50"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openManualMatchModal(items);
+                            }}
+                          >
+                            手动匹配
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr aria-hidden className="bg-white">
+                      <td colSpan={8} className="p-0">
+                        <div className="h-px w-full bg-gray-200" />
+                      </td>
+                    </tr>
+                  )}
+                  {items.map(({ row, groups, scopedAmt, dpDisplay }) => {
                     const o = row.data;
                     const d = o.createdAt?.toDate?.();
                     const pad = (n: number) => String(n).padStart(2, '0');
@@ -817,7 +916,7 @@ export default function ReconciliationStatement() {
                     const detailUrl = `${baseDash}/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`;
                     const missingProof = orderNeedsMissingProofLabel(o);
                     const flag = proofRiskDisplayTone(o);
-                    const dpParts = splitDpLabel(dp);
+                    const dpParts = splitDpLabel(dpDisplay);
                     return (
                       <tr
                         key={row.id}
@@ -832,7 +931,7 @@ export default function ReconciliationStatement() {
                           }
                         }}
                       >
-                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={dp}>
+                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={dpDisplay}>
                           {dpParts.code ? (
                             <span className="inline-flex flex-col">
                               <span className="font-extrabold text-gray-900">{dpParts.code}</span>
@@ -989,6 +1088,113 @@ export default function ReconciliationStatement() {
           </table>
         </div>
       )}
+
+      {manualModalOpen ? (
+        <div
+          className="fixed inset-0 z-[120] flex items-end justify-center bg-black/45 sm:items-center sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="manual-match-title"
+          onClick={() => setManualModalOpen(false)}
+        >
+          <div
+            className="max-h-[min(85vh,560px)] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 shadow-2xl sm:rounded-2xl sm:pb-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-gray-100 pb-3">
+              <h3 id="manual-match-title" className="text-base font-semibold text-gray-900">
+                手动匹配配送点
+              </h3>
+              <button
+                type="button"
+                className="inline-flex h-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                aria-label="关闭"
+                onClick={() => setManualModalOpen(false)}
+              >
+                <span className="text-xl leading-none" aria-hidden>
+                  ×
+                </span>
+              </button>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-gray-600">
+              下列为「其他地址」订单。可选中配送点后关联；若无法归类到配送点，请选择「按地址配送」。
+            </p>
+            {manualModalErr ? (
+              <p className="mt-2 rounded-lg bg-red-50 px-2 py-1.5 text-sm text-red-700">
+                {manualModalErr}
+              </p>
+            ) : null}
+            <ul className="mt-4 space-y-3">
+              {manualModalItems.map((item) => {
+                const o = item.row.data;
+                const busy = manualModalBusyId === item.row.id;
+                return (
+                  <li
+                    key={item.row.id}
+                    className="rounded-xl border border-gray-100 bg-gray-50/90 p-3"
+                  >
+                    <div className="text-sm font-medium text-gray-900">
+                      #{o.orderNumber} · {o.customerName?.trim() || '—'}
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-xs text-gray-700">
+                      {manualOrderAddressDisplay(o)}
+                    </p>
+                    <label className="mt-2 block text-xs text-gray-600">
+                      关联配送点
+                      <select
+                        className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm text-gray-900"
+                        value={manualDpChoice[item.row.id] ?? ''}
+                        disabled={busy}
+                        onChange={(e) =>
+                          setManualDpChoice((prev) => ({
+                            ...prev,
+                            [item.row.id]: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">请选择配送点…</option>
+                        {activeDeliveryPoints.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {(p.data.code ?? '').trim()
+                              ? `[${(p.data.code ?? '').trim()}] `
+                              : ''}
+                            {(p.data.shortName ?? p.data.name ?? '').trim() || p.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
+                        disabled={busy}
+                        onClick={() => {
+                          const v = manualDpChoice[item.row.id]?.trim();
+                          if (!v) {
+                            setManualModalErr('请先在下拉框中选择配送点');
+                            return;
+                          }
+                          void runManualAssign(item, v);
+                        }}
+                      >
+                        {busy ? '处理中…' : '关联所选配送点'}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
+                        disabled={busy}
+                        onClick={() => void runManualAssign(item, null)}
+                      >
+                        匹配不成功，按地址配送
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-6 flex flex-wrap gap-2">
         <Link

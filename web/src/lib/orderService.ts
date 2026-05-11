@@ -1088,6 +1088,84 @@ async function assertMerchantCanManageOrder(
 }
 
 /**
+ * 对账单「其他地址」：商户把订单关联到已有配送点，或确认继续按详细地址配送（仅留痕）。
+ */
+export async function merchantAssignManualDeliveryMatch(input: {
+  orderFirestoreId: string;
+  actorUserId: string;
+  /** 配送点文档 id；null 表示不匹配配送点，继续按地址配送 */
+  deliveryPointId: string | null;
+}): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const snap = await getDoc(orderRef);
+  if (!snap.exists()) throw new Error('订单不存在');
+  let order = snap.data() as OrderDoc;
+  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
+
+  await assertMerchantCanManageOrder(input.actorUserId, order);
+
+  if (!order.isManualMatch) {
+    throw new Error('该订单已不是「其他地址」类型，无需在此匹配');
+  }
+
+  const hist = [...(order.statusHistory ?? [])];
+
+  if (!input.deliveryPointId?.trim()) {
+    hist.push({
+      action: 'merchant_manual_dispatch_by_address',
+      timestamp: Timestamp.now(),
+      userId: input.actorUserId,
+    });
+    await updateDoc(orderRef, {
+      statusHistory: hist,
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  }
+
+  const dpId = input.deliveryPointId.trim();
+  const shopRow = await getShopById(order.shopId);
+  if (!shopRow) throw new Error('店铺不存在');
+  const dpRows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+    fallbackShopId: order.shopId,
+  });
+  const dpRow = dpRows.find((r) => r.id === dpId);
+  if (!dpRow) throw new Error('配送点不存在');
+
+  const projectRow = await getProject(order.projectId);
+  if (!projectRow) throw new Error('项目不存在');
+  const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
+  if (allowed.size > 0 && !allowed.has(dpId)) {
+    throw new Error('该配送点不属于当前团购项目的可选范围');
+  }
+
+  const docDp = dpRow.data;
+  const shortName = (docDp.shortName ?? docDp.name ?? '').trim() || '配送点';
+  const code = (docDp.code ?? '').trim();
+  const snapshotName = code ? `[${code}] ${shortName}` : shortName;
+  const detailPart = docDp.detailAddress?.trim();
+
+  hist.push({
+    action: 'merchant_assigned_delivery_point',
+    timestamp: Timestamp.now(),
+    userId: input.actorUserId,
+    note: dpId,
+  });
+
+  await updateDoc(orderRef, {
+    deliveryPointId: dpId,
+    isManualMatch: false,
+    deliveryPointSnapshot: {
+      name: snapshotName,
+      ...(detailPart ? { detail: detailPart } : {}),
+    },
+    statusHistory: hist,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/**
  * 商户确认「首笔」收款（顾客一次提交、多张凭证仍算首笔）：只入账首单小计对应金额。
  * 若仍有未确认的加购档，订单进入 partial_paid，加购须另行逐笔/按批确认，避免整单误确认。
  */
