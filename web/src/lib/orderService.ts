@@ -13,6 +13,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import { compressImageFileForUpload } from './imageCompress';
 import {
   appendBatchHasCustomerUpload,
   canMerchantConfirmAppendBatchByScreenshots,
@@ -460,9 +461,14 @@ export async function customerUploadPaymentScreenshot(input: {
   customerKey: string;
   file: File;
 }): Promise<void> {
+  const mimeIn = input.file.type || '';
+  if (!mimeIn.startsWith('image/')) throw new Error('请上传图片文件');
+
+  let file = await compressImageFileForUpload(input.file);
+
   const maxBytes = 8 * 1024 * 1024;
-  if (input.file.size > maxBytes) throw new Error('图片请勿超过 8MB');
-  const mime = input.file.type || '';
+  if (file.size > maxBytes) throw new Error('图片请勿超过 8MB');
+  const mime = file.type || '';
   if (!mime.startsWith('image/')) throw new Error('请上传图片文件');
 
   const allowUpload: OrderStatus[] = ['unpaid', 'pending', 'partial_paid'];
@@ -489,7 +495,7 @@ export async function customerUploadPaymentScreenshot(input: {
     throw new Error('当前状态不可上传付款截图');
   }
 
-  const md5 = await computeImageFileMd5Hex(input.file);
+  const md5 = await computeImageFileMd5Hex(file);
 
   /** 本单内 MD5 重复：仅打旗标提示风险，不拦截上传 */
   const existingShots = Array.isArray(order.paymentScreenshots)
@@ -528,7 +534,7 @@ export async function customerUploadPaymentScreenshot(input: {
   const url = await uploadOrderPaymentImage({
     shopId: order.shopId,
     orderId: input.orderFirestoreId,
-    file: input.file,
+    file,
   });
 
   const entry: Record<string, unknown> = {

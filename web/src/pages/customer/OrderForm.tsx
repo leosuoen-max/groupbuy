@@ -11,28 +11,12 @@ import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/o
 import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
+import { withTimeout } from '../../lib/withTimeout';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
 
 type Step = 1 | 2 | 3;
 const LOAD_TIMEOUT_MS = 12_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error(`${label}超时，请重试`));
-    }, ms);
-    promise
-      .then((value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((err) => {
-        window.clearTimeout(timer);
-        reject(err);
-      });
-  });
-}
 
 function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
   if (project.status === 'draft') return false;

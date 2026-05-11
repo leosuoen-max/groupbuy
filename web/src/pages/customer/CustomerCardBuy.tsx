@@ -19,7 +19,9 @@ import {
   type CustomerCardRow,
 } from '../../lib/cardService';
 import { sha256HexOfFile } from '../../lib/fileSha256';
+import { compressImageFileForUpload } from '../../lib/imageCompress';
 import { formatMYR } from '../../lib/formatMYR';
+import { withTimeout } from '../../lib/withTimeout';
 import type {
   CardTopupRule,
   CardType,
@@ -33,6 +35,9 @@ type CardBuyProps = {
 
 const inputCls =
   'mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900';
+
+/** 与下单页一致：弱网下 Firestore 久无返回时用超时提示，避免一直停在「加载中」 */
+const LOAD_TIMEOUT_MS = 12_000;
 
 export default function CustomerCardBuy({ mode }: CardBuyProps) {
   const params = useParams<{ shopSlug: string; templateId?: string; cardId?: string }>();
@@ -82,25 +87,37 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const row = await getShopBySlug(slug);
+        const row = await withTimeout(
+          getShopBySlug(slug),
+          LOAD_TIMEOUT_MS,
+          '店铺加载'
+        );
         if (!row) throw new Error('店铺不存在');
         if (cancelled) return;
         setShop(row);
         if (mode === 'purchase') {
           if (!params.templateId) throw new Error('缺少卡模板参数');
-          const t = await getCardTemplate(params.templateId);
+          const t = await withTimeout(
+            getCardTemplate(params.templateId),
+            LOAD_TIMEOUT_MS,
+            '卡模板加载'
+          );
           if (!t) throw new Error('卡模板不存在');
           if (t.data.shopId !== row.id) throw new Error('卡与店铺不匹配');
           if (!cancelled) setTemplate(t);
 
           // 钱包：一人一钱包，若已持有 active 或已存在 pending 请求，引导跳转
           if (t.data.type === 'stored') {
-            const [cards, reqs] = await Promise.all([
-              listCustomerCardsByCustomer(customerKey, row.id),
-              listCardRequestsByCustomer(customerKey, row.id, {
-                status: 'pending',
-              }),
-            ]);
+            const [cards, reqs] = await withTimeout(
+              Promise.all([
+                listCustomerCardsByCustomer(customerKey, row.id),
+                listCardRequestsByCustomer(customerKey, row.id, {
+                  status: 'pending',
+                }),
+              ]),
+              LOAD_TIMEOUT_MS,
+              '购卡资格校验'
+            );
             const activeWallet = cards.find(
               (c) => c.data.templateId === t.id && c.data.status === 'active'
             );
@@ -123,12 +140,16 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
               }
             }
           } else if (t.data.type === 'pass') {
-            const [cards, reqs] = await Promise.all([
-              listCustomerCardsByCustomer(customerKey, row.id),
-              listCardRequestsByCustomer(customerKey, row.id, {
-                status: 'pending',
-              }),
-            ]);
+            const [cards, reqs] = await withTimeout(
+              Promise.all([
+                listCustomerCardsByCustomer(customerKey, row.id),
+                listCardRequestsByCustomer(customerKey, row.id, {
+                  status: 'pending',
+                }),
+              ]),
+              LOAD_TIMEOUT_MS,
+              '购卡资格校验'
+            );
             const pendingPur = reqs.find(
               (r) =>
                 r.data.templateId === t.id && r.data.kind === 'purchase'
@@ -160,18 +181,30 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           }
         } else {
           if (!params.cardId) throw new Error('缺少卡实例参数');
-          const c = await getCustomerCard(params.cardId);
+          const c = await withTimeout(
+            getCustomerCard(params.cardId),
+            LOAD_TIMEOUT_MS,
+            '卡片加载'
+          );
           if (!c) throw new Error('卡不存在');
           if (c.data.customerKey !== customerKey) throw new Error('无权操作他人卡');
           if (c.data.shopId !== row.id) throw new Error('卡与店铺不匹配');
           if (!cancelled) setExistingCard(c);
-          const t = await getCardTemplate(c.data.templateId);
+          const t = await withTimeout(
+            getCardTemplate(c.data.templateId),
+            LOAD_TIMEOUT_MS,
+            '卡模板加载'
+          );
           if (!t) throw new Error('对应卡模板不存在');
           if (!cancelled) setTemplate(t);
           if (resumeRequestId) {
-            const reqs = await listCardRequestsByCustomer(customerKey, row.id, {
-              status: 'pending',
-            });
+            const reqs = await withTimeout(
+              listCardRequestsByCustomer(customerKey, row.id, {
+                status: 'pending',
+              }),
+              LOAD_TIMEOUT_MS,
+              '充值记录加载'
+            );
             const pendingTopup = reqs.find(
               (r) =>
                 r.id === resumeRequestId &&
@@ -277,11 +310,12 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     setUploading(true);
     setMsg(null);
     try {
-      const hex = await sha256HexOfFile(file);
+      const toSend = await compressImageFileForUpload(file);
+      const hex = await sha256HexOfFile(toSend);
       const url = await uploadCardPaymentImage({
         shopId: shop.id,
         requestId,
-        file,
+        file: toSend,
       });
       await appendCardPaymentScreenshotToRequest(requestId, url, {
         contentSha256: hex,
@@ -338,6 +372,9 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     return (
       <PageShell title={mode === 'purchase' ? '购买优惠卡' : '充值'} subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
+        <p className="mt-2 text-xs leading-relaxed text-gray-500">
+          网络较慢时可能需要十余秒。若一直停留在此页，请检查网络或下拉刷新；多次失败可稍后再试。
+        </p>
       </PageShell>
     );
   }

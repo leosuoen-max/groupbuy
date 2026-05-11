@@ -712,6 +712,13 @@ export default function MerchantOrderDetail() {
           {msg}
         </p>
       ) : null}
+      {busy === 'confirm' ||
+      busy === 'confirm_all' ||
+      busy === 'confirm_append_single' ? (
+        <p className="mb-3 text-xs leading-relaxed text-gray-600">
+          正在向服务器写入确认结果，弱网下可能需要十余秒，请勿关闭页面或重复点击。
+        </p>
+      ) : null}
 
       <div className="space-y-4 text-sm text-gray-800">
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
