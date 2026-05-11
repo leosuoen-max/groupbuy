@@ -981,7 +981,13 @@ export async function customerAppendLinesToOrder(input: {
 }
 
 /** 商户端：按店铺拉取订单（客户端按时间倒序，避免复合索引） */
-export async function listOrdersByShopId(shopId: string): Promise<OrderRow[]> {
+export async function listOrdersByShopId(
+  shopId: string,
+  options?: { bypassCache?: boolean }
+): Promise<OrderRow[]> {
+  if (options?.bypassCache) {
+    shopOrdersCache.delete(shopId);
+  }
   const now = Date.now();
   const hit = shopOrdersCache.get(shopId);
   if (hit && !hit.pending && now - hit.at < ORDERS_CACHE_TTL_MS) {

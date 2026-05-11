@@ -63,7 +63,7 @@ export default function OrderManagement() {
 
   const projectFilter = searchParams.get('project') ?? '';
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { bypassCache?: boolean }) => {
     if (!user) return;
     setLoading(true);
     setErr(null);
@@ -86,7 +86,9 @@ export default function OrderManagement() {
         slug: shop.data.slug,
         name: shop.data.name,
       });
-      const rows = await listOrdersByShopId(shop.id);
+      const rows = await listOrdersByShopId(shop.id, {
+        bypassCache: opts?.bypassCache === true,
+      });
       setOrders(rows);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
@@ -100,6 +102,16 @@ export default function OrderManagement() {
       if (!authLoading && user) void refresh();
       else if (!authLoading && !user) setLoading(false);
     });
+  }, [authLoading, user, refresh]);
+
+  /** 手机端常前台停留在订单列表：切回浏览器/后台时应拉最新，避免「顾客已传图但列表仍是旧的」 */
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!authLoading && user) void refresh({ bypassCache: true });
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
   }, [authLoading, user, refresh]);
 
   const filtered = useMemo(() => {
@@ -263,6 +275,25 @@ export default function OrderManagement() {
       <p className="mb-3 text-xs text-gray-500">
         同一订单可同时出现在多个标签：例如首单待确认(pending)时又加购未付→会在「待确认」与「待付款」各出现一笔（同一订单号）。
       </p>
+      <p className="mb-3 text-xs text-gray-500">
+        <strong className="font-medium text-gray-700">待确认</strong>
+        仅包含<strong className="font-medium text-gray-700">已上传付款截图</strong>
+        （或商户设为免凭证）的订单；顾客若只提交订单尚未传图，订单在
+        <strong className="font-medium text-gray-700">待付款</strong>。列表不会实时推送，顾客传图后请点下方
+        <strong className="font-medium text-gray-700">刷新列表</strong>
+        或切换应用再回来。
+      </p>
+
+      <div className="mb-3">
+        <button
+          type="button"
+          className="inline-flex h-9 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-800 hover:bg-gray-50"
+          onClick={() => void refresh({ bypassCache: true })}
+          disabled={loading || !user}
+        >
+          {loading ? '刷新中…' : '刷新列表'}
+        </button>
+      </div>
 
       <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-gray-100 bg-gray-50 p-1.5">
         {tabs.map((t) => (
