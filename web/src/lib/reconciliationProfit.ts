@@ -65,6 +65,8 @@ export type ProfitAggRow = {
   sales: number;
   cost: number;
   profit: number;
+  /** 该行特惠/早鸟等相对当前菜单标价的减免合计（与上方汇总卡片口径一致） */
+  discountReduction: number;
 };
 
 export type ProfitTotals = {
@@ -92,7 +94,14 @@ export function buildProfitTotals(
 ): ProfitTotals {
   const agg = new Map<
     string,
-    { name: string; kind: 'product' | 'scheme'; quantity: number; sales: number; cost: number }
+    {
+      name: string;
+      kind: 'product' | 'scheme';
+      quantity: number;
+      sales: number;
+      cost: number;
+      discountReduction: number;
+    }
   >();
 
   let earlyBirdReduction = 0;
@@ -125,9 +134,31 @@ export function buildProfitTotals(
       const key = aggKeyForLine(line);
       const kind = parseBundleProductId(line.productId) ? 'scheme' : 'product';
       const name = (line.name ?? '').trim() || '未命名';
+
+      let lineDiscountReduction = 0;
+      if (line.isDiscount) {
+        const retail = getRetailUnit(project, line);
+        const unitPaid = Number(line.unitPrice) || 0;
+        if (retail != null && retail > unitPaid) {
+          lineDiscountReduction = (retail - unitPaid) * qty;
+          const early = Boolean(
+            typeof line.discountEndsAt === 'string' && line.discountEndsAt.trim().length > 0
+          );
+          if (early) earlyBirdReduction += lineDiscountReduction;
+          else specialReduction += lineDiscountReduction;
+        }
+      }
+
       const prev = agg.get(key);
       if (!prev) {
-        agg.set(key, { name, kind, quantity: qty, sales, cost: lineCost });
+        agg.set(key, {
+          name,
+          kind,
+          quantity: qty,
+          sales,
+          cost: lineCost,
+          discountReduction: lineDiscountReduction,
+        });
       } else {
         agg.set(key, {
           name,
@@ -135,20 +166,8 @@ export function buildProfitTotals(
           quantity: prev.quantity + qty,
           sales: prev.sales + sales,
           cost: prev.cost + lineCost,
+          discountReduction: prev.discountReduction + lineDiscountReduction,
         });
-      }
-
-      if (line.isDiscount) {
-        const retail = getRetailUnit(project, line);
-        const unitPaid = Number(line.unitPrice) || 0;
-        if (retail != null && retail > unitPaid) {
-          const red = (retail - unitPaid) * qty;
-          const early = Boolean(
-            typeof line.discountEndsAt === 'string' && line.discountEndsAt.trim().length > 0
-          );
-          if (early) earlyBirdReduction += red;
-          else specialReduction += red;
-        }
       }
     }
   }
@@ -161,6 +180,7 @@ export function buildProfitTotals(
     sales: v.sales,
     cost: v.cost,
     profit: v.sales - v.cost,
+    discountReduction: v.discountReduction,
   }));
   listRows.sort((a, b) => {
     if (b.sales !== a.sales) return b.sales - a.sales;
@@ -208,7 +228,7 @@ export function buildProfitCopyText(params: {
   for (const r of totals.rows) {
     const tag = r.kind === 'scheme' ? '套餐方案' : '商品';
     lines.push(
-      `[${tag}] ${r.name} ×${r.quantity} · 销 RM ${r.sales.toFixed(2)} · 本 RM ${r.cost.toFixed(2)} · 利 RM ${r.profit.toFixed(2)}`
+      `[${tag}] ${r.name} ×${r.quantity} · 销 RM ${r.sales.toFixed(2)} · 本 RM ${r.cost.toFixed(2)} · 利 RM ${r.profit.toFixed(2)} · 减免 RM ${r.discountReduction.toFixed(2)}`
     );
   }
   lines.push('=============');
@@ -216,17 +236,18 @@ export function buildProfitCopyText(params: {
 }
 
 export function buildProfitCsv(totals: ProfitTotals): string {
-  const header = '类型,名称,数量,销售额,采购成本,毛利';
+  const header = '类型,名称,数量,销售额,采购成本,毛利,优惠减免';
   const body = totals.rows.map((r) => {
     const type = r.kind === 'scheme' ? '套餐方案' : '商品';
     const name = r.name.replace(/"/g, '""');
-    return `${type},"${name}",${r.quantity},${r.sales.toFixed(2)},${r.cost.toFixed(2)},${r.profit.toFixed(2)}`;
+    return `${type},"${name}",${r.quantity},${r.sales.toFixed(2)},${r.cost.toFixed(2)},${r.profit.toFixed(2)},${r.discountReduction.toFixed(2)}`;
   });
+  const sumReduction = totals.rows.reduce((s, r) => s + r.discountReduction, 0);
   const tail = [
     '',
-    `合计,,,${totals.totalSales.toFixed(2)},${totals.totalCost.toFixed(2)},${totals.grossProfit.toFixed(2)}`,
-    `早鸟让价,,,,${totals.earlyBirdReduction.toFixed(2)},`,
-    `特惠让价,,,,${totals.specialReduction.toFixed(2)},`,
+    `合计,,,${totals.totalSales.toFixed(2)},${totals.totalCost.toFixed(2)},${totals.grossProfit.toFixed(2)},${sumReduction.toFixed(2)}`,
+    `早鸟让价,,,,,,${totals.earlyBirdReduction.toFixed(2)}`,
+    `特惠让价,,,,,,${totals.specialReduction.toFixed(2)}`,
   ];
   return [header, ...body, ...tail].join('\n');
 }

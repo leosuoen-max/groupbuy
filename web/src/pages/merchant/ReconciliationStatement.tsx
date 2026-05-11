@@ -755,7 +755,8 @@ export default function ReconciliationStatement() {
         </p>
       ) : (
         <p className="mb-4 text-xs text-gray-500">
-          按商品/套餐方案汇总销售额与采购成本；筛选范围与上方「清单包含」一致，可包含待付款、待确认组。
+          按商品/套餐方案汇总销售额、采购成本与毛利；「优惠减免」为特惠/早鸟等相对<strong className="font-medium text-gray-700">当前菜单标价</strong>
+          的抵扣合计（与上方让价卡片口径一致）。筛选范围与「清单包含」一致，可包含待付款、待确认组。
         </p>
       )}
 
@@ -950,15 +951,16 @@ export default function ReconciliationStatement() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
-          <table className="w-full min-w-[36rem] table-fixed border-collapse text-left text-sm">
+          <table className="w-full min-w-[42rem] table-fixed border-collapse text-left text-sm">
             <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
               <tr>
-                <th className="w-[14%] px-2 py-2">类型</th>
-                <th className="w-[28%] px-2 py-2">名称</th>
-                <th className="w-[10%] px-2 py-2">数量</th>
-                <th className="w-[16%] px-2 py-2">销售额</th>
-                <th className="w-[16%] px-2 py-2">成本</th>
-                <th className="w-[16%] px-2 py-2">毛利</th>
+                <th className="w-[12%] px-2 py-2">类型</th>
+                <th className="w-[22%] px-2 py-2">名称</th>
+                <th className="w-[8%] px-2 py-2">数量</th>
+                <th className="w-[13%] px-2 py-2">销售额</th>
+                <th className="w-[13%] px-2 py-2">成本</th>
+                <th className="w-[13%] px-2 py-2">毛利</th>
+                <th className="w-[13%] px-2 py-2">优惠减免</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -977,6 +979,9 @@ export default function ReconciliationStatement() {
                   </td>
                   <td className="whitespace-nowrap px-2 py-2 font-medium tabular-nums text-emerald-900">
                     {formatMYR(r.profit)}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-2 tabular-nums text-amber-900">
+                    {formatMYR(r.discountReduction)}
                   </td>
                 </tr>
               ))}
