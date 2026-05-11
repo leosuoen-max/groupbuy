@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
+import { isPlatformAdmin } from './registeredUserService';
 import type { ShopDoc } from '../types/firestore';
 import { DEFAULT_SHOP_THEME_COLOR } from './shopTheme';
 
@@ -63,13 +64,20 @@ export async function isSlugTaken(slug: string): Promise<boolean> {
   return row !== null;
 }
 
-export async function createShop(
+/** 顾客端是否可访问该店铺（停用后不可下单、不可进店浏览）。 */
+export function isShopOpenForCustomers(data: ShopDoc): boolean {
+  return data.isActive !== false;
+}
+
+async function createShopInternal(
   ownerId: string,
   input: { name: string; slug: string }
 ): Promise<string> {
   const db = getDb();
   const slug = input.slug.trim().toLowerCase();
   const name = input.name.trim();
+  if (!slug) throw new Error('SLUG_REQUIRED');
+  if (!name) throw new Error('NAME_REQUIRED');
   const existing = await listShopsByOwner(ownerId);
   if (existing.length > 0) {
     throw new Error('OWNER_ALREADY_HAS_SHOP');
@@ -89,6 +97,57 @@ export async function createShop(
     isActive: true,
   });
   return ref.id;
+}
+
+/** 店主在「无店」页自助创建（一账号一店）。 */
+export async function createShop(
+  ownerId: string,
+  input: { name: string; slug: string }
+): Promise<string> {
+  return createShopInternal(ownerId, input);
+}
+
+/** 平台管理员为任意 Firebase UID 创建商户（一账号一店）。 */
+export async function createShopByPlatformAdmin(
+  actorUid: string,
+  ownerId: string,
+  input: { name: string; slug: string }
+): Promise<string> {
+  if (!(await isPlatformAdmin(actorUid))) {
+    throw new Error('PLATFORM_ADMIN_REQUIRED');
+  }
+  const oid = ownerId.trim();
+  if (!oid) throw new Error('OWNER_UID_REQUIRED');
+  return createShopInternal(oid, input);
+}
+
+export async function listAllShopsForPlatform(actorUid: string): Promise<ShopRow[]> {
+  if (!(await isPlatformAdmin(actorUid))) {
+    throw new Error('PLATFORM_ADMIN_REQUIRED');
+  }
+  const db = getDb();
+  const snap = await getDocs(collection(db, 'shops'));
+  const rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as ShopDoc }));
+  return rows.sort((a, b) => {
+    const ta = a.data.createdAt?.toMillis?.() ?? 0;
+    const tb = b.data.createdAt?.toMillis?.() ?? 0;
+    return tb - ta;
+  });
+}
+
+export async function setShopActiveForPlatform(
+  actorUid: string,
+  shopId: string,
+  isActive: boolean
+): Promise<void> {
+  if (!(await isPlatformAdmin(actorUid))) {
+    throw new Error('PLATFORM_ADMIN_REQUIRED');
+  }
+  const db = getDb();
+  await updateDoc(doc(db, 'shops', shopId), {
+    isActive,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function updateShop(

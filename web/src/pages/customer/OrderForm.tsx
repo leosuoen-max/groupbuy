@@ -10,7 +10,7 @@ import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
 import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
-import { getShopBySlug } from '../../lib/shopService';
+import { getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import { withTimeout } from '../../lib/withTimeout';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
@@ -117,6 +117,10 @@ export default function OrderForm() {
           );
           if (!shopRow) {
             if (!cancelled) setBootErr('店铺不存在或链接有误。');
+            return;
+          }
+          if (!isShopOpenForCustomers(shopRow.data)) {
+            if (!cancelled) setBootErr('该店铺已停用，暂不可下单。');
             return;
           }
           const projectRow = await withTimeout(

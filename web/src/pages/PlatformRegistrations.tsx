@@ -111,14 +111,22 @@ export default function PlatformRegistrations() {
           共 {rows.length} 条（最多拉取 500 条）。数据来自用户登录时写入的{' '}
           <code className="rounded bg-gray-100 px-1">registered_users</code>。
         </p>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void refresh()}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
-        >
-          {busy ? '刷新中…' : '刷新'}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            to="/admin/shops"
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
+          >
+            商户管理
+          </Link>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void refresh()}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
+          >
+            {busy ? '刷新中…' : '刷新'}
+          </button>
+        </div>
       </div>
 
       {loadErr ? (

@@ -26,6 +26,7 @@ import ProductLibrary from './pages/merchant/ProductLibrary';
 import CustomerCards from './pages/customer/CustomerCards';
 import CustomerCardBuy from './pages/customer/CustomerCardBuy';
 import PlatformRegistrations from './pages/PlatformRegistrations';
+import PlatformShops from './pages/PlatformShops';
 
 export function AppRoutes() {
   return (
@@ -33,10 +34,12 @@ export function AppRoutes() {
       <Route path="/" element={<MerchantEntry />} />
       <Route path="/home" element={<HomeLinks />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/invite-register/:token" element={<Register />} />
       <Route path="/register" element={<Register />} />
       <Route path="/invite/:code" element={<InviteAccept />} />
 
       <Route path="/admin/registrations" element={<PlatformRegistrations />} />
+      <Route path="/admin/shops" element={<PlatformShops />} />
 
       <Route path="/dashboard" element={<ShopList />} />
       <Route path="/dashboard/:shopSlug" element={<MerchantDashboard />} />

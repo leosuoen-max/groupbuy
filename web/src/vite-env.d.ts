@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_STORAGE_BUCKET: string;
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID: string;
   readonly VITE_FIREBASE_APP_ID: string;
+  /** 顾客端「定制店铺」联系文案，见 `src/config/siteContact.ts` */
+  readonly VITE_CUSTOM_SHOP_CONTACT?: string;
 }
 
 interface ImportMeta {

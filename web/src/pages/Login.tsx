@@ -1,8 +1,5 @@
-import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { signInAnonymously } from 'firebase/auth';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
-import { getAuthClient } from '../lib/firebase';
 
 function safeReturnTo(raw: string | null): string {
   if (!raw) return '/dashboard';
@@ -11,49 +8,27 @@ function safeReturnTo(raw: string | null): string {
 }
 
 export default function Login() {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnTo = safeReturnTo(searchParams.get('returnTo'));
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const anon = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await signInAnonymously(getAuthClient());
-      navigate(returnTo, { replace: true });
-    } catch (e) {
-      setMsg(
-        e instanceof Error
-          ? `${e.message}（请在 Firebase 控制台 → Authentication → 登录方式 → 启用「匿名」）`
-          : '登录失败'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
+  const registerHref = `/register?returnTo=${encodeURIComponent(returnTo)}`;
 
   return (
-    <PageShell title="登录" subtitle="正式版为手机号验证码 / Magic Link（见 docs/05）">
+    <PageShell title="登录" subtitle="手机号验证码">
       <p className="mb-4 text-sm text-gray-600">
-        开发阶段可先用匿名登录进入商户后台；生产环境请关闭匿名登录并接入手机号登录。
+        本站已关闭匿名登录。请使用<strong>手机号验证码</strong>登录；若尚无账号，同一流程即完成注册。
       </p>
-      <button
-        type="button"
-        className="mb-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white disabled:bg-gray-400"
-        disabled={busy}
-        onClick={() => void anon()}
+      <Link
+        to={registerHref}
+        className="mb-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
       >
-        {busy ? '登录中…' : '开发用：匿名登录并进入后台'}
-      </button>
+        手机号登录 / 注册
+      </Link>
       <Link
         to="/"
         className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-gray-200 text-sm font-medium text-gray-800"
       >
         返回首页
       </Link>
-      {msg ? <p className="mt-3 text-sm text-red-600">{msg}</p> : null}
     </PageShell>
   );
 }

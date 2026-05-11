@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProjectStatus } from '../../data/mockShopHome';
+import { getCustomShopContactLine } from '../../config/siteContact';
 import { formatMYR } from '../../lib/formatMYR';
 import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import { ShopMoreMenuSheet } from './ShopMoreMenuSheet';
@@ -135,12 +136,13 @@ export function ShopBottomBar({
           {primaryLabel}
         </button>
       </div>
-      <Link
-        to="/register"
-        className={`pointer-events-auto mt-2 block px-4 text-center text-xs text-gray-500 underline-offset-2 hover:underline ${H5_COLUMN_CLASS}`}
+      <p
+        className={`pointer-events-auto mt-2 block px-4 text-center text-xs leading-relaxed text-gray-500 ${H5_COLUMN_CLASS}`}
       >
-        想拥有自己的店？立即免费创建 →
-      </Link>
+        <span className="font-medium text-gray-600">想定制自己的店？立即联系</span>
+        <br />
+        <span className="whitespace-pre-wrap break-words">{getCustomShopContactLine()}</span>
+      </p>
 
       <ShopMoreMenuSheet
         open={menuOpen}

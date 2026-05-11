@@ -1,6 +1,6 @@
 import type { Timestamp } from 'firebase/firestore';
 import { getProject } from './projectService';
-import { getShopBySlug } from './shopService';
+import { getShopBySlug, isShopOpenForCustomers } from './shopService';
 import type {
   MockBundleTool,
   MockImageBlock,
@@ -13,12 +13,14 @@ import { normalizeShopThemeColor } from './shopTheme';
 
 export type ShopHomeLoadError =
   | 'SHOP_NOT_FOUND'
+  | 'SHOP_DISABLED'
   | 'PROJECT_NOT_FOUND'
   | 'PROJECT_WRONG_SHOP'
   | 'PROJECT_DRAFT';
 
 const ERROR_MESSAGES: Record<ShopHomeLoadError, string> = {
   SHOP_NOT_FOUND: '找不到该店铺链接，请核对网址。',
+  SHOP_DISABLED: '该店铺已停用，暂不可访问。如有疑问请联系店主。',
   PROJECT_NOT_FOUND: '找不到该团购项目，可能已删除或链接有误。',
   PROJECT_WRONG_SHOP: '项目与店铺不匹配。',
   PROJECT_DRAFT: '该项目尚未发布，暂不可访问。',
@@ -141,6 +143,9 @@ export async function loadShopHomeFromFirestore(
   if (!shopRow) return { ok: false, code: 'SHOP_NOT_FOUND' };
 
   const shop = shopRow.data;
+  if (!isShopOpenForCustomers(shop)) {
+    return { ok: false, code: 'SHOP_DISABLED' };
+  }
 
   const projectRow = await getProject(pid);
   if (!projectRow) return { ok: false, code: 'PROJECT_NOT_FOUND' };

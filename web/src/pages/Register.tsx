@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   RecaptchaVerifier,
-  signInAnonymously,
   signInWithPhoneNumber,
   type ConfirmationResult,
 } from 'firebase/auth';
 import { PageShell } from '../components/PageShell';
 import { getAuthClient } from '../lib/firebase';
+import {
+  consumeSignupInvite,
+  getInviteGate,
+} from '../lib/signupInviteService';
 
 function safeReturnTo(raw: string | null): string {
   if (!raw) return '/dashboard';
@@ -28,8 +31,12 @@ function normalizePhone(raw: string): string {
 
 export default function Register() {
   const navigate = useNavigate();
+  const params = useParams<{ token?: string }>();
+  const inviteToken = params.token?.trim() || undefined;
   const [searchParams] = useSearchParams();
-  const returnTo = safeReturnTo(searchParams.get('returnTo'));
+  const returnTo = inviteToken
+    ? '/dashboard'
+    : safeReturnTo(searchParams.get('returnTo'));
   const auth = getAuthClient();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const [phone, setPhone] = useState('');
@@ -37,8 +44,41 @@ export default function Register() {
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [inviteState, setInviteState] = useState<
+    'idle' | 'checking' | 'ok' | 'bad'
+  >(() => (inviteToken ? 'checking' : 'idle'));
+  const [inviteErr, setInviteErr] = useState<string | null>(null);
 
   const phoneE164 = useMemo(() => normalizePhone(phone), [phone]);
+
+  useEffect(() => {
+    if (!inviteToken) {
+      setInviteState('idle');
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      setInviteState('checking');
+      setInviteErr(null);
+      const gate = await getInviteGate(inviteToken);
+      if (cancelled) return;
+      if (!gate.ok) {
+        setInviteState('bad');
+        setInviteErr(
+          gate.reason === 'used'
+            ? '此邀请链接已使用过，不能再次注册。'
+            : gate.reason === 'expired'
+              ? '此邀请链接已过期，请联系站长重新生成。'
+              : '邀请链接无效或不存在。'
+        );
+        return;
+      }
+      setInviteState('ok');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
   useEffect(() => {
     return () => {
@@ -90,6 +130,19 @@ export default function Register() {
     setMsg(null);
     try {
       await confirmResult.confirm(code.trim());
+      const u = getAuthClient().currentUser;
+      if (inviteToken && u) {
+        try {
+          await consumeSignupInvite(inviteToken, u.uid);
+        } catch (consumeErr) {
+          setMsg(
+            consumeErr instanceof Error
+              ? `${consumeErr.message}（你已登录，可联系站长处理邀请状态）`
+              : '邀请核销失败'
+          );
+          return;
+        }
+      }
       navigate(returnTo, { replace: true });
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '验证码校验失败');
@@ -98,25 +151,37 @@ export default function Register() {
     }
   };
 
-  const anon = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      await signInAnonymously(auth);
-      navigate(returnTo, { replace: true });
-    } catch (e) {
-      setMsg(
-        e instanceof Error
-          ? `${e.message}（请在 Firebase 控制台启用对应登录方式）`
-          : '注册失败'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (inviteToken && inviteState === 'checking') {
+    return (
+      <PageShell title="邀请注册" subtitle="校验链接…">
+        <p className="text-sm text-gray-600">请稍候…</p>
+      </PageShell>
+    );
+  }
+
+  if (inviteToken && inviteState === 'bad') {
+    return (
+      <PageShell title="邀请注册" subtitle="无法使用">
+        <p className="text-sm text-gray-800">{inviteErr ?? '链接无效。'}</p>
+        <Link
+          to="/"
+          className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl border border-gray-200 text-sm font-medium text-gray-800"
+        >
+          返回首页
+        </Link>
+      </PageShell>
+    );
+  }
 
   return (
-    <PageShell title="注册" subtitle="手机号验证码">
+    <PageShell
+      title={inviteToken ? '邀请注册' : '注册'}
+      subtitle={
+        inviteToken
+          ? '站长邀请链接，验证手机号后仅可使用一次'
+          : '手机号验证码'
+      }
+    >
       <div className="space-y-3">
         <label className="block text-sm text-gray-800">
           手机号
@@ -153,22 +218,8 @@ export default function Register() {
           onClick={() => void confirmCode()}
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white disabled:opacity-50"
         >
-          {busy ? '验证中…' : '确认注册并进入后台'}
+          {busy ? '验证中…' : inviteToken ? '确认注册' : '确认注册并进入后台'}
         </button>
-
-        <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-          <p className="text-xs text-gray-600">
-            若你当前环境未启用手机号登录，可先使用开发入口：
-          </p>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void anon()}
-            className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-800 disabled:opacity-60"
-          >
-            开发用：匿名注册并进入后台
-          </button>
-        </div>
 
         <Link
           to="/"

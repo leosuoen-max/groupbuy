@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { getCustomShopContactLine } from '../../config/siteContact';
 import { H5_COLUMN_CLASS } from '../../lib/shopTheme';
 
 export type ShopMoreMenuSheetProps = {
@@ -148,13 +149,12 @@ export function ShopMoreMenuSheet({
           </>
         ) : null}
         <div className="my-2 border-t border-gray-100" />
-        <Link
-          to="/register"
-          onClick={onClose}
-          className="block rounded-lg px-3 py-2 font-medium text-emerald-700 hover:bg-emerald-50"
-        >
-          ✨ 想拥有自己的店？立即创建 →
-        </Link>
+        <div className="block rounded-lg bg-emerald-50/60 px-3 py-2 text-sm text-emerald-950">
+          <div className="font-medium">想定制自己的店？立即联系</div>
+          <div className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-emerald-900">
+            {getCustomShopContactLine()}
+          </div>
+        </div>
         <button
           type="button"
           onClick={onClose}

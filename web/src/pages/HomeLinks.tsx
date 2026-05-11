@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthUser } from '../hooks/useAuthUser';
+import { getCustomShopContactLine } from '../config/siteContact';
 import { listProjectsByShopId } from '../lib/projectService';
 import { listShopsByOwner, sortShopsByCreatedAt } from '../lib/shopService';
 
@@ -97,10 +98,10 @@ export default function HomeLinks() {
               登录
             </Link>
           </li>
-          <li>
-            <Link className={link} to="/register">
-              注册（手机号验证码）
-            </Link>
+          <li className="text-sm text-gray-700">
+            新商户自助注册已关闭。需开店请{' '}
+            <span className="font-medium text-gray-900">联系站长</span>：{' '}
+            <span className="whitespace-pre-wrap break-words">{getCustomShopContactLine()}</span>
           </li>
           <li>
             <Link className={link} to="/invite/demo-code">

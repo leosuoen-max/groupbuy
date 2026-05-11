@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { getShopBySlug, type ShopRow } from '../../lib/shopService';
+import { getShopBySlug, isShopOpenForCustomers, type ShopRow } from '../../lib/shopService';
 import {
   cancelCardPurchaseRequest,
   cardRequestAwaitingCustomerProof,
@@ -77,6 +77,7 @@ export default function CustomerCards() {
       try {
         const row = await getShopBySlug(slug);
         if (!row) throw new Error('店铺不存在');
+        if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
         if (cancelled) return;
         setShop(row);
         await refresh(row.id);

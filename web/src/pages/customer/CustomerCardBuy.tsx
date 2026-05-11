@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { getShopBySlug, type ShopRow } from '../../lib/shopService';
+import { getShopBySlug, isShopOpenForCustomers, type ShopRow } from '../../lib/shopService';
 import {
   appendCardPaymentScreenshotToRequest,
   cancelCardPurchaseRequest,
@@ -93,6 +93,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           '店铺加载'
         );
         if (!row) throw new Error('店铺不存在');
+        if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
         if (cancelled) return;
         setShop(row);
         if (mode === 'purchase') {

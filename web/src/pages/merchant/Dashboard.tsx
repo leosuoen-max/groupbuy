@@ -10,7 +10,7 @@ import {
   listCardRequestsByShop,
   type CardPurchaseRequestRow,
 } from '../../lib/cardService';
-import { getShopBySlug } from '../../lib/shopService';
+import { getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import type { ShopRow } from '../../lib/shopService';
 
 export default function MerchantDashboard() {
@@ -156,9 +156,16 @@ export default function MerchantDashboard() {
   }
 
   const base = `/dashboard/${encodeURIComponent(shop.data.slug)}`;
+  const shopPaused = !isShopOpenForCustomers(shop.data);
 
   return (
     <PageShell title={shop.data.name}>
+      {shopPaused ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+          <strong>店铺已停用：</strong>顾客端无法进店、下单与购卡；你可继续在此处理历史订单与设置。需要恢复请在「平台 ·
+          商户管理」中启用。
+        </div>
+      ) : null}
       <section className="mb-5">
         <h2 className="mb-2 text-sm font-semibold text-gray-900">
           今日数据 <span className="font-normal text-gray-500">（{dateLabel} · 按本机时区统计创建日）</span>

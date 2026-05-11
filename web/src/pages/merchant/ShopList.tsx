@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { signInAnonymously } from 'firebase/auth';
 import { PageShell } from '../../components/PageShell';
-import { getAuthClient } from '../../lib/firebase';
 import {
   createShop,
   getPrimaryShop,
@@ -32,7 +30,6 @@ export default function ShopList() {
   const [listLoading, setListLoading] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  const [anonBusy, setAnonBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -63,23 +60,6 @@ export default function ShopList() {
       });
     }
   }, [user, listLoading, shops, navigate]);
-
-  const handleAnon = async () => {
-    setAnonBusy(true);
-    setMsg(null);
-    try {
-      await signInAnonymously(getAuthClient());
-      navigate('/dashboard', { replace: true });
-    } catch (e) {
-      setMsg(
-        e instanceof Error
-          ? `${e.message}（请在 Firebase 控制台启用「匿名登录」）`
-          : '匿名登录失败'
-      );
-    } finally {
-      setAnonBusy(false);
-    }
-  };
 
   const handleCreate = async () => {
     if (!user) return;
@@ -133,23 +113,20 @@ export default function ShopList() {
     return (
       <PageShell title="商户后台" subtitle="需要登录">
         <p className="mb-4 text-sm text-gray-600">
-          商户后台需要先登录。开发阶段可使用 Firebase「匿名登录」；正式环境将改为手机号验证码（见
-          docs/05）。
+          商户后台需先使用<strong>手机号验证码</strong>登录；若尚无账号，「注册」与登录为同一流程。
         </p>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="inline-flex h-11 items-center justify-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white disabled:bg-gray-400"
-            disabled={anonBusy}
-            onClick={() => void handleAnon()}
-          >
-            {anonBusy ? '登录中…' : '开发用：匿名登录'}
-          </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Link
-            to="/login"
+            to="/register?returnTo=%2Fdashboard"
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white"
+          >
+            手机号登录 / 注册
+          </Link>
+          <Link
+            to="/login?returnTo=%2Fdashboard"
             className="inline-flex h-11 items-center justify-center rounded-xl border border-gray-200 px-4 text-sm font-medium text-gray-800"
           >
-            去登录页
+            登录说明页
           </Link>
         </div>
         {msg ? <p className="mt-3 text-sm text-red-600">{msg}</p> : null}
