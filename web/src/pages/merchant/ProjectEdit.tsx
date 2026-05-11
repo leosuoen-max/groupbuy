@@ -1882,7 +1882,11 @@ export default function ProjectEdit() {
                             setProducts((prev) =>
                               prev.map((x) => {
                                 if (x.id !== p.id) return x;
-                                if (!v) return x;
+                                if (!v) {
+                                  const next = { ...x };
+                                  delete next.scheduledOffAt;
+                                  return next;
+                                }
                                 const d = new Date(v);
                                 if (Number.isNaN(d.getTime())) return x;
                                 return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
@@ -2104,28 +2108,48 @@ export default function ProjectEdit() {
                       }
                     />
                   </label>
-                  <label className="text-xs text-gray-700">
-                    优惠结束时间（可选）
-                    <input
-                      type="datetime-local"
-                      className={input}
-                      value={tsToDatetimeLocalInput(p.discountEnd ?? null)}
-                      onChange={(e) =>
-                        setProducts((prev) =>
-                          prev.map((x) =>
-                            x.id === p.id
-                              ? {
-                                  ...x,
-                                  discountEnd: e.target.value
-                                    ? Timestamp.fromDate(new Date(e.target.value))
-                                    : null,
-                                }
-                              : x
-                          )
-                        )
-                      }
-                    />
-                  </label>
+                  <div className="text-xs text-gray-700">
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="min-w-0 flex-1">
+                        优惠结束时间（可选）
+                        <input
+                          type="datetime-local"
+                          className={input}
+                          value={tsToDatetimeLocalInput(p.discountEnd ?? null)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            setProducts((prev) =>
+                              prev.map((x) =>
+                                x.id === p.id
+                                  ? {
+                                      ...x,
+                                      discountEnd: raw
+                                        ? Timestamp.fromDate(new Date(raw))
+                                        : null,
+                                    }
+                                  : x
+                              )
+                            );
+                          }}
+                        />
+                      </label>
+                      {p.discountEnd ? (
+                        <button
+                          type="button"
+                          className="shrink-0 rounded border border-gray-200 bg-white px-2 py-1.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+                          onClick={() =>
+                            setProducts((prev) =>
+                              prev.map((x) =>
+                                x.id === p.id ? { ...x, discountEnd: null } : x
+                              )
+                            )
+                          }
+                        >
+                          清除截止
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
                 <p className="mt-1 text-[11px] text-gray-500">
                   规则：不填优惠价=普通；填优惠价=特惠；再填结束时间=早鸟价。
@@ -2339,7 +2363,11 @@ export default function ProjectEdit() {
                               setBundleTools((prev) =>
                                 prev.map((x) => {
                                   if (x.id !== tool.id) return x;
-                                  if (!v) return x;
+                                  if (!v) {
+                                    const next = { ...x };
+                                    delete next.scheduledOffAt;
+                                    return next;
+                                  }
                                   const d = new Date(v);
                                   if (Number.isNaN(d.getTime())) return x;
                                   return { ...x, scheduledOffAt: Timestamp.fromDate(d) };
@@ -2949,35 +2977,62 @@ export default function ProjectEdit() {
                                 }}
                               />
                             </label>
-                            <label className="flex w-full min-w-[11rem] max-w-[15rem] flex-col gap-0.5 sm:w-auto sm:flex-none">
+                            <div className="flex w-full min-w-[11rem] max-w-[15rem] flex-col gap-0.5 sm:w-auto sm:flex-none">
                               <span className="text-[10px] text-gray-500">特惠截止</span>
-                              <input
-                                type="datetime-local"
-                                className="w-full max-w-[15rem] rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
-                                value={tsToDatetimeLocalInput(sch.discountEnd ?? null)}
-                                onChange={(e) =>
-                                  setBundleTools((prev) =>
-                                    prev.map((x) =>
-                                      x.id === tool.id
-                                        ? {
-                                            ...x,
-                                            schemes: x.schemes.map((s) =>
-                                              s.id === sch.id
-                                                ? {
-                                                    ...s,
-                                                    discountEnd: e.target.value
-                                                      ? Timestamp.fromDate(new Date(e.target.value))
-                                                      : null,
-                                                  }
-                                                : s
-                                            ),
-                                          }
-                                        : x
-                                    )
-                                  )
-                                }
-                              />
-                            </label>
+                              <div className="flex flex-wrap items-end gap-1.5">
+                                <input
+                                  type="datetime-local"
+                                  className="min-w-0 flex-1 max-w-[15rem] rounded border border-gray-200 bg-white px-2 py-1.5 text-xs"
+                                  value={tsToDatetimeLocalInput(sch.discountEnd ?? null)}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    setBundleTools((prev) =>
+                                      prev.map((x) =>
+                                        x.id === tool.id
+                                          ? {
+                                              ...x,
+                                              schemes: x.schemes.map((s) =>
+                                                s.id === sch.id
+                                                  ? {
+                                                      ...s,
+                                                      discountEnd: raw
+                                                        ? Timestamp.fromDate(new Date(raw))
+                                                        : null,
+                                                    }
+                                                  : s
+                                              ),
+                                            }
+                                          : x
+                                      )
+                                    );
+                                  }}
+                                />
+                                {sch.discountEnd ? (
+                                  <button
+                                    type="button"
+                                    className="shrink-0 rounded border border-gray-200 bg-white px-1.5 py-1 text-[10px] font-medium text-gray-700 hover:bg-gray-50"
+                                    onClick={() =>
+                                      setBundleTools((prev) =>
+                                        prev.map((x) =>
+                                          x.id === tool.id
+                                            ? {
+                                                ...x,
+                                                schemes: x.schemes.map((s) =>
+                                                  s.id === sch.id
+                                                    ? { ...s, discountEnd: null }
+                                                    : s
+                                                ),
+                                              }
+                                            : x
+                                        )
+                                      )
+                                    }
+                                  >
+                                    清除
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
                             <label className="inline-flex shrink-0 items-center gap-1 pb-1 text-xs text-gray-700">
                               <input
                                 type="checkbox"
