@@ -1,5 +1,6 @@
 const { onRequest } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
+const sizeOf = require('image-size');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -22,6 +23,34 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * og:image 等属性里的 URL：勿把 `&` 写成 `&amp;`。部分链接预览爬虫会把属性值原样当 URL，
+ * 请求 `...?alt=media&amp;token=...` 会导致 Firebase 下载失败，WhatsApp 只有标题无缩略图。
+ */
+function escapeHtmlAttrUrl(url) {
+  return String(url ?? '').replace(/"/g, '&quot;');
+}
+
+async function probeImageDimensions(imageUrl) {
+  if (!imageUrl) return null;
+  try {
+    const res = await fetch(imageUrl, {
+      headers: {
+        Range: 'bytes=0-524287',
+        'User-Agent': 'facebookexternalhit/1.1',
+      },
+    });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const dim = sizeOf(buf);
+    if (!dim.width || !dim.height) return null;
+    return { width: dim.width, height: dim.height };
+  } catch (e) {
+    console.warn('probeImageDimensions', e?.message || e);
+    return null;
+  }
 }
 
 function toAbsoluteUrl(raw, baseOrigin) {
@@ -162,10 +191,11 @@ exports.shareRedirect = onRequest(
       const ogTitle = buildTitle(project, shop);
       const ogDescription = buildDescription(project);
       const ogImage = pickShareImage(project, shop, origin);
+      const imgDims = ogImage ? await probeImageDimensions(ogImage) : null;
 
       const safeTitle = escapeHtml(ogTitle);
       const safeDesc = escapeHtml(ogDescription);
-      const safeImage = escapeHtml(ogImage);
+      const safeImageUrl = ogImage ? escapeHtmlAttrUrl(ogImage) : '';
       const safeCanonical = escapeHtml(sharePageUrl);
       const safeTarget = escapeHtml(targetUrl);
       /** WhatsApp/Meta 爬虫会跟随 meta refresh 抓取跳转后的 SPA，导致拿不到 og:image；真人用 JS 跳转，爬虫多数不执行脚本，留在本页读 OG。 */
@@ -181,13 +211,14 @@ exports.shareRedirect = onRequest(
   <meta property="og:type" content="website">
   <meta property="og:title" content="${safeTitle}">
   <meta property="og:description" content="${safeDesc}">
-  ${ogImage ? `<meta property="og:image" content="${safeImage}">\n  <meta property="og:image:secure_url" content="${safeImage}">` : ''}
+  ${ogImage ? `<meta property="og:image" content="${safeImageUrl}">\n  <meta property="og:image:secure_url" content="${safeImageUrl}">` : ''}
+  ${imgDims ? `<meta property="og:image:width" content="${imgDims.width}">\n  <meta property="og:image:height" content="${imgDims.height}">` : ''}
   ${ogImage ? `<meta property="og:image:alt" content="${safeTitle}">` : ''}
   <meta property="og:url" content="${safeCanonical}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${safeTitle}">
   <meta name="twitter:description" content="${safeDesc}">
-  ${ogImage ? `<meta name="twitter:image" content="${safeImage}">` : ''}
+  ${ogImage ? `<meta name="twitter:image" content="${safeImageUrl}">` : ''}
 </head>
 <body>
   <p><a href="${safeTarget}">进入团购</a></p>
