@@ -4,7 +4,7 @@
   "description": "根目录脚本：构建 web 并部署 Firebase Hosting",
   "scripts": {
     "build": "npm run build --prefix web",
-    "deploy": "npm run build --prefix web && firebase deploy --only hosting",
+    "deploy": "npm run build --prefix web && firebase deploy --only hosting,functions",
     "firebase": "firebase"
   },
   "devDependencies": {
