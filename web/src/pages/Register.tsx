@@ -23,7 +23,7 @@ function normalizePhone(raw: string): string {
   if (v.startsWith('+')) return `+${v.slice(1).replace(/[^\d]/g, '')}`;
   const digits = v.replace(/[^\d]/g, '');
   if (!digits) return '';
-  // 默认马来西亚区号
+  // 默认马来西亚区号：本地手机常为 01x…（如 012、017），此处省略 + 时按 +60 解析
   if (digits.startsWith('60')) return `+${digits}`;
   if (digits.startsWith('0')) return `+60${digits.slice(1)}`;
   return `+60${digits}`;
@@ -118,7 +118,7 @@ export default function Register() {
 
   const sendCode = async () => {
     if (!phoneE164 || !phoneE164.startsWith('+')) {
-      setMsg('请输入有效手机号（支持 012-xxx 或 +60xxx）');
+      setMsg('请输入手机号：建议用国际格式 +区号号码（如 +8613800138000、+60123456789）；马来西亚本地也可写 01…（0 开头会转为 +60）。');
       return;
     }
     setBusy(true);
@@ -223,10 +223,19 @@ export default function Register() {
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            placeholder="例如 0123456789 或 +60123456789"
+            placeholder="例如 +8613800138000 或 +60123456789"
             className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-3 text-sm outline-none focus:border-indigo-300"
           />
         </label>
+        <p className="text-[11px] leading-relaxed text-gray-500">
+          <strong>012</strong> 等指<strong>马来西亚本地手机常见前缀</strong>（<code className="rounded bg-gray-100 px-0.5">01x…</code>
+          ，不同运营商为 010/011/012/013/014/016/017/018/019 等）。不写 <code className="rounded bg-gray-100 px-0.5">+</code> 且以{' '}
+          <code className="rounded bg-gray-100 px-0.5">0</code> 开头时，本页会<strong>按马来西亚 +60</strong>自动补区号。
+        </p>
+        <p className="text-[11px] leading-relaxed text-gray-500">
+          <strong>其他国家/地区</strong>：请写完整<strong>国际 E.164</strong>（<code className="rounded bg-gray-100 px-0.5">+</code>
+          国家码 + 号码，中间可空格）。能否收到短信以 <strong>Firebase 手机验证</strong> 对该号码的支持为准，全球多数国家/地区可用，少数号段或风控下可能失败。
+        </p>
         <button
           type="button"
           disabled={busy}

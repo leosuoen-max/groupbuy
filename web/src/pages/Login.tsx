@@ -45,10 +45,14 @@ export default function Login() {
       </p>
       <Link
         to={registerHref}
-        className="mb-6 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
+        className="mb-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
       >
         手机号登录 / 注册
       </Link>
+      <p className="mb-6 text-[11px] leading-relaxed text-gray-500">
+        手机号建议用国际格式，例如 <strong>+8613800138000</strong>（中国）、<strong>+60123456789</strong>（马来西亚）；马国本地也可在下一页写{' '}
+        <strong>01…</strong>。能否收短信以 Firebase 对该号码/地区的支持为准。
+      </p>
 
       <div className="rounded-xl border border-gray-200 bg-gray-50/80 p-4">
         <h2 className="mb-1 text-sm font-semibold text-gray-900">备用：邮箱管理员</h2>
