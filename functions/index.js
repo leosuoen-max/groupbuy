@@ -71,6 +71,8 @@ function pickShareImage(project, shop, origin) {
     const abs = toAbsoluteUrl(p && p.imageUrl, origin);
     if (abs) return abs;
   }
+  const banner = toAbsoluteUrl(shop && shop.bannerImage, origin);
+  if (banner) return banner;
   const logo = toAbsoluteUrl(shop && shop.logoImage, origin);
   return logo || '';
 }
@@ -93,16 +95,19 @@ function buildTitle(project, shop) {
 function extractProjectId(req) {
   const q = (req.query?.pid || req.query?.projectId || '').toString().trim();
   if (q) return q;
-  const pathname =
-    (req.path && req.path.toString()) ||
-    (typeof req.url === 'string' ? req.url.split('?')[0] : '') ||
-    '';
-  const m = pathname.match(/^\/share\/([^/]+)/);
-  if (m) {
-    try {
-      return decodeURIComponent(m[1]);
-    } catch {
-      return m[1];
+  const paths = [
+    typeof req.originalUrl === 'string' ? req.originalUrl.split('?')[0] : '',
+    typeof req.url === 'string' ? req.url.split('?')[0] : '',
+    req.path ? String(req.path) : '',
+  ].filter(Boolean);
+  for (const pathname of paths) {
+    const m = pathname.match(/\/share\/([^/?]+)/);
+    if (m) {
+      try {
+        return decodeURIComponent(m[1]);
+      } catch {
+        return m[1];
+      }
     }
   }
   return '';
@@ -160,7 +165,8 @@ exports.shareRedirect = onRequest(
       const safeImage = escapeHtml(ogImage);
       const safeCanonical = escapeHtml(sharePageUrl);
       const safeTarget = escapeHtml(targetUrl);
-      const refreshUrl = targetUrl.replace(/"/g, '');
+      /** WhatsApp/Meta 爬虫会跟随 meta refresh 抓取跳转后的 SPA，导致拿不到 og:image；真人用 JS 跳转，爬虫多数不执行脚本，留在本页读 OG。 */
+      const jsTarget = JSON.stringify(targetUrl);
 
       const html = `<!DOCTYPE html>
 <html lang="zh-Hans">
@@ -172,16 +178,17 @@ exports.shareRedirect = onRequest(
   <meta property="og:type" content="website">
   <meta property="og:title" content="${safeTitle}">
   <meta property="og:description" content="${safeDesc}">
-  ${ogImage ? `<meta property="og:image" content="${safeImage}">` : ''}
+  ${ogImage ? `<meta property="og:image" content="${safeImage}">\n  <meta property="og:image:secure_url" content="${safeImage}">` : ''}
+  ${ogImage ? `<meta property="og:image:alt" content="${safeTitle}">` : ''}
   <meta property="og:url" content="${safeCanonical}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${safeTitle}">
   <meta name="twitter:description" content="${safeDesc}">
   ${ogImage ? `<meta name="twitter:image" content="${safeImage}">` : ''}
-  <meta http-equiv="refresh" content="0;url=${refreshUrl}">
 </head>
 <body>
   <p><a href="${safeTarget}">进入团购</a></p>
+  <script>window.location.replace(${jsTarget});</script>
 </body>
 </html>`;
 
