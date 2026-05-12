@@ -1,12 +1,15 @@
+/**
+ * WhatsApp 链接预览（Open Graph）：仅处理 GET /share/:projectId（Hosting 重写）。
+ * 不尝试清洗商户编辑标记或与标题去重（易 brittle，已放弃）；摘要为 textContent 转纯文本。
+ * 真人浏览器用 JS 跳转团购页；勿用 meta refresh，以免爬虫跟丢 og:image。
+ */
 const { onRequest } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
-const sizeOf = require('image-size');
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-/** 顾客端公网 origin（无尾斜杠）。可用 Cloud 环境变量 SHARE_APP_ORIGIN 覆盖，避免 deploy 时交互询问 Params。 */
 function getShareAppOrigin() {
   const env = process.env.SHARE_APP_ORIGIN;
   const raw =
@@ -25,32 +28,9 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-/**
- * og:image 等属性里的 URL：勿把 `&` 写成 `&amp;`。部分链接预览爬虫会把属性值原样当 URL，
- * 请求 `...?alt=media&amp;token=...` 会导致 Firebase 下载失败，WhatsApp 只有标题无缩略图。
- */
+/** og:image URL 属性内保留字面 &，勿写成 &amp;，否则部分爬虫请求 Storage 失败 */
 function escapeHtmlAttrUrl(url) {
   return String(url ?? '').replace(/"/g, '&quot;');
-}
-
-async function probeImageDimensions(imageUrl) {
-  if (!imageUrl) return null;
-  try {
-    const res = await fetch(imageUrl, {
-      headers: {
-        Range: 'bytes=0-524287',
-        'User-Agent': 'facebookexternalhit/1.1',
-      },
-    });
-    if (!res.ok) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    const dim = sizeOf(buf);
-    if (!dim.width || !dim.height) return null;
-    return { width: dim.width, height: dim.height };
-  } catch (e) {
-    console.warn('probeImageDimensions', e?.message || e);
-    return null;
-  }
 }
 
 function toAbsoluteUrl(raw, baseOrigin) {
@@ -62,9 +42,7 @@ function toAbsoluteUrl(raw, baseOrigin) {
   return u.startsWith('/') ? `${base}${u}` : `${base}/${u}`;
 }
 
-/**
- * 去掉 HTML / 常见 Markdown，收成一段纯文字（用于 og:description）
- */
+/** 说明区 → OG 摘要（轻量字符串处理，不做额外网络请求） */
 function stripToPlainText(input) {
   if (!input || typeof input !== 'string') return '';
   let s = input;
@@ -80,109 +58,6 @@ function stripToPlainText(input) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** 与 web/src/lib/descriptionRichText.ts 同源：配对嵌套的〔小〕/〔大〕 */
-function findBalancedWrapperEnd(s, start, open, close) {
-  if (!s.startsWith(open, start)) return null;
-  let depth = 1;
-  let i = start + open.length;
-  while (i < s.length && depth > 0) {
-    if (s.startsWith(open, i)) {
-      depth += 1;
-      i += open.length;
-    } else if (s.startsWith(close, i)) {
-      depth -= 1;
-      if (depth === 0) {
-        return {
-          inner: s.slice(start + open.length, i),
-          endExclusive: i + close.length,
-        };
-      }
-      i += close.length;
-    } else {
-      i += 1;
-    }
-  }
-  return null;
-}
-
-/** 尾标签里的斜杠可能是半角 / 或全角 ／（Unicode FF0F） */
-function normalizeMarkerSlashes(input) {
-  if (!input || typeof input !== 'string') return '';
-  return input.replace(/〔／小〕/g, '〔/小〕').replace(/〔／大〕/g, '〔/大〕');
-}
-
-/**
- * 去掉「稍大/稍小」包装，只保留内层正文（与顾客端渲染语义一致，OG 不留〔小〕等符号）。
- */
-function unwrapRichMarkers(input) {
-  const pairs = [
-    ['〔小〕', '〔/小〕'],
-    ['〔大〕', '〔/大〕'],
-  ];
-  function walk(s) {
-    let out = '';
-    let i = 0;
-    while (i < s.length) {
-      let consumed = false;
-      for (const [open, close] of pairs) {
-        if (s.startsWith(open, i)) {
-          const m = findBalancedWrapperEnd(s, i, open, close);
-          if (m) {
-            out += walk(m.inner);
-            i = m.endExclusive;
-            consumed = true;
-            break;
-          }
-        }
-      }
-      if (!consumed) {
-        out += s[i];
-        i += 1;
-      }
-    }
-    return out;
-  }
-  return walk(normalizeMarkerSlashes(input));
-}
-
-/** 兜底：零散的【】类符号（非平衡片段） */
-function stripStrayBracketMarkers(input) {
-  if (!input || typeof input !== 'string') return '';
-  return input.replace(/【小】|【\/小】|【／小】|【大】|【\/大】|【／大】|〔小〕|〔\/小〕|〔大〕|〔\/大〕/g, '');
-}
-
-function normalizePlainWhitespace(s) {
-  return String(s)
-    .normalize('NFKC')
-    .replace(/\u00a0/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/** 与顾客端 stripLeadingDuplicateProjectTitle 一致；NFKC 避免全角空格等导致去重失败 */
-function stripLeadingDuplicateProjectTitlePlain(plain, projectTitle) {
-  let s = normalizePlainWhitespace(plain);
-  const p = normalizePlainWhitespace(projectTitle || '');
-  if (!p) return s;
-  const re = new RegExp(`^${escapeRegExp(p)}(?:\\s*[！!。.…]*)?\\s*`);
-  for (let i = 0; i < 5; i++) {
-    const next = s.replace(re, '').trim();
-    if (next === s) break;
-    s = next;
-  }
-  return s;
-}
-
-function stripHeadingMarkersLine(plain) {
-  return String(plain)
-    .replace(/^【标题】\s*/gm, '')
-    .trim();
-}
-
 function formatDeadlineDescription(ts) {
   if (!ts || typeof ts.toDate !== 'function') return '截止时间：待定';
   const d = ts.toDate();
@@ -192,6 +67,21 @@ function formatDeadlineDescription(ts) {
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `截止时间：${y}年${m}月${day}日 ${hh}:${mm}`;
+}
+
+function buildDescription(project) {
+  const plain = stripToPlainText(project.textContent || '');
+  if (plain.length > 0) {
+    const max = 280;
+    return plain.length <= max ? plain : `${plain.slice(0, max - 1)}…`;
+  }
+  return formatDeadlineDescription(project.closesAt);
+}
+
+function buildTitle(project, shop) {
+  const shopName = (shop && shop.name) || '店铺';
+  const title = (project && project.title) || '团购';
+  return `${shopName} · ${title}`;
 }
 
 function pickShareImage(project, shop, origin) {
@@ -210,28 +100,6 @@ function pickShareImage(project, shop, origin) {
   if (banner) return banner;
   const logo = toAbsoluteUrl(shop && shop.logoImage, origin);
   return logo || '';
-}
-
-function buildDescription(project) {
-  let raw = project.textContent || '';
-  raw = normalizeMarkerSlashes(raw);
-  raw = unwrapRichMarkers(raw);
-  raw = stripStrayBracketMarkers(raw);
-  let plain = stripToPlainText(raw);
-  plain = stripHeadingMarkersLine(plain);
-  plain = stripLeadingDuplicateProjectTitlePlain(plain, (project && project.title) || '');
-  plain = normalizePlainWhitespace(plain);
-  if (plain.length > 0) {
-    const max = 280;
-    return plain.length <= max ? plain : `${plain.slice(0, max - 1)}…`;
-  }
-  return formatDeadlineDescription(project.closesAt);
-}
-
-function buildTitle(project, shop) {
-  const shopName = (shop && shop.name) || '店铺';
-  const title = (project && project.title) || '团购';
-  return `${shopName} · ${title}`;
 }
 
 function extractProjectId(req) {
@@ -271,7 +139,6 @@ exports.shareRedirect = onRequest(
       return;
     }
 
-    /** 与 web 顾客路由一致：/shop/:shopSlug/:projectId */
     let targetUrl = `${origin}/`;
 
     try {
@@ -295,20 +162,17 @@ exports.shareRedirect = onRequest(
         targetUrl = `${origin}/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
       }
 
-      /** 与对外分享的链接一致（同域 /share/...），便于 og:url 与爬虫缓存键一致 */
       const sharePageUrl = `${origin}/share/${encodeURIComponent(projectId)}`;
 
       const ogTitle = buildTitle(project, shop);
       const ogDescription = buildDescription(project);
       const ogImage = pickShareImage(project, shop, origin);
-      const imgDims = ogImage ? await probeImageDimensions(ogImage) : null;
 
       const safeTitle = escapeHtml(ogTitle);
       const safeDesc = escapeHtml(ogDescription);
       const safeImageUrl = ogImage ? escapeHtmlAttrUrl(ogImage) : '';
       const safeCanonical = escapeHtml(sharePageUrl);
       const safeTarget = escapeHtml(targetUrl);
-      /** WhatsApp/Meta 爬虫会跟随 meta refresh 抓取跳转后的 SPA，导致拿不到 og:image；真人用 JS 跳转，爬虫多数不执行脚本，留在本页读 OG。 */
       const jsTarget = JSON.stringify(targetUrl);
 
       const html = `<!DOCTYPE html>
@@ -321,14 +185,8 @@ exports.shareRedirect = onRequest(
   <meta property="og:type" content="website">
   <meta property="og:title" content="${safeTitle}">
   <meta property="og:description" content="${safeDesc}">
-  ${ogImage ? `<meta property="og:image" content="${safeImageUrl}">\n  <meta property="og:image:secure_url" content="${safeImageUrl}">` : ''}
-  ${imgDims ? `<meta property="og:image:width" content="${imgDims.width}">\n  <meta property="og:image:height" content="${imgDims.height}">` : ''}
-  ${ogImage ? `<meta property="og:image:alt" content="${safeTitle}">` : ''}
+  ${ogImage ? `<meta property="og:image" content="${safeImageUrl}">\n  <meta property="og:image:secure_url" content="${safeImageUrl}">\n  <meta property="og:image:alt" content="${safeTitle}">` : ''}
   <meta property="og:url" content="${safeCanonical}">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="${safeTitle}">
-  <meta name="twitter:description" content="${safeDesc}">
-  ${ogImage ? `<meta name="twitter:image" content="${safeImageUrl}">` : ''}
 </head>
 <body>
   <p><a href="${safeTarget}">进入团购</a></p>
@@ -337,7 +195,7 @@ exports.shareRedirect = onRequest(
 </html>`;
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=60');
+      res.setHeader('Cache-Control', 'public, max-age=120');
       res.status(200).send(html);
     } catch (e) {
       console.error('shareRedirect', e);

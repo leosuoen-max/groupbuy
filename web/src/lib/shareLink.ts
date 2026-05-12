@@ -1,7 +1,7 @@
 /**
- * 聊天链接预览（WhatsApp / 微信等）依赖爬虫读取 HTML 里的 og:* meta。
- * SPA 路由 `/shop/:slug/:projectId` 的首包仍是通用 index.html，没有动态 meta，
- * 因此对外分享须使用 `/share/:projectId`（Hosting 重写到 Cloud Function `shareRedirect`）。
+ * WhatsApp 等链接预览依赖爬虫读取 HTML 里的 og:*（Meta 抓取栈）。
+ * SPA 直链 `/shop/:slug/:projectId` 首包无动态 meta，复制分享须用 `/share/:projectId`
+ *（Hosting 重写到 Cloud Function `shareRedirect`）。
  */
 
 export function resolvePublicOrigin(): string {
