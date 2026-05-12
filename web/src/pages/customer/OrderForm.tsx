@@ -110,11 +110,18 @@ export default function OrderForm() {
         setBooting(true);
         setBootErr(null);
         try {
-          const shopRow = await withTimeout(
-            getShopBySlug(decodeURIComponent(shopSlug)),
-            LOAD_TIMEOUT_MS,
-            '店铺加载'
-          );
+          const [shopRow, projectRow] = await Promise.all([
+            withTimeout(
+              getShopBySlug(decodeURIComponent(shopSlug)),
+              LOAD_TIMEOUT_MS,
+              '店铺加载'
+            ),
+            withTimeout(
+              getProject(decodeURIComponent(projectId)),
+              LOAD_TIMEOUT_MS,
+              '项目加载'
+            ),
+          ]);
           if (!shopRow) {
             if (!cancelled) setBootErr('店铺不存在或链接有误。');
             return;
@@ -123,11 +130,6 @@ export default function OrderForm() {
             if (!cancelled) setBootErr('该店铺已停用，暂不可下单。');
             return;
           }
-          const projectRow = await withTimeout(
-            getProject(decodeURIComponent(projectId)),
-            LOAD_TIMEOUT_MS,
-            '项目加载'
-          );
           if (!projectRow) {
             if (!cancelled) setBootErr('项目不存在或已删除。');
             return;

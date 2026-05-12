@@ -87,24 +87,22 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const row = await withTimeout(
-          getShopBySlug(slug),
-          LOAD_TIMEOUT_MS,
-          '店铺加载'
-        );
-        if (!row) throw new Error('店铺不存在');
-        if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
-        if (cancelled) return;
-        setShop(row);
         if (mode === 'purchase') {
           if (!params.templateId) throw new Error('缺少卡模板参数');
-          const t = await withTimeout(
-            getCardTemplate(params.templateId),
-            LOAD_TIMEOUT_MS,
-            '卡模板加载'
-          );
+          const [row, t] = await Promise.all([
+            withTimeout(getShopBySlug(slug), LOAD_TIMEOUT_MS, '店铺加载'),
+            withTimeout(
+              getCardTemplate(params.templateId),
+              LOAD_TIMEOUT_MS,
+              '卡模板加载'
+            ),
+          ]);
+          if (!row) throw new Error('店铺不存在');
+          if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
           if (!t) throw new Error('卡模板不存在');
           if (t.data.shopId !== row.id) throw new Error('卡与店铺不匹配');
+          if (cancelled) return;
+          setShop(row);
           if (!cancelled) setTemplate(t);
 
           // 钱包：一人一钱包，若已持有 active 或已存在 pending 请求，引导跳转
@@ -182,14 +180,21 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           }
         } else {
           if (!params.cardId) throw new Error('缺少卡实例参数');
-          const c = await withTimeout(
-            getCustomerCard(params.cardId),
-            LOAD_TIMEOUT_MS,
-            '卡片加载'
-          );
+          const [row, c] = await Promise.all([
+            withTimeout(getShopBySlug(slug), LOAD_TIMEOUT_MS, '店铺加载'),
+            withTimeout(
+              getCustomerCard(params.cardId),
+              LOAD_TIMEOUT_MS,
+              '卡片加载'
+            ),
+          ]);
+          if (!row) throw new Error('店铺不存在');
+          if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
           if (!c) throw new Error('卡不存在');
           if (c.data.customerKey !== customerKey) throw new Error('无权操作他人卡');
           if (c.data.shopId !== row.id) throw new Error('卡与店铺不匹配');
+          if (cancelled) return;
+          setShop(row);
           if (!cancelled) setExistingCard(c);
           const t = await withTimeout(
             getCardTemplate(c.data.templateId),

@@ -139,7 +139,10 @@ export async function loadShopHomeFromFirestore(
     return { ok: false, code: 'SHOP_NOT_FOUND' };
   }
 
-  const shopRow = await getShopBySlug(slug);
+  const [shopRow, projectRow] = await Promise.all([
+    getShopBySlug(slug),
+    getProject(pid),
+  ]);
   if (!shopRow) return { ok: false, code: 'SHOP_NOT_FOUND' };
 
   const shop = shopRow.data;
@@ -147,7 +150,6 @@ export async function loadShopHomeFromFirestore(
     return { ok: false, code: 'SHOP_DISABLED' };
   }
 
-  const projectRow = await getProject(pid);
   if (!projectRow) return { ok: false, code: 'PROJECT_NOT_FOUND' };
 
   const proj = projectRow.data;

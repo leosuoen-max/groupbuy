@@ -317,8 +317,10 @@ export default function OrderDetail() {
       setDeliveryPointsLoading(true);
       setDeliveryPointsErr(null);
       try {
-        const projectRow = await getProject(projectId);
-        const shopRow = await getShopBySlug(order.shopSlug);
+        const [projectRow, shopRow] = await Promise.all([
+          getProject(projectId),
+          getShopBySlug(order.shopSlug),
+        ]);
         if (!shopRow) throw new Error('店铺不存在');
         const rows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
           fallbackShopId: shopRow.id,
