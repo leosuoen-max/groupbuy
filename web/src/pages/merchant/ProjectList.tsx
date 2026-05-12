@@ -13,6 +13,7 @@ import {
   type ProjectRow,
 } from '../../lib/projectService';
 import { getShopBySlug } from '../../lib/shopService';
+import { getProjectSharePageUrl } from '../../lib/shareLink';
 
 function statusLabel(s: ProjectRow['data']['status']) {
   if (s === 'draft') return '草稿';
@@ -33,16 +34,8 @@ function formatPublishedAtLine(p: ProjectRow): string | null {
   return `发布于 ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-function resolvePublicOrigin(): string {
-  const envOrigin = (import.meta.env.VITE_PUBLIC_APP_ORIGIN as string | undefined)?.trim();
-  if (envOrigin) return envOrigin.replace(/\/+$/, '');
-  return typeof window !== 'undefined' ? window.location.origin : '';
-}
-
-function customerShopHomeUrl(slug: string, projectId: string): string {
-  const path = `/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
-  const origin = resolvePublicOrigin();
-  return origin ? `${origin}${path}` : path;
+function customerShopHomeUrl(_slug: string, projectId: string): string {
+  return getProjectSharePageUrl(projectId);
 }
 
 export default function ProjectList() {

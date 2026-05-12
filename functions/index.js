@@ -90,6 +90,24 @@ function buildTitle(project, shop) {
   return `${shopName} · ${title}`;
 }
 
+function extractProjectId(req) {
+  const q = (req.query?.pid || req.query?.projectId || '').toString().trim();
+  if (q) return q;
+  const pathname =
+    (req.path && req.path.toString()) ||
+    (typeof req.url === 'string' ? req.url.split('?')[0] : '') ||
+    '';
+  const m = pathname.match(/^\/share\/([^/]+)/);
+  if (m) {
+    try {
+      return decodeURIComponent(m[1]);
+    } catch {
+      return m[1];
+    }
+  }
+  return '';
+}
+
 exports.shareRedirect = onRequest(
   {
     region: 'us-central1',
@@ -99,7 +117,7 @@ exports.shareRedirect = onRequest(
   },
   async (req, res) => {
     const origin = shareAppOrigin.value().replace(/\/$/, '');
-    const projectId = (req.query.pid || req.query.projectId || '').toString().trim();
+    const projectId = extractProjectId(req);
 
     if (!projectId) {
       res.redirect(302, origin + '/');
@@ -130,6 +148,9 @@ exports.shareRedirect = onRequest(
         targetUrl = `${origin}/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
       }
 
+      /** 与对外分享的链接一致（同域 /share/...），便于 og:url 与爬虫缓存键一致 */
+      const sharePageUrl = `${origin}/share/${encodeURIComponent(projectId)}`;
+
       const ogTitle = buildTitle(project, shop);
       const ogDescription = buildDescription(project);
       const ogImage = pickShareImage(project, shop, origin);
@@ -137,7 +158,8 @@ exports.shareRedirect = onRequest(
       const safeTitle = escapeHtml(ogTitle);
       const safeDesc = escapeHtml(ogDescription);
       const safeImage = escapeHtml(ogImage);
-      const safeUrl = escapeHtml(targetUrl);
+      const safeCanonical = escapeHtml(sharePageUrl);
+      const safeTarget = escapeHtml(targetUrl);
       const refreshUrl = targetUrl.replace(/"/g, '');
 
       const html = `<!DOCTYPE html>
@@ -146,12 +168,12 @@ exports.shareRedirect = onRequest(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${safeTitle}</title>
-  <link rel="canonical" href="${safeUrl}">
+  <link rel="canonical" href="${safeCanonical}">
   <meta property="og:type" content="website">
   <meta property="og:title" content="${safeTitle}">
   <meta property="og:description" content="${safeDesc}">
   ${ogImage ? `<meta property="og:image" content="${safeImage}">` : ''}
-  <meta property="og:url" content="${safeUrl}">
+  <meta property="og:url" content="${safeCanonical}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${safeTitle}">
   <meta name="twitter:description" content="${safeDesc}">
@@ -159,7 +181,7 @@ exports.shareRedirect = onRequest(
   <meta http-equiv="refresh" content="0;url=${refreshUrl}">
 </head>
 <body>
-  <p><a href="${safeUrl}">进入团购</a></p>
+  <p><a href="${safeTarget}">进入团购</a></p>
 </body>
 </html>`;
 

@@ -6,6 +6,7 @@ import { CUSTOM_SHOP_CONTACT_TEASER } from '../../config/siteContact';
 import { formatMYR } from '../../lib/formatMYR';
 import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import { ShopMoreMenuSheet } from './ShopMoreMenuSheet';
+import { getProjectSharePageUrl } from '../../lib/shareLink';
 
 type ShopBottomBarProps = {
   shopSlug: string;
@@ -69,7 +70,7 @@ export function ShopBottomBar({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(getProjectSharePageUrl(projectId));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1300);
     } catch {

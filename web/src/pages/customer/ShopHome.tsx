@@ -32,6 +32,7 @@ import { getProjectPermissionForUser } from '../../lib/permissionService';
 import { getShopBySlug } from '../../lib/shopService';
 import { listCardTemplatesByShop } from '../../lib/cardService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
+import { getProjectSharePageUrl } from '../../lib/shareLink';
 import type { BundleSelectionDraft, CartLocationState } from '../../types/orderDraft';
 
 function getEffectiveSchemePrice(
@@ -379,7 +380,7 @@ export default function ShopHome() {
   }, [data]);
 
   const handleShareSheetCopy = useCallback(async () => {
-    const url = window.location.href;
+    const url = getProjectSharePageUrl(projectId);
     try {
       await navigator.clipboard.writeText(url);
       setShareSheetCopied(true);
@@ -387,11 +388,11 @@ export default function ShopHome() {
     } catch {
       window.prompt('复制链接：', url);
     }
-  }, []);
+  }, [projectId]);
 
   const handleShareSheetSystemShare = useCallback(async () => {
     if (!data) return;
-    const url = window.location.href;
+    const url = getProjectSharePageUrl(projectId);
     const title = `${data.shopName} · ${data.projectTitle}`;
     try {
       if (navigator.share) {
@@ -401,17 +402,17 @@ export default function ShopHome() {
     } catch {
       /* 用户取消系统分享 */
     }
-  }, [data]);
+  }, [data, projectId]);
 
   const handleCopyMenuLink = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(getProjectSharePageUrl(projectId));
       setMenuCopied(true);
       window.setTimeout(() => setMenuCopied(false), 1300);
     } catch {
       setMenuCopied(false);
     }
-  }, []);
+  }, [projectId]);
 
   const hasProjectDescription = useMemo(() => {
     if (!data) return false;
