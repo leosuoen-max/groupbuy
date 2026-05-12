@@ -89,8 +89,9 @@ export default function Register() {
 
   const ensureRecaptcha = () => {
     if (recaptchaRef.current) return recaptchaRef.current;
+    // 隐形验证：点「发送验证码」时再触发，减少微信内置浏览器卡在「人机验证」大图块上的问题
     const verifier = new RecaptchaVerifier(auth, 'register-recaptcha', {
-      size: 'normal',
+      size: 'invisible',
     });
     recaptchaRef.current = verifier;
     return verifier;
@@ -200,8 +201,11 @@ export default function Register() {
         >
           {busy ? '发送中…' : '发送验证码'}
         </button>
+        <p className="text-[11px] leading-relaxed text-gray-500">
+          点「发送验证码」后会做人机校验（多数情况无勾选框）。若长时间卡住：请用<strong>系统浏览器</strong>打开本页（少用微信内置页），中国大陆网络访问 Google 验证可能较慢或失败，可换网络再试。
+        </p>
 
-        <div id="register-recaptcha" className="overflow-hidden rounded-xl" />
+        <div id="register-recaptcha" className="sr-only" aria-hidden />
 
         <label className="block text-sm text-gray-800">
           验证码
