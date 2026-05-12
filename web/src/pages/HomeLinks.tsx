@@ -99,7 +99,8 @@ export default function HomeLinks() {
             </Link>
           </li>
           <li className="text-sm text-gray-700">
-            新商户自助注册已关闭。需开店请 <span className="font-medium text-gray-900">联系站长</span>。
+            新商户<strong>公开自助注册已关闭</strong>；首次开通请使用站长在后台生成的<strong>一次性邀请链接</strong>，或{' '}
+            <span className="font-medium text-gray-900">联系站长</span>。
             <details className="mt-1.5">
               <summary className="cursor-pointer list-none text-indigo-600 underline-offset-2 hover:underline [&::-webkit-details-marker]:hidden">
                 查看联系方式

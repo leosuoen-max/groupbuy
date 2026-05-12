@@ -40,14 +40,17 @@ export default function Login() {
 
   return (
     <PageShell title="登录" subtitle="手机号或备用邮箱">
-      <p className="mb-4 text-sm text-gray-600">
-        本站已关闭匿名登录。请使用<strong>手机号验证码</strong>登录；若尚无账号，同一流程即完成注册。
+      <p className="mb-4 text-sm leading-relaxed text-gray-600">
+        本站已关闭匿名登录与<strong>公开自助注册</strong>。<strong>已有账号</strong>的商户请用手机号验证码登录。
+      </p>
+      <p className="mb-4 text-xs leading-relaxed text-gray-500">
+        新商户首次开通账号，仅可通过站长在「平台 · 商户管理」生成的<strong>一次性邀请链接</strong>注册；请勿使用从未注册过的手机号在下方流程尝试「登录」。
       </p>
       <Link
         to={registerHref}
         className="mb-3 inline-flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
       >
-        手机号登录 / 注册
+        手机号登录（已有账号）
       </Link>
       <p className="mb-6 text-[11px] leading-relaxed text-gray-500">
         手机号建议用国际格式，例如 <strong>+8613800138000</strong>（中国）、<strong>+60123456789</strong>（马来西亚）；马国本地也可在下一页写{' '}

@@ -112,15 +112,15 @@ export default function ShopList() {
   if (!user) {
     return (
       <PageShell title="商户后台" subtitle="需要登录">
-        <p className="mb-4 text-sm text-gray-600">
-          商户后台需先使用<strong>手机号验证码</strong>登录；若尚无账号，「注册」与登录为同一流程。
+        <p className="mb-4 text-sm leading-relaxed text-gray-600">
+          商户后台需先登录。<strong>已有账号</strong>请用手机号验证码；新商户首次开通请向站长索取<strong>一次性邀请链接</strong>（公开页不可自助注册新账号）。
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Link
             to="/register?returnTo=%2Fdashboard"
             className="inline-flex h-11 items-center justify-center rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white"
           >
-            手机号登录 / 注册
+            手机号登录（已有账号）
           </Link>
           <Link
             to="/login?returnTo=%2Fdashboard"

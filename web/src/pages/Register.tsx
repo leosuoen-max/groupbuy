@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
+  signOut,
   type ConfirmationResult,
 } from 'firebase/auth';
 import { PageShell } from '../components/PageShell';
@@ -156,6 +157,23 @@ export default function Register() {
         '短信验证'
       );
       const u = credential.user;
+
+      // 公开路径 /register：禁止首次用手机号在本项目新建 Firebase 账号（新商户仅能通过邀请链接）
+      if (!inviteToken) {
+        const { creationTime, lastSignInTime } = u.metadata;
+        const isFirstFirebaseSignIn =
+          Boolean(creationTime && lastSignInTime && creationTime === lastSignInTime);
+        if (isFirstFirebaseSignIn) {
+          await signOut(auth);
+          setConfirmResult(null);
+          setCode('');
+          setMsg(
+            '本站已关闭公开自助注册。新商户首次开通请使用站长在「平台 · 商户管理」生成的「一次性邀请链接」；若你已有账号，请确认手机号后再试。'
+          );
+          return;
+        }
+      }
+
       if (inviteToken && u) {
         setMsg('正在完成邀请注册（写入邀请状态）…');
         try {
@@ -210,11 +228,11 @@ export default function Register() {
 
   return (
     <PageShell
-      title={inviteToken ? '邀请注册' : '注册'}
+      title={inviteToken ? '邀请注册' : '登录'}
       subtitle={
         inviteToken
           ? '站长邀请链接，验证手机号后仅可使用一次'
-          : '手机号验证码'
+          : '仅限已有手机号账号；新商户请使用站长生成的一次性邀请链接'
       }
     >
       <div className="space-y-3">
@@ -273,8 +291,17 @@ export default function Register() {
               : '验证中…'
             : inviteToken
               ? '确认注册'
-              : '确认注册并进入后台'}
+              : '验证并登录'}
         </button>
+
+        {!inviteToken ? (
+          <Link
+            to={`/login?returnTo=${encodeURIComponent(returnTo)}`}
+            className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-gray-200 text-sm font-medium text-gray-800"
+          >
+            返回登录说明
+          </Link>
+        ) : null}
 
         <Link
           to="/"
