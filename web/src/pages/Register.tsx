@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
+  signOut,
   type ConfirmationResult,
 } from 'firebase/auth';
 import { PageShell } from '../components/PageShell';
@@ -129,8 +130,25 @@ export default function Register() {
     setBusy(true);
     setMsg(null);
     try {
-      await confirmResult.confirm(code.trim());
-      const u = getAuthClient().currentUser;
+      const credential = await confirmResult.confirm(code.trim());
+      const u = credential.user;
+
+      // 非邀请链接：禁止 Firebase 首次创建的账号（公开入口仅允许老用户登录）
+      if (!inviteToken) {
+        const { creationTime, lastSignInTime } = u.metadata;
+        const isFirstFirebaseSignIn =
+          Boolean(creationTime && lastSignInTime && creationTime === lastSignInTime);
+        if (isFirstFirebaseSignIn) {
+          await signOut(auth);
+          setConfirmResult(null);
+          setCode('');
+          setMsg(
+            '本平台已关闭公开自助注册。新商户请向站长索取「一次性邀请链接」完成首次注册；若你已有账号，请确认手机号无误后重试。'
+          );
+          return;
+        }
+      }
+
       if (inviteToken && u) {
         try {
           await consumeSignupInvite(inviteToken, u.uid);
@@ -175,11 +193,11 @@ export default function Register() {
 
   return (
     <PageShell
-      title={inviteToken ? '邀请注册' : '注册'}
+      title={inviteToken ? '邀请注册' : '手机号登录'}
       subtitle={
         inviteToken
           ? '站长邀请链接，验证手机号后仅可使用一次'
-          : '手机号验证码'
+          : '仅限已有账号；新商户请使用站长邀请链接'
       }
     >
       <div className="space-y-3">
@@ -218,8 +236,17 @@ export default function Register() {
           onClick={() => void confirmCode()}
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white disabled:opacity-50"
         >
-          {busy ? '验证中…' : inviteToken ? '确认注册' : '确认注册并进入后台'}
+          {busy ? '验证中…' : inviteToken ? '确认注册' : '验证并登录'}
         </button>
+
+        {!inviteToken ? (
+          <Link
+            to={`/login?returnTo=${encodeURIComponent(returnTo)}`}
+            className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-gray-200 text-sm font-medium text-gray-800"
+          >
+            返回用户登录说明
+          </Link>
+        ) : null}
 
         <Link
           to="/"
