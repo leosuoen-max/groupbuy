@@ -84,23 +84,92 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * 商户编辑「稍大 / 稍小」写入的定界符（与 web descriptionRichText 一致），分享摘要里只保留正文。
- */
-function stripDescriptionSizeMarkers(input) {
-  if (!input || typeof input !== 'string') return '';
-  return input
-    .replace(/〔小〕|〔\/小〕|〔大〕|〔\/大〕/g, '')
-    .replace(/【小】|【\/小】|【大】|【\/大】/g, '');
+/** 与 web/src/lib/descriptionRichText.ts 同源：配对嵌套的〔小〕/〔大〕 */
+function findBalancedWrapperEnd(s, start, open, close) {
+  if (!s.startsWith(open, start)) return null;
+  let depth = 1;
+  let i = start + open.length;
+  while (i < s.length && depth > 0) {
+    if (s.startsWith(open, i)) {
+      depth += 1;
+      i += open.length;
+    } else if (s.startsWith(close, i)) {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          inner: s.slice(start + open.length, i),
+          endExclusive: i + close.length,
+        };
+      }
+      i += close.length;
+    } else {
+      i += 1;
+    }
+  }
+  return null;
 }
 
-/** 与顾客端 stripLeadingDuplicateProjectTitle 一致：去掉与项目标题重复的开头句 */
+/** 尾标签里的斜杠可能是半角 / 或全角 ／（Unicode FF0F） */
+function normalizeMarkerSlashes(input) {
+  if (!input || typeof input !== 'string') return '';
+  return input.replace(/〔／小〕/g, '〔/小〕').replace(/〔／大〕/g, '〔/大〕');
+}
+
+/**
+ * 去掉「稍大/稍小」包装，只保留内层正文（与顾客端渲染语义一致，OG 不留〔小〕等符号）。
+ */
+function unwrapRichMarkers(input) {
+  const pairs = [
+    ['〔小〕', '〔/小〕'],
+    ['〔大〕', '〔/大〕'],
+  ];
+  function walk(s) {
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+      let consumed = false;
+      for (const [open, close] of pairs) {
+        if (s.startsWith(open, i)) {
+          const m = findBalancedWrapperEnd(s, i, open, close);
+          if (m) {
+            out += walk(m.inner);
+            i = m.endExclusive;
+            consumed = true;
+            break;
+          }
+        }
+      }
+      if (!consumed) {
+        out += s[i];
+        i += 1;
+      }
+    }
+    return out;
+  }
+  return walk(normalizeMarkerSlashes(input));
+}
+
+/** 兜底：零散的【】类符号（非平衡片段） */
+function stripStrayBracketMarkers(input) {
+  if (!input || typeof input !== 'string') return '';
+  return input.replace(/【小】|【\/小】|【／小】|【大】|【\/大】|【／大】|〔小〕|〔\/小〕|〔大〕|〔\/大〕/g, '');
+}
+
+function normalizePlainWhitespace(s) {
+  return String(s)
+    .normalize('NFKC')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 与顾客端 stripLeadingDuplicateProjectTitle 一致；NFKC 避免全角空格等导致去重失败 */
 function stripLeadingDuplicateProjectTitlePlain(plain, projectTitle) {
-  const p = (projectTitle || '').trim();
-  if (!p || !plain) return plain.trim();
-  let s = plain.trim();
+  let s = normalizePlainWhitespace(plain);
+  const p = normalizePlainWhitespace(projectTitle || '');
+  if (!p) return s;
   const re = new RegExp(`^${escapeRegExp(p)}(?:\\s*[！!。.…]*)?\\s*`);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const next = s.replace(re, '').trim();
     if (next === s) break;
     s = next;
@@ -144,11 +213,14 @@ function pickShareImage(project, shop, origin) {
 }
 
 function buildDescription(project) {
-  const raw = stripDescriptionSizeMarkers(project.textContent || '');
+  let raw = project.textContent || '';
+  raw = normalizeMarkerSlashes(raw);
+  raw = unwrapRichMarkers(raw);
+  raw = stripStrayBracketMarkers(raw);
   let plain = stripToPlainText(raw);
   plain = stripHeadingMarkersLine(plain);
   plain = stripLeadingDuplicateProjectTitlePlain(plain, (project && project.title) || '');
-  plain = plain.replace(/\s+/g, ' ').trim();
+  plain = normalizePlainWhitespace(plain);
   if (plain.length > 0) {
     const max = 280;
     return plain.length <= max ? plain : `${plain.slice(0, max - 1)}…`;
