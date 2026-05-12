@@ -12,3 +12,6 @@ dist-ssr/
 # 日志与编辑器
 npm-debug.log*
 .DS_Store
+
+# Firebase Hosting 本地缓存
+.firebase/
