@@ -1,16 +1,19 @@
 const { onRequest } = require('firebase-functions/v2/https');
-const { defineString } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
-/** 顾客端公网域名：302/refresh 目标与相对图片补全 */
-const shareAppOrigin = defineString('SHARE_APP_ORIGIN', {
-  description: 'H5 站点 origin，无尾斜杠',
-  default: 'https://groupbuy-app-24c46.web.app',
-});
+/** 顾客端公网 origin（无尾斜杠）。可用 Cloud 环境变量 SHARE_APP_ORIGIN 覆盖，避免 deploy 时交互询问 Params。 */
+function getShareAppOrigin() {
+  const env = process.env.SHARE_APP_ORIGIN;
+  const raw =
+    typeof env === 'string' && env.trim()
+      ? env.trim()
+      : 'https://groupbuy-app-24c46.web.app';
+  return raw.replace(/\/+$/, '');
+}
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -121,7 +124,7 @@ exports.shareRedirect = onRequest(
     timeoutSeconds: 15,
   },
   async (req, res) => {
-    const origin = shareAppOrigin.value().replace(/\/$/, '');
+    const origin = getShareAppOrigin();
     const projectId = extractProjectId(req);
 
     if (!projectId) {
