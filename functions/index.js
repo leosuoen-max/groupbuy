@@ -80,6 +80,40 @@ function stripToPlainText(input) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 商户编辑「稍大 / 稍小」写入的定界符（与 web descriptionRichText 一致），分享摘要里只保留正文。
+ */
+function stripDescriptionSizeMarkers(input) {
+  if (!input || typeof input !== 'string') return '';
+  return input
+    .replace(/〔小〕|〔\/小〕|〔大〕|〔\/大〕/g, '')
+    .replace(/【小】|【\/小】|【大】|【\/大】/g, '');
+}
+
+/** 与顾客端 stripLeadingDuplicateProjectTitle 一致：去掉与项目标题重复的开头句 */
+function stripLeadingDuplicateProjectTitlePlain(plain, projectTitle) {
+  const p = (projectTitle || '').trim();
+  if (!p || !plain) return plain.trim();
+  let s = plain.trim();
+  const re = new RegExp(`^${escapeRegExp(p)}(?:\\s*[！!。.…]*)?\\s*`);
+  for (let i = 0; i < 3; i++) {
+    const next = s.replace(re, '').trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+function stripHeadingMarkersLine(plain) {
+  return String(plain)
+    .replace(/^【标题】\s*/gm, '')
+    .trim();
+}
+
 function formatDeadlineDescription(ts) {
   if (!ts || typeof ts.toDate !== 'function') return '截止时间：待定';
   const d = ts.toDate();
@@ -110,7 +144,11 @@ function pickShareImage(project, shop, origin) {
 }
 
 function buildDescription(project) {
-  const plain = stripToPlainText(project.textContent || '');
+  const raw = stripDescriptionSizeMarkers(project.textContent || '');
+  let plain = stripToPlainText(raw);
+  plain = stripHeadingMarkersLine(plain);
+  plain = stripLeadingDuplicateProjectTitlePlain(plain, (project && project.title) || '');
+  plain = plain.replace(/\s+/g, ' ').trim();
   if (plain.length > 0) {
     const max = 280;
     return plain.length <= max ? plain : `${plain.slice(0, max - 1)}…`;
