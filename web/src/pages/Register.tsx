@@ -29,6 +29,25 @@ function normalizePhone(raw: string): string {
   return `+60${digits}`;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = window.setTimeout(
+      () => reject(new Error(`${label}超过 ${Math.round(ms / 1000)} 秒无响应，请检查网络后重试`)),
+      ms
+    );
+    promise.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (e: unknown) => {
+        window.clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 export default function Register() {
   const navigate = useNavigate();
   const params = useParams<{ token?: string }>();
@@ -123,18 +142,24 @@ export default function Register() {
       setMsg('请先发送验证码');
       return;
     }
-    if (!code.trim()) {
+    const smsCode = code.replace(/\s+/g, '').trim();
+    if (!smsCode) {
       setMsg('请输入验证码');
       return;
     }
     setBusy(true);
-    setMsg(null);
+    setMsg('正在校验短信验证码…');
     try {
-      await confirmResult.confirm(code.trim());
-      const u = getAuthClient().currentUser;
+      const credential = await withTimeout(
+        confirmResult.confirm(smsCode),
+        90_000,
+        '短信验证'
+      );
+      const u = credential.user;
       if (inviteToken && u) {
+        setMsg('正在完成邀请注册（写入邀请状态）…');
         try {
-          await consumeSignupInvite(inviteToken, u.uid);
+          await withTimeout(consumeSignupInvite(inviteToken, u.uid), 45_000, '邀请核销');
         } catch (consumeErr) {
           setMsg(
             consumeErr instanceof Error
@@ -144,7 +169,16 @@ export default function Register() {
           return;
         }
       }
-      navigate(returnTo, { replace: true });
+      setMsg(null);
+      const dest = returnTo || '/dashboard';
+      navigate(dest, { replace: true });
+      // 部分移动浏览器上 SPA 跳转偶发不生效，短延迟后整页跳转让用户必达
+      window.setTimeout(() => {
+        const p = window.location.pathname;
+        if (p.includes('/invite-register/') || p === '/register' || p.startsWith('/register')) {
+          window.location.assign(dest);
+        }
+      }, 2000);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '验证码校验失败');
     } finally {
@@ -202,7 +236,7 @@ export default function Register() {
           {busy ? '发送中…' : '发送验证码'}
         </button>
         <p className="text-[11px] leading-relaxed text-gray-500">
-          点「发送验证码」后会做人机校验（多数情况无勾选框）。若长时间卡住：请用<strong>系统浏览器</strong>打开本页（少用微信内置页），中国大陆网络访问 Google 验证可能较慢或失败，可换网络再试。
+          点「发送验证码」后会做人机校验。若发码卡住，可换网络或换系统浏览器重试。
         </p>
 
         <div id="register-recaptcha" className="sr-only" aria-hidden />
@@ -213,6 +247,8 @@ export default function Register() {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="输入短信验证码"
+            inputMode="numeric"
+            autoComplete="one-time-code"
             className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-3 text-sm outline-none focus:border-indigo-300"
           />
         </label>
@@ -222,7 +258,13 @@ export default function Register() {
           onClick={() => void confirmCode()}
           className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white disabled:opacity-50"
         >
-          {busy ? '验证中…' : inviteToken ? '确认注册' : '确认注册并进入后台'}
+          {busy
+            ? inviteToken
+              ? '处理中…'
+              : '验证中…'
+            : inviteToken
+              ? '确认注册'
+              : '确认注册并进入后台'}
         </button>
 
         <Link
