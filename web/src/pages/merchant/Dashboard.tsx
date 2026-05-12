@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
-import { SignOutButton } from '../../components/SignOutButton';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
 import { aggregateShopOrdersForToday } from '../../lib/merchantDashboardStats';
@@ -282,16 +281,6 @@ export default function MerchantDashboard() {
             </>
           ) : null}
         </Link>
-      </div>
-
-      <div className="mt-6 border-t border-gray-100 pt-4">
-        <SignOutButton
-          returnTo={`/dashboard/${encodeURIComponent(shop.data.slug)}`}
-          className="text-sm font-medium text-gray-700 underline-offset-2 hover:text-gray-900 hover:underline disabled:opacity-50"
-        />
-        <p className="mt-1.5 text-xs leading-relaxed text-gray-500">
-          退出后进入<strong>用户登录</strong>页，仅支持已有手机号账号登录；换号登录请用另一号码收验证码。新商户请向站长索取一次性邀请链接。
-        </p>
       </div>
     </PageShell>
   );
