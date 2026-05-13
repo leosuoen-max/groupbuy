@@ -7,6 +7,7 @@ import {
   listShopsByOwner,
   type ShopRow,
 } from '../../lib/shopService';
+import { userHasConsumedSignupInvite } from '../../lib/signupInviteService';
 import { useAuthUser } from '../../hooks/useAuthUser';
 
 function randomBase36(len: number): string {
@@ -29,6 +30,7 @@ export default function ShopList() {
   const [shops, setShops] = useState<ShopRow[]>([]);
   const [listLoading, setListLoading] = useState(false);
   const [name, setName] = useState('');
+  const [canInitializeShop, setCanInitializeShop] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -37,7 +39,12 @@ export default function ShopList() {
     setListLoading(true);
     setMsg(null);
     try {
-      setShops(await listShopsByOwner(user.uid));
+      const [shopRows, invited] = await Promise.all([
+        listShopsByOwner(user.uid),
+        userHasConsumedSignupInvite(user.uid),
+      ]);
+      setShops(shopRows);
+      setCanInitializeShop(invited);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -93,6 +100,8 @@ export default function ShopList() {
       if (e instanceof Error && e.message === 'OWNER_ALREADY_HAS_SHOP') {
         setMsg('当前账号已有商户资料，正在跳转…');
         await refresh();
+      } else if (e instanceof Error && e.message === 'MERCHANT_INVITE_REQUIRED') {
+        setMsg('该账号没有商户开通资格。新商户请先使用平台管理员生成的一次性注册链接。');
       } else {
         setMsg(e instanceof Error ? e.message : '创建失败');
       }
@@ -150,8 +159,38 @@ export default function ShopList() {
     );
   }
 
+  if (!canInitializeShop) {
+    return (
+      <PageShell title="商户后台" subtitle="尚未开通商户">
+        {msg ? <p className="mb-3 text-sm text-red-600">{msg}</p> : null}
+        <section className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4">
+          <h2 className="mb-2 text-sm font-semibold text-amber-950">
+            这个手机号账号还不是商户
+          </h2>
+          <p className="text-sm leading-relaxed text-amber-950">
+            饭团顾客账号可以用于钱包和订单，但不能自行开通商户后台。新商户首次开通必须使用平台管理员生成的一次性注册链接，或由平台管理员在后台为 UID 创建商户。
+          </p>
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <Link
+              to="/"
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-amber-200 bg-white px-4 text-sm font-medium text-amber-950"
+            >
+              返回商户入口
+            </Link>
+            <Link
+              to="/feituan"
+              className="inline-flex h-10 items-center justify-center rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white"
+            >
+              返回大马饭团
+            </Link>
+          </div>
+        </section>
+      </PageShell>
+    );
+  }
+
   return (
-    <PageShell title="商户后台" subtitle="每个账号对应一个商户；首次使用请设置名称">
+    <PageShell title="商户后台" subtitle="已通过一次性链接开通；首次使用请设置名称">
       {msg ? <p className="mb-3 text-sm text-red-600">{msg}</p> : null}
 
       <section className="mb-6 rounded-2xl border border-gray-100 bg-gray-50 p-4">

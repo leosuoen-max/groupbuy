@@ -14,6 +14,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
 import { isPlatformAdmin } from './registeredUserService';
+import { userHasConsumedSignupInvite } from './signupInviteService';
 import type { ShopDoc } from '../types/firestore';
 import { DEFAULT_SHOP_THEME_COLOR } from './shopTheme';
 
@@ -104,6 +105,9 @@ export async function createShop(
   ownerId: string,
   input: { name: string; slug: string }
 ): Promise<string> {
+  if (!(await userHasConsumedSignupInvite(ownerId))) {
+    throw new Error('MERCHANT_INVITE_REQUIRED');
+  }
   return createShopInternal(ownerId, input);
 }
 

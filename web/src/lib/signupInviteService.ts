@@ -1,10 +1,14 @@
 import {
   doc,
   getDoc,
+  getDocs,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
+  where,
+  collection,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
 import { isPlatformAdmin } from './registeredUserService';
@@ -55,6 +59,18 @@ export async function getInviteGate(token: string): Promise<InviteGateResult> {
   const expMs = exp?.toMillis?.() ?? 0;
   if (expMs < Date.now()) return { ok: false, reason: 'expired' };
   return { ok: true };
+}
+
+export async function userHasConsumedSignupInvite(uid: string): Promise<boolean> {
+  const u = uid.trim();
+  if (!u) return false;
+  const snap = await getDocs(
+    query(
+      collection(getDb(), COLL),
+      where('usedByUid', '==', u)
+    )
+  );
+  return snap.docs.some((d) => (d.data() as Partial<SignupInviteDoc>).used === true);
 }
 
 /**
