@@ -183,6 +183,12 @@ export default function FeituanAdmin() {
         >
           饭团订单
         </Link>
+        <Link
+          to="/admin/feituan/reconciliation"
+          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-900"
+        >
+          饭团对账
+        </Link>
       </div>
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
       {rows.length === 0 ? (
@@ -209,6 +215,9 @@ export default function FeituanAdmin() {
                   <div>状态：{p.status}</div>
                   <div>饭团审核：{fmtTs(p.feituanReviewedAt)}</div>
                 </div>
+                <p className="mb-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-600">
+                  项目成本：{p.feituanCostConfirmedAt ? `已确认 ${fmtTs(p.feituanCostConfirmedAt)}` : '未确认'}
+                </p>
                 {p.feituanRejectReason ? (
                   <p className="mb-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">
                     驳回原因：{p.feituanRejectReason}
@@ -253,6 +262,12 @@ export default function FeituanAdmin() {
                       查看饭团页
                     </Link>
                   ) : null}
+                  <Link
+                    to={`/admin/feituan/costs/${encodeURIComponent(project.id)}`}
+                    className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900"
+                  >
+                    成本确认/更新
+                  </Link>
                 </div>
               </article>
             );

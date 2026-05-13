@@ -11,7 +11,7 @@ import {
 import { getDb } from './firebase';
 import { isPlatformAdmin } from './registeredUserService';
 import { getProject, type ProjectRow } from './projectService';
-import type { ProjectDoc } from '../types/firestore';
+import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
 const FEITUAN_ADMINS = 'feituan_admins';
 
@@ -108,6 +108,62 @@ export async function delistFeituanProject(
     feituanStatus: 'delisted',
     feituanReviewedAt: Timestamp.now(),
     feituanReviewedBy: actorUid,
+  });
+}
+
+export async function updateFeituanProjectCosts(input: {
+  projectId: string;
+  actorUid: string;
+  productCosts: Record<string, number | null>;
+  schemeCosts: Record<string, number | null>;
+}): Promise<void> {
+  if (!(await isFeituanAdmin(input.actorUid))) {
+    throw new Error('需要饭团管理员权限');
+  }
+  const row = await getProject(input.projectId);
+  if (!row) throw new Error('项目不存在');
+  const products: ProjectProduct[] = (row.data.products ?? []).map((p) => {
+    if (!(p.id in input.productCosts)) return p;
+    const raw = input.productCosts[p.id];
+    const next: ProjectProduct = { ...p };
+    if (raw == null || Number.isNaN(Number(raw))) {
+      delete next.purchaseCost;
+      return next;
+    }
+    next.purchaseCost = Math.max(0, Number(raw));
+    return next;
+  });
+  const bundleTools: BundleToolDoc[] = (row.data.bundleTools ?? []).map((tool) => ({
+    ...tool,
+    schemes: tool.schemes.map((scheme) => {
+      const key = `${tool.id}:${scheme.id}`;
+      if (!(key in input.schemeCosts)) return scheme;
+      const raw = input.schemeCosts[key];
+      const next = { ...scheme };
+      if (raw == null || Number.isNaN(Number(raw))) {
+        delete next.purchaseCost;
+        return next;
+      }
+      next.purchaseCost = Math.max(0, Number(raw));
+      return next;
+    }),
+  }));
+  await updateFeituanProject(input.projectId, input.actorUid, 'cost_update', {
+    products,
+    bundleTools,
+    feituanCostConfirmedAt: Timestamp.now(),
+    feituanCostConfirmedBy: input.actorUid,
+  });
+}
+
+export async function confirmFeituanProjectCosts(
+  projectId: string,
+  actorUid: string
+): Promise<void> {
+  if (!(await isFeituanAdmin(actorUid))) throw new Error('需要饭团管理员权限');
+  await updateFeituanProject(projectId, actorUid, 'cost_confirm', {
+    feituanCostConfirmedAt: Timestamp.now(),
+    feituanCostConfirmedBy: actorUid,
   });
 }
 

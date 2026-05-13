@@ -133,10 +133,18 @@ export type ProjectDoc = {
   feituanReviewedAt?: Timestamp | null;
   feituanReviewedBy?: string;
   feituanRejectReason?: string;
+  feituanCostConfirmedAt?: Timestamp | null;
+  feituanCostConfirmedBy?: string;
   feituanChangeLog?: {
     at: Timestamp;
     by: string;
-    action: 'submit' | 'approve' | 'reject' | 'delist';
+    action:
+      | 'submit'
+      | 'approve'
+      | 'reject'
+      | 'delist'
+      | 'cost_confirm'
+      | 'cost_update';
     note?: string;
   }[];
 };

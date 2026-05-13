@@ -354,6 +354,9 @@ export default function ProjectEdit() {
   const [bundleTools, setBundleTools] = useState<BundleToolDoc[]>([]);
   const [status, setStatus] = useState<'draft' | 'published' | 'closed'>('draft');
   const [feituanStatus, setFeituanStatus] = useState<ProjectDoc['feituanStatus']>();
+  const [feituanCostConfirmedAt, setFeituanCostConfirmedAt] = useState<
+    ProjectDoc['feituanCostConfirmedAt']
+  >();
 
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -558,6 +561,7 @@ export default function ProjectEdit() {
     setImageBlocks(row.data.imageBlocks ?? []);
     setStatus(row.data.status);
     setFeituanStatus(row.data.feituanStatus);
+    setFeituanCostConfirmedAt(row.data.feituanCostConfirmedAt);
     setClosesAt(
       toDatetimeLocalValue(row.data.closesAt?.toDate?.() ?? new Date())
     );
@@ -1436,6 +1440,7 @@ export default function ProjectEdit() {
   const input =
     'mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[16px] leading-6 text-gray-900 shadow-sm transition focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100';
   const feituanLocked = feituanStatus === 'listed';
+  const feituanCostLocked = Boolean(feituanCostConfirmedAt);
   const toolBtn =
     'rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-[15px] text-gray-800 shadow-sm transition active:scale-[0.99]';
 
@@ -1474,6 +1479,11 @@ export default function ProjectEdit() {
         {feituanLocked ? (
           <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm leading-relaxed text-orange-950">
             该项目已在「大马饭团」上架。店端已锁定不可修改；如需变更请联系饭团管理员。
+          </div>
+        ) : null}
+        {!feituanLocked && feituanCostLocked ? (
+          <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm leading-relaxed text-orange-950">
+            该项目成本已由饭团管理员确认。店端仍可编辑项目内容，但采购成本已锁定；如需调整成本请联系饭团管理员。
           </div>
         ) : null}
         <label className="block text-sm font-medium text-gray-800">
@@ -2122,6 +2132,7 @@ export default function ProjectEdit() {
                       step="0.1"
                       className={input}
                       placeholder="可选"
+                      disabled={feituanCostLocked}
                       value={p.purchaseCost ?? ''}
                       onChange={(e) =>
                         setProducts((prev) =>
@@ -2972,7 +2983,8 @@ export default function ProjectEdit() {
                                 min={0}
                                 step="0.01"
                                 placeholder="可选"
-                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs tabular-nums"
+                                disabled={feituanCostLocked}
+                                className="rounded border border-gray-200 bg-white px-2 py-1.5 text-xs tabular-nums disabled:bg-gray-100"
                                 value={
                                   sch.purchaseCost != null && sch.purchaseCost > 0
                                     ? sch.purchaseCost
