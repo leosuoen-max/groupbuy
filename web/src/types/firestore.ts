@@ -135,6 +135,8 @@ export type ProjectDoc = {
   feituanRejectReason?: string;
   feituanCostConfirmedAt?: Timestamp | null;
   feituanCostConfirmedBy?: string;
+  /** 饭团项目可用配送区；缺省或空数组表示默认开放全部启用配送区 */
+  feituanDeliveryZoneIds?: string[];
   feituanChangeLog?: {
     at: Timestamp;
     by: string;
@@ -147,6 +149,32 @@ export type ProjectDoc = {
       | 'cost_update';
     note?: string;
   }[];
+};
+
+export type FeituanDeliveryPointDoc = {
+  id: string;
+  /** 所属饭团配送区 ID；嵌入在配送区文档内，冗余字段供后续拆分/统计 */
+  zoneId?: string;
+  zoneName?: string;
+  code?: string;
+  shortName: string;
+  name: string;
+  detailAddress?: string;
+  mapsUrl?: string;
+  imageUrl?: string;
+  isActive: boolean;
+  sortOrder: number;
+};
+
+export type FeituanDeliverySetDoc = {
+  /** UI 语义：配送区。内部沿用 set 命名以兼容已写代码。 */
+  name: string;
+  description?: string;
+  isActive: boolean;
+  sortOrder: number;
+  points: FeituanDeliveryPointDoc[];
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
 };
 
 export type PermissionDoc = {

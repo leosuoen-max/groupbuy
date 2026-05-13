@@ -196,6 +196,12 @@ export default function FeituanAdmin() {
         >
           饭团对账
         </Link>
+        <Link
+          to="/admin/feituan/delivery"
+          className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
+        >
+          饭团配送
+        </Link>
       </div>
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
       {rows.length === 0 ? (
@@ -274,6 +280,12 @@ export default function FeituanAdmin() {
                     className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900"
                   >
                     成本确认/更新
+                  </Link>
+                  <Link
+                    to={`/admin/feituan/project-delivery/${encodeURIComponent(project.id)}`}
+                    className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-900"
+                  >
+                    配送
                   </Link>
                 </div>
               </article>

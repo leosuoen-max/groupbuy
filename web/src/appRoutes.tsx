@@ -29,7 +29,9 @@ import PlatformRegistrations from './pages/PlatformRegistrations';
 import PlatformShops from './pages/PlatformShops';
 import FeituanAdmin from './pages/FeituanAdmin';
 import FeituanCostEditor from './pages/FeituanCostEditor';
+import FeituanDelivery from './pages/FeituanDelivery';
 import FeituanOrders from './pages/FeituanOrders';
+import FeituanProjectDelivery from './pages/FeituanProjectDelivery';
 import FeituanReconciliation from './pages/FeituanReconciliation';
 import FeituanHome from './pages/FeituanHome';
 import FeituanProject from './pages/FeituanProject';
@@ -48,9 +50,14 @@ export function AppRoutes() {
       <Route path="/admin/shops" element={<PlatformShops />} />
       <Route path="/admin/feituan" element={<FeituanAdmin />} />
       <Route path="/admin/feituan/orders" element={<FeituanOrders />} />
+      <Route path="/admin/feituan/delivery" element={<FeituanDelivery />} />
       <Route
         path="/admin/feituan/costs/:projectId"
         element={<FeituanCostEditor />}
+      />
+      <Route
+        path="/admin/feituan/project-delivery/:projectId"
+        element={<FeituanProjectDelivery />}
       />
       <Route
         path="/admin/feituan/reconciliation"

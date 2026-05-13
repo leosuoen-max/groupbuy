@@ -7,8 +7,9 @@ import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
+import { listActiveFeituanDeliveryPointsForProject } from '../../lib/feituanDeliveryService';
 import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
-import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
+import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import { withTimeout } from '../../lib/withTimeout';
@@ -62,10 +63,10 @@ export default function OrderForm() {
   const [addressSupplement, setAddressSupplement] = useState('');
   const [note, setNote] = useState('');
   const [deliveryId, setDeliveryId] = useState<string>('');
-  /** 用户对当前推测配送点点「否」后记录该配送点 id；推测变化时需重新确认 */
-  const [dismissedSuggestionId, setDismissedSuggestionId] = useState<
-    string | null
-  >(null);
+  /** 用户对当前推测配送点点「否」后记录候选 id；推测变化时需重新确认 */
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState<string[]>(
+    []
+  );
   /** 配送点「查看详情」弹窗：当前展示的配送点 id */
   const [deliveryDetailModalId, setDeliveryDetailModalId] = useState<string | null>(
     null
@@ -163,26 +164,36 @@ export default function OrderForm() {
             return;
           }
 
-          const allPoints = await withTimeout(
-            listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
-              fallbackShopId: shopRow.id,
-            }),
-            LOAD_TIMEOUT_MS,
-            '配送点加载'
-          );
-          const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
-          const filtered =
-            allowed.size > 0
-              ? allPoints.filter((p) => allowed.has(p.id))
-              : allPoints;
+          let uiPoints: MockDeliveryPoint[] = [];
+          if (isFeituanOrder) {
+            uiPoints = await withTimeout(
+              listActiveFeituanDeliveryPointsForProject(projectRow.data),
+              LOAD_TIMEOUT_MS,
+              '饭团配送点加载'
+            );
+          }
+          if (uiPoints.length === 0) {
+            const allPoints = await withTimeout(
+              listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+                fallbackShopId: shopRow.id,
+              }),
+              LOAD_TIMEOUT_MS,
+              '配送点加载'
+            );
+            const allowed = new Set(projectRow.data.deliveryPointIds ?? []);
+            const filtered =
+              allowed.size > 0
+                ? allPoints.filter((p) => allowed.has(p.id))
+                : allPoints;
 
-          const uiPoints: MockDeliveryPoint[] = filtered.map((p) => ({
-            id: p.id,
-            name: p.data.shortName ?? p.data.name,
-            code: p.data.code,
-            detailAddress: p.data.detailAddress,
-            imageUrl: p.data.imageUrl,
-          }));
+            uiPoints = filtered.map((p) => ({
+              id: p.id,
+              name: p.data.shortName ?? p.data.name,
+              code: p.data.code,
+              detailAddress: p.data.detailAddress,
+              imageUrl: p.data.imageUrl,
+            }));
+          }
 
           if (!cancelled) {
             setResolvedShopSlug(shopRow.data.slug);
@@ -239,7 +250,7 @@ export default function OrderForm() {
           setDeliveryId(OTHER_DELIVERY_ID);
           setAddress((a) => (a.trim() !== '' ? a : addr));
         }
-        setDismissedSuggestionId(null);
+        setDismissedSuggestionIds([]);
       })
       .catch(() => {
         /* 静默失败，仍可手动填写 */
@@ -278,12 +289,16 @@ export default function OrderForm() {
     return points.find((x) => x.id === deliveryDetailModalId) ?? null;
   }, [deliveryDetailModalId, points]);
 
-  const suggestedPoint = useMemo(() => {
+  const suggestedPoints = useMemo(() => {
     if (deliveryId !== OTHER_DELIVERY_ID) return null;
     const line = address.trim();
     if (line.length < 2) return null;
-    return suggestDeliveryPointFromAddress(line, points);
-  }, [deliveryId, address, points]);
+    const dismissed = new Set(dismissedSuggestionIds);
+    const candidates = suggestDeliveryPointsFromAddress(line, points).filter(
+      (point) => !dismissed.has(point.id)
+    );
+    return candidates.length > 0 ? candidates : null;
+  }, [deliveryId, address, points, dismissedSuggestionIds]);
 
   const resolvedCustomerAddress = useMemo(() => {
     if (deliveryId === OTHER_DELIVERY_ID) {
@@ -308,8 +323,8 @@ export default function OrderForm() {
 
   const otherNeedsResolve =
     deliveryId === OTHER_DELIVERY_ID &&
-    suggestedPoint !== null &&
-    dismissedSuggestionId !== suggestedPoint.id;
+    suggestedPoints !== null &&
+    suggestedPoints.length > 0;
 
   const canGoStep3 =
     canPlaceOrder &&
@@ -582,7 +597,7 @@ export default function OrderForm() {
                         checked={selected}
                         onChange={() => {
                           setDeliveryId(p.id);
-                          setDismissedSuggestionId(null);
+                          setDismissedSuggestionIds([]);
                           setAddress('');
                           setAddressSupplement('');
                         }}
@@ -633,7 +648,7 @@ export default function OrderForm() {
                 checked={deliveryId === OTHER_DELIVERY_ID}
                 onChange={() => {
                   setDeliveryId(OTHER_DELIVERY_ID);
-                  setDismissedSuggestionId(null);
+                  setDismissedSuggestionIds([]);
                 }}
               />
               <span className="min-w-0 flex-1 text-sm text-gray-900">
@@ -649,13 +664,30 @@ export default function OrderForm() {
             <div className="space-y-3">
               <label className="block text-sm text-gray-700">
                 详细地址 <span className="text-red-600">*</span>
-                <textarea
-                  className={`${inputCls} min-h-[100px] resize-y`}
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  autoComplete="street-address"
-                  placeholder="楼栋、门牌、片区等，便于商户或骑手送达。"
-                />
+                <div className="relative">
+                  <textarea
+                    className={`${inputCls} min-h-[100px] resize-y pr-14`}
+                    value={address}
+                    onChange={(e) => {
+                      setAddress(e.target.value);
+                      setDismissedSuggestionIds([]);
+                    }}
+                    autoComplete="street-address"
+                    placeholder="楼栋、门牌、片区等，便于商户或骑手送达。"
+                  />
+                  {address.trim() ? (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 rounded-full border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-600 shadow-sm"
+                      onClick={() => {
+                        setAddress('');
+                        setDismissedSuggestionIds([]);
+                      }}
+                    >
+                      清空
+                    </button>
+                  ) : null}
+                </div>
               </label>
               <label className="block text-sm text-gray-700">
                 补充地址 / 门牌 <span className="text-gray-400">（选填）</span>
@@ -667,66 +699,81 @@ export default function OrderForm() {
                   placeholder="如需补充栋号、单元、联系人方式等可填写。"
                 />
               </label>
-              {suggestedPoint ? (
+              {suggestedPoints ? (
                 <div className="rounded-xl border border-indigo-100 bg-indigo-50/80 px-3 py-3 text-sm text-indigo-950">
                   <p className="font-medium text-indigo-950">
-                    根据你填的地址，系统推测你可能属于配送点「{suggestedPoint.name}」，是否使用该配送点？
+                    根据你填的地址，系统找到 {suggestedPoints.length}{' '}
+                    个可能的配送点，请选择一个；也可以选择「以上都不对」。
                   </p>
-                  {suggestedPoint.detailAddress ? (
-                    <p className="mt-1 text-xs text-indigo-900/90">
-                      参考：{suggestedPoint.detailAddress}
-                    </p>
-                  ) : null}
-                  {suggestedPoint.imageUrl ? (
-                    <button
-                      type="button"
-                      className="mt-2 w-full overflow-hidden rounded-lg border border-indigo-100 bg-white/90 text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                      onClick={() => setDeliveryDetailModalId(suggestedPoint.id)}
-                      aria-label="查看配送点示意图与完整说明"
-                    >
-                      <img
-                        src={suggestedPoint.imageUrl}
-                        alt={`${suggestedPoint.name} 配送点示意图`}
-                        className="max-h-[9rem] w-full object-contain"
-                        loading="lazy"
-                      />
-                      <span className="block px-2 py-1.5 text-center text-xs font-medium text-indigo-900">
-                        查看大图与完整说明
-                      </span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="mt-2 text-xs font-medium text-indigo-700 underline-offset-2 hover:underline"
-                      onClick={() => setDeliveryDetailModalId(suggestedPoint.id)}
-                    >
-                      查看配送点详情
-                    </button>
-                  )}
+                  <div className="mt-3 space-y-2">
+                    {suggestedPoints.map((point) => (
+                      <div
+                        key={point.id}
+                        className="rounded-lg border border-indigo-100 bg-white/90 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-indigo-950">
+                              {point.name}
+                              {point.zoneName ? (
+                                <span className="ml-2 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-800">
+                                  {point.zoneName}
+                                </span>
+                              ) : null}
+                            </p>
+                            {point.detailAddress ? (
+                              <p className="mt-1 text-xs text-indigo-900/90">
+                                参考：{point.detailAddress}
+                              </p>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
+                            onClick={() => {
+                              setDeliveryId(point.id);
+                              setDismissedSuggestionIds([]);
+                            }}
+                          >
+                            使用这个
+                          </button>
+                        </div>
+                        {point.imageUrl ? (
+                          <button
+                            type="button"
+                            className="mt-2 text-xs font-medium text-indigo-700 underline-offset-2 hover:underline"
+                            onClick={() => setDeliveryDetailModalId(point.id)}
+                          >
+                            查看配送点示意图
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="mt-2 text-xs font-medium text-indigo-700 underline-offset-2 hover:underline"
+                            onClick={() => setDeliveryDetailModalId(point.id)}
+                          >
+                            查看配送点详情
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="inline-flex h-10 flex-1 min-w-[8rem] items-center justify-center rounded-lg bg-indigo-600 px-3 text-sm font-semibold text-white"
-                      onClick={() => {
-                        setDeliveryId(suggestedPoint.id);
-                        setDismissedSuggestionId(null);
-                      }}
-                    >
-                      是，使用该配送点
-                    </button>
                     <button
                       type="button"
                       className="inline-flex h-10 flex-1 min-w-[8rem] items-center justify-center rounded-lg border border-indigo-200 bg-white px-3 text-sm font-medium text-indigo-900"
                       onClick={() =>
-                        setDismissedSuggestionId(suggestedPoint.id)
+                        setDismissedSuggestionIds(
+                          suggestedPoints.map((point) => point.id)
+                        )
                       }
                     >
-                      否，按单独地址配送
+                      以上都不对，按单独地址配送
                     </button>
                   </div>
                   {otherNeedsResolve ? (
                     <p className="mt-2 text-xs text-indigo-800">
-                      请选择「是」或「否」后再进入下一步。
+                      请选择一个候选配送点，或选择「以上都不对」后再进入下一步。
                     </p>
                   ) : null}
                 </div>

@@ -34,6 +34,9 @@ export type MockDeliveryPoint = {
   name: string;
   /** 配送点编号，如 A1 */
   code?: string;
+  /** 饭团配送区归属；商户自有配送点可为空 */
+  zoneId?: string;
+  zoneName?: string;
   detailAddress?: string;
   deliveryTime?: string;
   imageUrl?: string;

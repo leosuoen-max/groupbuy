@@ -1,16 +1,8 @@
 import type { MockDeliveryPoint } from '../types/orderDraft';
 
-/**
- * 根据用户填写的地址，从候选配送点中推测最可能的一项（关键词命中）。
- * 无足够命中时返回 null，避免乱推荐。
- */
-export function suggestDeliveryPointFromAddress(
-  address: string,
-  points: MockDeliveryPoint[]
-): MockDeliveryPoint | null {
+function addressMatchNeedles(address: string): string[] {
   const raw = address.trim().toLowerCase();
-  if (!raw || points.length === 0) return null;
-
+  if (!raw) return [];
   const tokens = raw.split(/[\s,，、;；/|]+/).filter((t) => t.length >= 2);
   const bigrams: string[] = [];
   for (let i = 0; i < raw.length - 1; i++) {
@@ -19,24 +11,50 @@ export function suggestDeliveryPointFromAddress(
       bigrams.push(bi);
     }
   }
-  const needles = [...new Set([...tokens, ...bigrams])];
+  return [...new Set([...tokens, ...bigrams])];
+}
 
-  let best: MockDeliveryPoint | null = null;
-  let bestScore = 0;
-
-  for (const p of points) {
-    const blob = `${p.name} ${p.detailAddress ?? ''} ${p.deliveryTime ?? ''}`.toLowerCase();
-    let score = 0;
-    for (const n of needles) {
-      if (n.length < 2) continue;
-      if (blob.includes(n)) score += n.length;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      best = p;
-    }
+function scoreDeliveryPoint(address: string, point: MockDeliveryPoint): number {
+  const needles = addressMatchNeedles(address);
+  if (needles.length === 0) return 0;
+  const blob = `${point.name} ${point.detailAddress ?? ''} ${
+    point.deliveryTime ?? ''
+  }`.toLowerCase();
+  let score = 0;
+  for (const n of needles) {
+    if (n.length < 2) continue;
+    if (blob.includes(n)) score += n.length;
   }
+  return score;
+}
 
-  if (bestScore >= 4 && best) return best;
-  return null;
+/**
+ * 根据用户填写的地址，从候选配送点中列出可能匹配项（关键词命中）。
+ * 无足够命中时返回空数组，避免乱推荐。
+ */
+export function suggestDeliveryPointsFromAddress(
+  address: string,
+  points: MockDeliveryPoint[]
+): MockDeliveryPoint[] {
+  const raw = address.trim().toLowerCase();
+  if (!raw || points.length === 0) return [];
+
+  return points
+    .map((point) => ({ point, score: scoreDeliveryPoint(raw, point) }))
+    .filter((row) => row.score >= 4)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.point.name.localeCompare(b.point.name, 'zh-CN');
+    })
+    .map((row) => row.point);
+}
+
+/**
+ * 兼容旧调用：返回最佳单项。
+ */
+export function suggestDeliveryPointFromAddress(
+  address: string,
+  points: MockDeliveryPoint[]
+): MockDeliveryPoint | null {
+  return suggestDeliveryPointsFromAddress(address, points)[0] ?? null;
 }

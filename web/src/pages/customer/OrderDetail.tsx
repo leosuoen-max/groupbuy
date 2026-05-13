@@ -5,6 +5,7 @@ import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
+import { listActiveFeituanDeliveryPointsForProject } from '../../lib/feituanDeliveryService';
 import {
   addressFieldPrefillForContactEdit,
   resolveCustomerAddressForChoice,
@@ -329,18 +330,24 @@ export default function OrderDetail() {
           getShopBySlug(order.shopSlug),
         ]);
         if (!shopRow) throw new Error('店铺不存在');
-        const rows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
-          fallbackShopId: shopRow.id,
-        });
-        const allowed = new Set(projectRow?.data.deliveryPointIds ?? []);
-        const filtered =
-          allowed.size > 0 ? rows.filter((r) => allowed.has(r.id)) : rows;
-        const ui: MockDeliveryPoint[] = filtered.map((p) => ({
-          id: p.id,
-          name: p.data.shortName ?? p.data.name,
-          detailAddress: p.data.detailAddress,
-          imageUrl: p.data.imageUrl,
-        }));
+        let ui: MockDeliveryPoint[] = [];
+        if (order.channel === 'feituan' && projectRow?.data) {
+          ui = await listActiveFeituanDeliveryPointsForProject(projectRow.data);
+        }
+        if (ui.length === 0) {
+          const rows = await listDeliveryPointsByOwnerId(shopRow.data.ownerId, {
+            fallbackShopId: shopRow.id,
+          });
+          const allowed = new Set(projectRow?.data.deliveryPointIds ?? []);
+          const filtered =
+            allowed.size > 0 ? rows.filter((r) => allowed.has(r.id)) : rows;
+          ui = filtered.map((p) => ({
+            id: p.id,
+            name: p.data.shortName ?? p.data.name,
+            detailAddress: p.data.detailAddress,
+            imageUrl: p.data.imageUrl,
+          }));
+        }
         if (!cancelled) setDeliveryPoints(ui);
       } catch {
         if (!cancelled) {
@@ -1038,16 +1045,27 @@ export default function OrderDetail() {
                 ) : (
                   <>补充地址 / 门牌（选填）</>
                 )}
-                <textarea
-                  className="mt-1 min-h-[3rem] w-full rounded-lg border border-gray-200 px-3 py-2 text-[16px] text-gray-900"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder={
-                    draftDeliveryId === OTHER_DELIVERY_ID
-                      ? '楼栋、门牌、片区等'
-                      : '如需送货上门请填写；到点自取可留空（将写入占位地址）。'
-                  }
-                />
+                <div className="relative">
+                  <textarea
+                    className="mt-1 min-h-[3rem] w-full rounded-lg border border-gray-200 px-3 py-2 pr-14 text-[16px] text-gray-900"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder={
+                      draftDeliveryId === OTHER_DELIVERY_ID
+                        ? '楼栋、门牌、片区等'
+                        : '如需送货上门请填写；到点自取可留空（将写入占位地址）。'
+                    }
+                  />
+                  {address.trim() ? (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-2 rounded-full border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-600 shadow-sm"
+                      onClick={() => setAddress('')}
+                    >
+                      清空
+                    </button>
+                  ) : null}
+                </div>
               </label>
               <label className="block text-xs text-gray-600">
                 备注
