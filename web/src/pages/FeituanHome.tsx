@@ -55,6 +55,20 @@ export default function FeituanHome() {
 
   return (
     <PageShell title="大马饭团" subtitle="今日上架">
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Link
+          to="/feituan/wallet"
+          className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-900"
+        >
+          饭团钱包
+        </Link>
+        <Link
+          to="/feituan/account"
+          className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800"
+        >
+          手机号登录
+        </Link>
+      </div>
       {loading ? <p className="text-sm text-gray-600">加载中…</p> : null}
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
       {!loading && rows.length === 0 ? (

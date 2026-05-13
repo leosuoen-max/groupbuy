@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { useAuthUser } from '../../hooks/useAuthUser';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
@@ -28,6 +29,7 @@ function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
 }
 
 export default function OrderForm() {
+  const { user } = useAuthUser();
   const { shopSlug = '', projectId = '' } = useParams<{
     shopSlug?: string;
     projectId: string;
@@ -351,6 +353,11 @@ export default function OrderForm() {
         projectId,
         channel: isFeituanOrder ? 'feituan' : 'shop',
         customerKey,
+        customerUserId: isFeituanOrder && user?.phoneNumber ? user.uid : undefined,
+        customerPhoneMasked:
+          isFeituanOrder && user?.phoneNumber
+            ? `****${user.phoneNumber.replace(/\D/g, '').slice(-4)}`
+            : undefined,
         customerName: name.trim(),
         customerPhone: phone.trim(),
         customerAddress: addrOut,

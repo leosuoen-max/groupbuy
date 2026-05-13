@@ -7,6 +7,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  Timestamp,
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
@@ -33,13 +34,16 @@ export async function touchRegisteredUserFromAuth(user: User): Promise<void> {
   const ref = doc(db, REGISTERED_USERS, user.uid);
   const snap = await getDoc(ref);
   const phoneMasked = maskPhone(user.phoneNumber);
+  const phoneE164 = user.phoneNumber?.trim() || null;
   const isAnonymous = user.isAnonymous;
   const now = serverTimestamp();
 
   if (!snap.exists()) {
     await setDoc(ref, {
       uid: user.uid,
+      phoneE164,
       phoneMasked,
+      phoneVerifiedAt: phoneE164 ? Timestamp.now() : null,
       isAnonymous,
       firstSeenAt: now,
       lastSeenAt: now,
@@ -52,6 +56,7 @@ export async function touchRegisteredUserFromAuth(user: User): Promise<void> {
 
   await updateDoc(ref, {
     lastSeenAt: now,
+    ...(phoneE164 ? { phoneE164, phoneVerifiedAt: Timestamp.now() } : {}),
     ...(phoneMasked ? { phoneMasked } : {}),
     isAnonymous,
   });

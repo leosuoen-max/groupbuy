@@ -197,6 +197,12 @@ export default function FeituanAdmin() {
           饭团对账
         </Link>
         <Link
+          to="/admin/feituan/wallet"
+          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900"
+        >
+          饭团钱包
+        </Link>
+        <Link
           to="/admin/feituan/delivery"
           className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
         >

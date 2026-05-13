@@ -35,6 +35,10 @@ import FeituanProjectDelivery from './pages/FeituanProjectDelivery';
 import FeituanReconciliation from './pages/FeituanReconciliation';
 import FeituanHome from './pages/FeituanHome';
 import FeituanProject from './pages/FeituanProject';
+import FeituanAccount from './pages/FeituanAccount';
+import FeituanWallet from './pages/FeituanWallet';
+import FeituanWalletAdmin from './pages/FeituanWalletAdmin';
+import FeituanWalletTopup from './pages/FeituanWalletTopup';
 
 export function AppRoutes() {
   return (
@@ -50,6 +54,7 @@ export function AppRoutes() {
       <Route path="/admin/shops" element={<PlatformShops />} />
       <Route path="/admin/feituan" element={<FeituanAdmin />} />
       <Route path="/admin/feituan/orders" element={<FeituanOrders />} />
+      <Route path="/admin/feituan/wallet" element={<FeituanWalletAdmin />} />
       <Route path="/admin/feituan/delivery" element={<FeituanDelivery />} />
       <Route
         path="/admin/feituan/costs/:projectId"
@@ -69,6 +74,9 @@ export function AppRoutes() {
       />
 
       <Route path="/feituan" element={<FeituanHome />} />
+      <Route path="/feituan/account" element={<FeituanAccount />} />
+      <Route path="/feituan/wallet" element={<FeituanWallet />} />
+      <Route path="/feituan/wallet/topup" element={<FeituanWalletTopup />} />
       <Route path="/feituan/projects/:projectId" element={<FeituanProject />} />
       <Route path="/feituan/projects/:projectId/order" element={<OrderForm />} />
       <Route

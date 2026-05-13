@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { useAuthUser } from '../../hooks/useAuthUser';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
@@ -27,6 +28,11 @@ import {
   type CardPaymentPlan,
 } from '../../lib/cardService';
 import {
+  applyFeituanWalletPaymentToOrder,
+  planFeituanWalletPayment,
+  type FeituanWalletPaymentPlan,
+} from '../../lib/feituanWalletService';
+import {
   orderHasPaymentScreenshots,
   parseScreenshotEntries,
   type ParsedScreenshotEntry,
@@ -36,6 +42,7 @@ import {
   cardApplicationsForPaymentGroup,
   listOrderCardPaymentApplications,
 } from '../../lib/orderCardPaymentApplications';
+import { listOrderFeituanWalletPaymentApplications } from '../../lib/orderFeituanWalletApplications';
 import {
   deriveDisplayOrderStatus,
   sumGroupAmountByStatus,
@@ -202,6 +209,7 @@ function buildDeliveryUpdateFromDraft(
 }
 
 export default function OrderDetail() {
+  const { user, loading: authLoading } = useAuthUser();
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
     shopSlug?: string;
     projectId: string;
@@ -223,6 +231,11 @@ export default function OrderDetail() {
   const [cardPaying, setCardPaying] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [cardSuccess, setCardSuccess] = useState<string | null>(null);
+  const [feituanWalletPlan, setFeituanWalletPlan] =
+    useState<FeituanWalletPaymentPlan | null>(null);
+  const [feituanWalletPlanLoading, setFeituanWalletPlanLoading] = useState(false);
+  const [feituanWalletPaying, setFeituanWalletPaying] = useState(false);
+  const [feituanWalletMsg, setFeituanWalletMsg] = useState<string | null>(null);
   const customerKey = getOrCreateCustomerKey();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -423,6 +436,13 @@ export default function OrderDetail() {
     hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
 
+  const canFeituanWalletPay =
+    !!order &&
+    order.channel === 'feituan' &&
+    order.status !== 'cancelled' &&
+    hasUnpaidGroupForCardPay &&
+    Number(order.pendingAmount ?? 0) > 0;
+
   useEffect(() => {
     if (!canCardPay || !order || !projectDoc) {
       setCardPlan(null);
@@ -444,6 +464,28 @@ export default function OrderDetail() {
       cancelled = true;
     };
   }, [canCardPay, order, projectDoc, customerKey]);
+
+  useEffect(() => {
+    if (!canFeituanWalletPay || !order || authLoading || !user?.phoneNumber) {
+      setFeituanWalletPlan(null);
+      return;
+    }
+    let cancelled = false;
+    setFeituanWalletPlanLoading(true);
+    void planFeituanWalletPayment(order, user.uid)
+      .then((plan) => {
+        if (!cancelled) setFeituanWalletPlan(plan);
+      })
+      .catch(() => {
+        if (!cancelled) setFeituanWalletPlan(null);
+      })
+      .finally(() => {
+        if (!cancelled) setFeituanWalletPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, canFeituanWalletPay, order, user?.phoneNumber, user?.uid]);
 
   const handleCardPay = useCallback(async () => {
     if (!order || !projectDoc) return;
@@ -475,6 +517,33 @@ export default function OrderDetail() {
       setCardPaying(false);
     }
   }, [order, projectDoc, cardPlan, orderRow?.id, customerKey, applyOrderRow]);
+
+  const handleFeituanWalletPay = useCallback(async () => {
+    if (!order || !orderRow?.id || !user?.uid || !feituanWalletPlan?.ok) return;
+    if (
+      !confirm(
+        `将使用饭团钱包抵扣 ${formatMYR(feituanWalletPlan.payAmount)}，并自动确认当前待付款支付组。确认继续？`
+      )
+    ) {
+      return;
+    }
+    setFeituanWalletPaying(true);
+    setFeituanWalletMsg(null);
+    try {
+      const result = await applyFeituanWalletPaymentToOrder({
+        orderId: orderRow.id,
+        userId: user.uid,
+        customerKey,
+      });
+      setFeituanWalletMsg(`饭团钱包已抵扣 ${formatMYR(result.deducted)}`);
+      const next = await getOrderByNumber(order.projectId, order.orderNumber);
+      if (next) applyOrderRow(next);
+    } catch (e) {
+      setFeituanWalletMsg(e instanceof Error ? e.message : '钱包抵扣失败');
+    } finally {
+      setFeituanWalletPaying(false);
+    }
+  }, [applyOrderRow, customerKey, feituanWalletPlan, order, orderRow?.id, user?.uid]);
 
   const canEditContact =
     !!order &&
@@ -702,6 +771,11 @@ export default function OrderDetail() {
     (s, c) => s + Number(c.totalDeducted ?? 0),
     0
   );
+  const feituanWalletAppsAll = listOrderFeituanWalletPaymentApplications(order);
+  const feituanWalletDeductTotal = feituanWalletAppsAll.reduce(
+    (s, app) => s + Number(app.deduct ?? 0),
+    0
+  );
   const statusText = {
     confirmed: '已确认',
     pending: '待确认',
@@ -824,6 +898,15 @@ export default function OrderDetail() {
               <span className="ml-1">
                 · 共 RM {cardDeductGrandTotal.toFixed(2)}
                 {cardAppsAll.length > 1 ? `（${cardAppsAll.length} 笔）` : ''}
+              </span>
+            </div>
+          ) : null}
+          {feituanWalletAppsAll.length > 0 ? (
+            <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5 text-[11px] text-emerald-900 ring-1 ring-emerald-200">
+              <span className="font-semibold">饭团钱包：</span>
+              <span className="ml-1">
+                共抵扣 {formatMYR(feituanWalletDeductTotal)}
+                {feituanWalletAppsAll.length > 1 ? `（${feituanWalletAppsAll.length} 笔）` : ''}
               </span>
             </div>
           ) : null}
@@ -1158,6 +1241,71 @@ export default function OrderDetail() {
             </div>
           )}
         </div>
+
+        {canFeituanWalletPay ? (
+          <div className="rounded-xl border border-orange-100 bg-orange-50/50 px-3 py-3">
+            <h2 className="mb-1 text-sm font-semibold text-orange-950">
+              支付方法一：饭团钱包
+            </h2>
+            <p className="mb-2 text-xs leading-relaxed text-orange-950/80">
+              手机号验证后可用钱包余额付清当前待付款支付组；余额不足时请充值或继续上传付款截图。
+            </p>
+            {authLoading ? (
+              <p className="text-xs text-orange-800">正在检查登录状态…</p>
+            ) : !user?.phoneNumber ? (
+              <div className="space-y-2 rounded-lg bg-white px-3 py-2 text-xs text-orange-900 ring-1 ring-orange-100">
+                <p>请先完成手机号验证后使用饭团钱包。</p>
+                <Link
+                  to={`/feituan/account?returnTo=${encodeURIComponent(`/feituan/projects/${encodeURIComponent(order.projectId)}/orders/${encodeURIComponent(order.orderNumber)}`)}`}
+                  className="inline-flex rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white"
+                >
+                  去验证手机号
+                </Link>
+              </div>
+            ) : feituanWalletPlanLoading ? (
+              <p className="text-xs text-orange-800">正在评估钱包余额…</p>
+            ) : feituanWalletPlan?.ok ? (
+              <>
+                <div className="mb-2 rounded-lg bg-white px-3 py-2 text-xs text-orange-950 ring-1 ring-orange-100">
+                  <p>
+                    当前待抵扣：<strong>{formatMYR(feituanWalletPlan.payAmount)}</strong>
+                  </p>
+                  <p className="mt-0.5">
+                    钱包余额：{formatMYR(feituanWalletPlan.balance)} → 抵扣后余额{' '}
+                    {formatMYR(feituanWalletPlan.balance - feituanWalletPlan.payAmount)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={feituanWalletPaying}
+                  onClick={() => void handleFeituanWalletPay()}
+                  className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {feituanWalletPaying ? '处理中…' : '使用饭团钱包抵扣并确认'}
+                </button>
+              </>
+            ) : feituanWalletPlan ? (
+              <div className="space-y-2 rounded-lg bg-white px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-100">
+                <p className="font-medium">{feituanWalletPlan.message}</p>
+                <p>
+                  当前待付 {formatMYR(feituanWalletPlan.payAmount)} · 钱包余额{' '}
+                  {formatMYR(feituanWalletPlan.balance)}
+                </p>
+                <Link
+                  to="/feituan/wallet/topup"
+                  className="inline-flex rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white"
+                >
+                  去充值
+                </Link>
+              </div>
+            ) : null}
+            {feituanWalletMsg ? (
+              <p className="mt-2 rounded bg-white px-2 py-1 text-xs text-orange-900">
+                {feituanWalletMsg}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {canCardPay ? (
           <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-3">

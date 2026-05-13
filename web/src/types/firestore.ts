@@ -177,6 +177,123 @@ export type FeituanDeliverySetDoc = {
   updatedAt: Timestamp;
 };
 
+/* ----------------------------- 大马饭团钱包 ----------------------------- */
+
+export type FeituanWalletTopupTierDoc = {
+  id: string;
+  label?: string;
+  /** 顾客实付金额 (RM) */
+  payAmount: number;
+  /** 平台赠送金额 (RM) */
+  bonusAmount: number;
+  isActive: boolean;
+  sortOrder: number;
+};
+
+export type FeituanWalletPaymentMethodDoc = {
+  id: string;
+  name: string;
+  qrCodeUrl: string;
+  isActive: boolean;
+  sortOrder: number;
+};
+
+export type FeituanWalletSettingsDoc = {
+  topupTiers: FeituanWalletTopupTierDoc[];
+  paymentMethods: FeituanWalletPaymentMethodDoc[];
+  updatedAt: Timestamp;
+  updatedBy?: string;
+};
+
+export type FeituanWalletAccountStatus = 'active' | 'disabled';
+
+export type FeituanWalletAccountDoc = {
+  userId: string;
+  phoneE164: string;
+  phoneMasked: string | null;
+  balance: number;
+  /** 历史实际充值收款 */
+  totalPayAmount: number;
+  /** 历史赠送金额 */
+  totalBonusAmount: number;
+  /** 历史钱包入账：实际充值 + 赠送 */
+  totalCreditAmount: number;
+  /** 历史订单抵扣 */
+  totalSpentAmount: number;
+  status: FeituanWalletAccountStatus;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type FeituanWalletAppliedTierDoc = {
+  tierId: string;
+  label?: string;
+  payAmount: number;
+  bonusAmount: number;
+  count: number;
+};
+
+export type FeituanWalletTopupRequestStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'rejected'
+  | 'cancelled';
+
+export type FeituanWalletTopupRequestDoc = {
+  userId: string;
+  walletId: string;
+  phoneE164: string;
+  phoneMasked: string | null;
+  /** 顾客实际付款金额 */
+  payAmount: number;
+  /** 按提交当时规则快照计算出的赠送金额 */
+  bonusAmount: number;
+  /** 实际入账金额 = payAmount + bonusAmount */
+  creditAmount: number;
+  appliedTiers: FeituanWalletAppliedTierDoc[];
+  tierSnapshot: FeituanWalletTopupTierDoc[];
+  paymentScreenshots: {
+    url: string;
+    uploadedAt: Timestamp;
+    contentSha256?: string;
+  }[];
+  status: FeituanWalletTopupRequestStatus;
+  rejectReason?: string;
+  confirmedAt?: Timestamp;
+  confirmedByUserId?: string;
+  ledgerId?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+};
+
+export type FeituanWalletLedgerType =
+  | 'topup'
+  | 'order_payment'
+  | 'adjustment';
+
+export type FeituanWalletLedgerDoc = {
+  userId: string;
+  walletId: string;
+  phoneMasked: string | null;
+  type: FeituanWalletLedgerType;
+  /** 入账为正，消费/扣减为负 */
+  delta: number;
+  balanceAfter: number;
+  payAmount?: number;
+  bonusAmount?: number;
+  creditAmount?: number;
+  topupRequestId?: string;
+  orderId?: string;
+  orderNumber?: string;
+  orderProjectId?: string;
+  paymentGroupScope?: {
+    includesInitialSegment: boolean;
+    confirmedAppendBatchIds: string[];
+  };
+  note?: string;
+  createdAt: Timestamp;
+};
+
 export type PermissionDoc = {
   userId: string;
   projectId: string;
@@ -204,8 +321,15 @@ export type InvitationDoc = {
 /** 登录/注册用户在平台上的登记快照（`registered_users/{uid}`） */
 export type RegisteredUserDoc = {
   uid: string;
+  /** Firebase Phone Auth 验证后的 E.164 手机号；饭团钱包以此账号为资金归属 */
+  phoneE164?: string | null;
   /** 掩码展示，如 ****5678；匿名用户为 null */
   phoneMasked: string | null;
+  phoneVerifiedAt?: Timestamp | null;
+  /** 第六阶段服务号绑定预留：消息身份，不直接作为钱包归属 */
+  wxOpenId?: string;
+  wxUnionId?: string;
+  wxBoundAt?: Timestamp | null;
   isAnonymous: boolean;
   firstSeenAt: Timestamp;
   lastSeenAt: Timestamp;
@@ -450,6 +574,19 @@ export type OrderCardPaymentDoc = {
   appliedAt: Timestamp;
 };
 
+/** 饭团钱包抵扣快照：每次抵扣一条，对应一次自动确认支付动作 */
+export type OrderFeituanWalletPaymentDoc = {
+  walletId: string;
+  userId: string;
+  deduct: number;
+  ledgerId: string;
+  paymentGroupScope: {
+    includesInitialSegment: boolean;
+    confirmedAppendBatchIds: string[];
+  };
+  appliedAt: Timestamp;
+};
+
 /** 顾客每次「加菜」产生一档记录，便于商户分笔核对补款 */
 export type OrderAppendBatchDoc = {
   id: string;
@@ -469,6 +606,9 @@ export type OrderDoc = {
   projectId: string;
   projectTitle: string;
   customerKey: string;
+  /** 手机号验证用户；饭团钱包抵扣时必须写入/校验 */
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   customerName: string;
   customerPhone: string;
   customerAddress: string;
@@ -496,6 +636,8 @@ export type OrderDoc = {
   paymentScreenshots: unknown[];
   /** 每次卡支付一条，按时间追加；与支付组一一留痕，参见 orderCardPaymentApplications */
   cardPaymentApplications?: OrderCardPaymentDoc[];
+  /** 每次饭团钱包抵扣一条；与支付组一一留痕 */
+  feituanWalletPaymentApplications?: OrderFeituanWalletPaymentDoc[];
   /**
    * @deprecated 仅旧订单单笔卡支付；新订单请用 cardPaymentApplications + listOrderCardPaymentApplications
    */

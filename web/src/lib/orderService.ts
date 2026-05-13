@@ -63,6 +63,8 @@ export type CreateOrderInput = {
   projectId: string;
   channel?: OrderChannel;
   customerKey: string;
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   customerName: string;
   customerPhone: string;
   customerAddress: string;
@@ -307,6 +309,8 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       projectId: input.projectId,
       projectTitle: project.title,
       customerKey: input.customerKey,
+      ...(input.customerUserId ? { customerUserId: input.customerUserId } : {}),
+      ...(input.customerPhoneMasked ? { customerPhoneMasked: input.customerPhoneMasked } : {}),
       customerName: input.customerName,
       customerPhone: input.customerPhone,
       customerAddress: input.customerAddress,

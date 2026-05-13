@@ -1,4 +1,5 @@
 import type { OrderAppendBatchDoc, OrderDoc, OrderLineDoc } from '../types/firestore';
+import { listOrderFeituanWalletPaymentApplications } from './orderFeituanWalletApplications';
 import { listOrderCardPaymentApplications } from './orderCardPaymentApplications';
 import { parseScreenshotEntries, type ParsedScreenshotEntry } from './paymentScreenshotHelpers';
 
@@ -139,6 +140,14 @@ function buildActionBuckets(order: OrderDoc, segments: Segment[]): ActionBucket[
     if (typeof cardAt !== 'number') continue;
     const idx = stageIndexByTime(segments, cardAt);
     upsertBucket(buckets, `card:${i}:${cardAt}`, idx, cardAt, null, true);
+  }
+
+  const walletApps = listOrderFeituanWalletPaymentApplications(order);
+  for (let i = 0; i < walletApps.length; i++) {
+    const walletAt = walletApps[i]?.appliedAt?.toMillis?.();
+    if (typeof walletAt !== 'number') continue;
+    const idx = stageIndexByTime(segments, walletAt);
+    upsertBucket(buckets, `feituan-wallet:${i}:${walletAt}`, idx, walletAt, null, true);
   }
 
   return [...buckets.values()].sort((a, b) => {
