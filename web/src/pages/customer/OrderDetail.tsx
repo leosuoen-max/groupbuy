@@ -29,6 +29,7 @@ import {
 } from '../../lib/cardService';
 import {
   applyFeituanWalletPaymentToOrder,
+  getFeituanWalletSettings,
   planFeituanWalletPayment,
   type FeituanWalletPaymentPlan,
 } from '../../lib/feituanWalletService';
@@ -382,16 +383,30 @@ export default function OrderDetail() {
       return;
     }
     let cancelled = false;
-    void getShopBySlug(order.shopSlug)
-      .then((shopRow) => {
-        if (cancelled) return;
-        const methods = (shopRow?.data.paymentMethods ?? [])
+    void (async () => {
+      if (order.channel === 'feituan') {
+        const settings = await getFeituanWalletSettings();
+        return settings.paymentMethods
+          .filter((x) => x.isActive !== false)
           .map((x) => ({
             id: x.id,
-            name: (x.name ?? '').trim() || '收款码',
+            name: (x.name ?? '').trim() || '饭团收款码',
             qrCodeUrl: (x.qrCodeUrl ?? '').trim(),
           }))
           .filter((x) => Boolean(x.qrCodeUrl));
+      }
+
+      const shopRow = await getShopBySlug(order.shopSlug);
+      return (shopRow?.data.paymentMethods ?? [])
+        .map((x) => ({
+          id: x.id,
+          name: (x.name ?? '').trim() || '收款码',
+          qrCodeUrl: (x.qrCodeUrl ?? '').trim(),
+        }))
+        .filter((x) => Boolean(x.qrCodeUrl));
+    })()
+      .then((methods) => {
+        if (cancelled) return;
         setShopPaymentMethods(methods);
       })
       .catch(() => {
@@ -400,7 +415,7 @@ export default function OrderDetail() {
     return () => {
       cancelled = true;
     };
-  }, [order?.shopSlug]);
+  }, [order?.channel, order?.shopSlug]);
 
   useEffect(() => {
     if (!editingContact) orphanPointMigratedRef.current = false;
