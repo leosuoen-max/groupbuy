@@ -177,6 +177,12 @@ export default function FeituanAdmin() {
         >
           打开饭团主页
         </Link>
+        <Link
+          to="/admin/feituan/orders"
+          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900"
+        >
+          饭团订单
+        </Link>
       </div>
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
       {rows.length === 0 ? (

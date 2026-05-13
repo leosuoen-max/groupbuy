@@ -321,7 +321,10 @@ export default function OrderManagement() {
             const d = row.data;
             const pathSlug = shopRow?.slug ?? slug;
             const merchantDetailUrl = `/dashboard/${encodeURIComponent(pathSlug)}/order/${encodeURIComponent(d.projectId)}/${encodeURIComponent(d.orderNumber)}`;
-            const customerUrl = `/shop/${encodeURIComponent(pathSlug)}/${encodeURIComponent(d.projectId)}/orders/${encodeURIComponent(d.orderNumber)}`;
+            const isFeituanOrder = d.channel === 'feituan';
+            const customerUrl = isFeituanOrder
+              ? `/feituan/projects/${encodeURIComponent(d.projectId)}/orders/${encodeURIComponent(d.orderNumber)}`
+              : `/shop/${encodeURIComponent(pathSlug)}/${encodeURIComponent(d.projectId)}/orders/${encodeURIComponent(d.orderNumber)}`;
             const shots = parseScreenshotEntries(d.paymentScreenshots);
             const thumbUrl = shots.find((s) => s.url)?.url ?? null;
             const hasShot = orderHasPaymentScreenshots(d.paymentScreenshots);
@@ -351,6 +354,11 @@ export default function OrderManagement() {
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
                       <span className="truncate">{d.projectTitle}</span>
+                      {isFeituanOrder ? (
+                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-900">
+                          饭团订单
+                        </span>
+                      ) : null}
                       <StatusChip
                         tone={toChipTone(displayStatus)}
                         label={statusLabel(displayStatus)}

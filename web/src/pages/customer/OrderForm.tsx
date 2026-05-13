@@ -10,7 +10,7 @@ import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
 import { suggestDeliveryPointFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
-import { getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
+import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import { withTimeout } from '../../lib/withTimeout';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
@@ -28,9 +28,10 @@ function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
 
 export default function OrderForm() {
   const { shopSlug = '', projectId = '' } = useParams<{
-    shopSlug: string;
+    shopSlug?: string;
     projectId: string;
   }>();
+  const isFeituanOrder = !shopSlug;
   const location = useLocation();
   const navigate = useNavigate();
   const incoming = (location.state ?? {}) as CartLocationState;
@@ -48,7 +49,10 @@ export default function OrderForm() {
     return draft;
   }, [incoming.cartDraft, lines]);
 
-  const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+  const [resolvedShopSlug, setResolvedShopSlug] = useState(shopSlug);
+  const base = isFeituanOrder
+    ? `/feituan/projects/${encodeURIComponent(projectId)}`
+    : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
 
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState('');
@@ -110,18 +114,30 @@ export default function OrderForm() {
         setBooting(true);
         setBootErr(null);
         try {
-          const [shopRow, projectRow] = await Promise.all([
-            withTimeout(
-              getShopBySlug(decodeURIComponent(shopSlug)),
-              LOAD_TIMEOUT_MS,
-              '店铺加载'
-            ),
-            withTimeout(
-              getProject(decodeURIComponent(projectId)),
-              LOAD_TIMEOUT_MS,
-              '项目加载'
-            ),
-          ]);
+          const projectPromise = withTimeout(
+            getProject(decodeURIComponent(projectId)),
+            LOAD_TIMEOUT_MS,
+            '项目加载'
+          );
+          const [projectRow, shopRow] = isFeituanOrder
+            ? await (async () => {
+                const p = await projectPromise;
+                const s = p
+                  ? await withTimeout(getShopById(p.data.shopId), LOAD_TIMEOUT_MS, '店铺加载')
+                  : null;
+                return [p, s] as const;
+              })()
+            : await (async () => {
+                const [s, p] = await Promise.all([
+                  withTimeout(
+                    getShopBySlug(decodeURIComponent(shopSlug)),
+                    LOAD_TIMEOUT_MS,
+                    '店铺加载'
+                  ),
+                  projectPromise,
+                ]);
+                return [p, s] as const;
+              })();
           if (!shopRow) {
             if (!cancelled) setBootErr('店铺不存在或链接有误。');
             return;
@@ -138,8 +154,12 @@ export default function OrderForm() {
             if (!cancelled) setBootErr('项目与店铺不匹配。');
             return;
           }
-          if (projectRow.data.feituanStatus === 'listed') {
+          if (projectRow.data.feituanStatus === 'listed' && !isFeituanOrder) {
             if (!cancelled) setBootErr('该项目已在大马饭团上架，请从饭团入口参团。');
+            return;
+          }
+          if (isFeituanOrder && projectRow.data.feituanStatus !== 'listed') {
+            if (!cancelled) setBootErr('该项目尚未在大马饭团上架。');
             return;
           }
 
@@ -165,6 +185,7 @@ export default function OrderForm() {
           }));
 
           if (!cancelled) {
+            setResolvedShopSlug(shopRow.data.slug);
             setProject(projectRow.data);
             setPoints(uiPoints);
           }
@@ -180,7 +201,7 @@ export default function OrderForm() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, shopSlug]);
+  }, [isFeituanOrder, projectId, shopSlug]);
 
   /** 第二次及以后下单：姓名/电话；配送点与地址在第二步按上一笔订单预填（可改；备注不预填） */
   useEffect(() => {
@@ -311,8 +332,9 @@ export default function OrderForm() {
     try {
       setSubmitting(true);
       const { orderNumber, timedPromoPaymentDueAt } = await createOrder({
-        shopSlug,
+        shopSlug: resolvedShopSlug,
         projectId,
+        channel: isFeituanOrder ? 'feituan' : 'shop',
         customerKey,
         customerName: name.trim(),
         customerPhone: phone.trim(),

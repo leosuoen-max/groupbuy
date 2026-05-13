@@ -21,12 +21,14 @@ import {
   orderHasPaymentScreenshots,
   withDefaultScreenshotFlagIfUrl,
 } from './paymentScreenshotHelpers';
+import { buildPaymentGroups } from './paymentGroups';
 import {
   computeImageFileMd5Hex,
   deleteFileByDownloadUrl,
   uploadOrderPaymentImage,
 } from './paymentImageUpload';
 import { listDeliveryPointsByOwnerId } from './deliveryPointService';
+import { isFeituanAdmin } from './feituanService';
 import { getProject } from './projectService';
 import { getProjectPermissionForUser } from './permissionService';
 import { getShopById } from './shopService';
@@ -38,6 +40,7 @@ import type {
   OrderLineDoc,
   OrderStatus,
   ProjectDoc,
+  OrderChannel,
 } from '../types/firestore';
 import { isBundleToolPastScheduledOff, isProductPastScheduledOff } from './productAvailability';
 
@@ -58,6 +61,7 @@ const customerOrdersCache = new Map<string, OrdersCacheEntry>();
 export type CreateOrderInput = {
   shopSlug: string;
   projectId: string;
+  channel?: OrderChannel;
   customerKey: string;
   customerName: string;
   customerPhone: string;
@@ -76,6 +80,8 @@ type CreateOrderErrorCode =
   | 'PROJECT_NOT_FOUND'
   | 'PROJECT_NOT_PUBLISHED'
   | 'PROJECT_CLOSED'
+  | 'FEITUAN_ONLY'
+  | 'FEITUAN_NOT_LISTED'
   | 'PRODUCT_NOT_FOUND'
   | 'PRODUCT_INACTIVE'
   | 'INSUFFICIENT_STOCK';
@@ -84,6 +90,8 @@ const CREATE_ORDER_ERROR_MESSAGE: Record<CreateOrderErrorCode, string> = {
   PROJECT_NOT_FOUND: '项目不存在或已删除。',
   PROJECT_NOT_PUBLISHED: '项目尚未发布，暂不能下单。',
   PROJECT_CLOSED: '项目已截止，暂不能下单。',
+  FEITUAN_ONLY: '该项目已在大马饭团上架，请从饭团入口参团。',
+  FEITUAN_NOT_LISTED: '该项目尚未在大马饭团上架，暂不能从饭团入口下单。',
   PRODUCT_NOT_FOUND: '商品不存在，请返回重选。',
   PRODUCT_INACTIVE: '有商品已下架，请返回重选。',
   INSUFFICIENT_STOCK: '库存不足，请返回重选。',
@@ -255,6 +263,13 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
     const project = projectSnap.data() as ProjectDoc;
 
     ensureProjectCanOrder(project);
+    const channel = input.channel ?? 'shop';
+    if (project.feituanStatus === 'listed' && channel !== 'feituan') {
+      throw new CreateOrderError('FEITUAN_ONLY');
+    }
+    if (channel === 'feituan' && project.feituanStatus !== 'listed') {
+      throw new CreateOrderError('FEITUAN_NOT_LISTED');
+    }
 
     const lines = toOrderLines(input.lines);
     const normalLines = input.lines.filter((l) => !l.productId.startsWith('bundle:'));
@@ -286,6 +301,7 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
 
     const orderPayload: Omit<OrderDoc, 'createdAt' | 'updatedAt'> = {
       orderNumber,
+      channel,
       shopId: project.shopId,
       shopSlug: input.shopSlug,
       projectId: input.projectId,
@@ -348,6 +364,19 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
         : {}),
     };
   });
+}
+
+export async function listFeituanOrders(): Promise<OrderRow[]> {
+  const db = getDb();
+  const q = query(collection(db, 'orders'), where('channel', '==', 'feituan'));
+  const snap = await getDocs(q);
+  const rows = snap.docs.map((d) => ({ id: d.id, data: d.data() as OrderDoc }));
+  rows.sort((a, b) => {
+    const ta = a.data.createdAt?.toMillis?.() ?? 0;
+    const tb = b.data.createdAt?.toMillis?.() ?? 0;
+    return tb - ta;
+  });
+  return rows;
 }
 
 export async function listOrdersByCustomer(projectId: string, customerKey: string): Promise<OrderRow[]> {
@@ -421,36 +450,13 @@ async function md5DuplicateInShopOtherOrders(
   return false;
 }
 
-/**
- * 多笔待付加购并存时，新截图应挂到「按时间最早、且尚未视为已有凭证」的那一档，
- * 而不是固定 appendBatches 数组的第一项（否则多笔都会挤在同一档，后续加购永远缺图）。
- */
-function pickPendingAppendBatchIdForNewScreenshot(order: OrderDoc): string | undefined {
-  const pendingBatches = (order.appendBatches ?? []).filter((b) => !b.confirmedAt);
-  if (pendingBatches.length === 0) return undefined;
-  /**
-   * 规则：若当前只有一个待确认组，则连续提交/编辑凭证（中间无新加购）都归这一组。
-   * 这样顾客补传或改图不会意外“切组”。
-   */
-  if (pendingBatches.length === 1) return pendingBatches[0]!.id;
-  const pendingIds = pendingBatches.map((b) => b.id);
-  const sorted = [...pendingBatches].sort(
-    (a, b) =>
-      (a.appendedAt?.toMillis?.() ?? 0) - (b.appendedAt?.toMillis?.() ?? 0)
-  );
-  for (const b of sorted) {
-    if (
-      !appendBatchHasCustomerUpload(
-        order.paymentScreenshots,
-        b.id,
-        b.appendedAt,
-        pendingIds
-      )
-    ) {
-      return b.id;
-    }
-  }
-  return sorted[sorted.length - 1]!.id;
+function pickPaymentGroupBoundaryBatchIdForNewScreenshot(order: OrderDoc): string | undefined {
+  const groups = buildPaymentGroups(order);
+  const target =
+    groups.find((g) => g.status === 'unpaid') ??
+    [...groups].reverse().find((g) => g.status === 'pending');
+  const ids = target?.appendBatchIds ?? [];
+  return ids.length > 0 ? ids[ids.length - 1] : undefined;
 }
 
 /** 顾客上传付款截图：校验本人；写入 Storage URL + MD5 标记；待付款则改为待核实 */
@@ -546,8 +552,8 @@ export async function customerUploadPaymentScreenshot(input: {
   };
   if (flagReason) entry.flagReason = flagReason;
 
-  /** 规则：一旦存在待确认加购档，新的凭证提交即作为该轮（最早未配图）加购组的分界线。 */
-  const batchId = pickPendingAppendBatchIdForNewScreenshot(order);
+  /** 支付动作按宪法归属到当前支付组边界；支付前所有加购与下单同属一组。 */
+  const batchId = pickPaymentGroupBoundaryBatchIdForNewScreenshot(order);
   if (batchId) entry.appendBatchId = batchId;
 
   const prev = Array.isArray(order.paymentScreenshots)
@@ -1073,6 +1079,10 @@ async function assertMerchantCanManageOrder(
   actorUserId: string,
   order: OrderDoc
 ): Promise<void> {
+  if (order.channel === 'feituan') {
+    if (await isFeituanAdmin(actorUserId)) return;
+    throw new Error('饭团订单由饭团管理员确认与管理');
+  }
   const shop = await getShopById(order.shopId);
   if (!shop) throw new Error('店铺不存在');
   if (shop.data.ownerId === actorUserId) return;
@@ -1085,6 +1095,112 @@ async function assertMerchantCanManageOrder(
     return;
   }
   throw new Error('无权限操作该订单');
+}
+
+export async function merchantConfirmPaymentGroup(
+  orderFirestoreId: string,
+  paymentGroupId: string,
+  actorUserId: string
+): Promise<void> {
+  const groupId = paymentGroupId.trim();
+  if (!groupId) throw new Error('缺少支付组');
+
+  const db = getDb();
+  const orderRef = doc(db, 'orders', orderFirestoreId);
+  const preSnap = await getDoc(orderRef);
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  await assertMerchantCanManageOrder(actorUserId, pre);
+  if (pre.status === 'cancelled') throw new Error('订单已取消');
+
+  await runTransaction(db, async (tx) => {
+    const oSnap = await tx.get(orderRef);
+    if (!oSnap.exists()) throw new Error('订单不存在');
+    const o = oSnap.data() as OrderDoc;
+    if (o.status === 'cancelled') throw new Error('订单已取消');
+
+    const groups = buildPaymentGroups(o);
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) throw new Error('支付组不存在，请刷新后重试');
+    if (group.status === 'confirmed') throw new Error('该支付组已确认');
+    if (group.status !== 'pending') {
+      throw new Error('该支付组尚未发生支付动作，不能确认收款');
+    }
+
+    const projectRef = doc(db, 'projects', o.projectId);
+    const pSnap = await tx.get(projectRef);
+    if (!pSnap.exists()) throw new Error('项目不存在');
+    const project = pSnap.data() as ProjectDoc;
+    if (project.shopId !== o.shopId) throw new Error('数据不一致');
+
+    const now = Timestamp.now();
+    const batchIds = new Set(group.appendBatchIds);
+    const batches = [...(o.appendBatches ?? [])].map((b) =>
+      batchIds.has(b.id) && !b.confirmedAt
+        ? { ...b, confirmedAt: now, confirmedByUserId: actorUserId }
+        : b
+    );
+
+    const initialSupplement =
+      group.includesInitial && !o.initialPaymentConfirmedAt
+        ? Number(o.initialTotalAmount ?? computeFirstTrancheAmount(o)) || 0
+        : 0;
+    const appendSupplement = (o.appendBatches ?? [])
+      .filter((b) => batchIds.has(b.id) && !b.confirmedAt)
+      .reduce((s, b) => s + (Number(b.deltaAmount) || 0), 0);
+    const supplement = initialSupplement + appendSupplement;
+    if (supplement <= 0.001) throw new Error('该支付组没有可确认金额');
+
+    const totalAmt = Number(o.totalAmount) || 0;
+    const paidBefore = Number(o.paidAmount) || 0;
+    const newPaid = Math.min(totalAmt, paidBefore + supplement);
+    const newPending = Math.max(0, totalAmt - newPaid);
+    const nextStatus: OrderStatus =
+      newPending <= 0.001 ? 'confirmed' : 'partial_paid';
+
+    const history = [...(o.statusHistory ?? [])];
+    history.push({
+      action: 'confirm_payment_group',
+      timestamp: now,
+      userId: actorUserId,
+      note: `${group.id};amount=${supplement.toFixed(2)};batches=${group.appendBatchIds.join(',')}`,
+    });
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+
+    tx.update(orderRef, {
+      status: nextStatus,
+      paidAmount: newPaid,
+      pendingAmount: newPending,
+      appendBatches: batches,
+      ...(group.includesInitial && !o.initialPaymentConfirmedAt
+        ? { initialPaymentConfirmedAt: now }
+        : {}),
+      statusHistory: history,
+      updatedAt: serverTimestamp(),
+    });
+
+    tx.update(projectRef, {
+      stats: {
+        ...prevStats,
+        confirmedRevenue: (prevStats.confirmedRevenue ?? 0) + supplement,
+        ...(nextStatus === 'confirmed' && o.status !== 'confirmed'
+          ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
+          : {}),
+        ...(group.includesInitial && !o.initialPaymentConfirmedAt
+          ? { unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1) }
+          : {}),
+      },
+      updatedAt: serverTimestamp(),
+    });
+  });
 }
 
 /**

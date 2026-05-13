@@ -85,10 +85,13 @@ function uploadHint(o: OrderDoc): { text: string; className: string } | null {
 
 export default function MyOrders() {
   const { shopSlug = '', projectId = '' } = useParams<{
-    shopSlug: string;
+    shopSlug?: string;
     projectId: string;
   }>();
-  const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+  const isFeituanOrders = !shopSlug;
+  const base = isFeituanOrders
+    ? `/feituan/projects/${encodeURIComponent(projectId)}`
+    : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
   const [orders, setOrders] = useState<OrderDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,7 +107,11 @@ export default function MyOrders() {
           if (cancelled) return;
           setOrders(
             rows
-              .filter((row) => row.data.shopSlug === shopSlug)
+              .filter((row) =>
+                isFeituanOrders
+                  ? row.data.channel === 'feituan'
+                  : row.data.shopSlug === shopSlug
+              )
               .map((row) => row.data)
           );
         })
@@ -120,7 +127,7 @@ export default function MyOrders() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, shopSlug]);
+  }, [isFeituanOrders, projectId, shopSlug]);
 
   if (loading) {
     return (

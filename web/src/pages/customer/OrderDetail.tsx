@@ -202,11 +202,14 @@ function buildDeliveryUpdateFromDraft(
 
 export default function OrderDetail() {
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
-    shopSlug: string;
+    shopSlug?: string;
     projectId: string;
     orderId: string;
   }>();
-  const base = `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+  const isFeituanOrder = !shopSlug;
+  const base = isFeituanOrder
+    ? `/feituan/projects/${encodeURIComponent(projectId)}`
+    : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -246,13 +249,17 @@ export default function OrderDetail() {
 
   const applyOrderRow = useCallback(
     (row: OrderRow | null) => {
-      if (!row || row.data.shopSlug !== shopSlug) {
+      if (
+        !row ||
+        (!isFeituanOrder && row.data.shopSlug !== shopSlug) ||
+        (isFeituanOrder && row.data.channel !== 'feituan')
+      ) {
         setOrderRow(null);
         return;
       }
       setOrderRow(row);
     },
-    [shopSlug]
+    [isFeituanOrder, shopSlug]
   );
 
   const order: OrderDoc | null = orderRow?.data ?? null;
@@ -404,6 +411,7 @@ export default function OrderDetail() {
   const canCardPay =
     !!order &&
     !!projectDoc &&
+    order.channel !== 'feituan' &&
     order.status !== 'cancelled' &&
     hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
@@ -463,6 +471,7 @@ export default function OrderDetail() {
 
   const canEditContact =
     !!order &&
+    order.channel !== 'feituan' &&
     projectOpen &&
     order.status !== 'cancelled' &&
     ['unpaid', 'pending', 'confirmed', 'partial_paid'].includes(order.status);

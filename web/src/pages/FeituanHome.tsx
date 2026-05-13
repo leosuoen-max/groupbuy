@@ -67,12 +67,18 @@ export default function FeituanHome() {
                 <p className="mt-2 text-sm leading-relaxed text-gray-600 line-clamp-3">
                   {project.data.textContent?.replace(/\s+/g, ' ').trim() || '点击查看团购详情。'}
                 </p>
-                <div className="mt-3">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Link
                     to={`/feituan/projects/${encodeURIComponent(project.id)}`}
                     className="inline-flex rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white"
                   >
                     查看饭团项目
+                  </Link>
+                  <Link
+                    to={`/feituan/projects/${encodeURIComponent(project.id)}/my-orders`}
+                    className="inline-flex rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-900"
+                  >
+                    我的订单
                   </Link>
                 </div>
               </div>

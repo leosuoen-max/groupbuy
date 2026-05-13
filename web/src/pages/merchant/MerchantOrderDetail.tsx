@@ -24,6 +24,7 @@ import {
   merchantWaiveAppendBatchScreenshot,
   type OrderRow,
 } from '../../lib/orderService';
+import { isFeituanAdmin } from '../../lib/feituanService';
 import {
   listDeliveryPointsByOwnerId,
   type DeliveryPointRow,
@@ -237,12 +238,17 @@ function ConfirmedAppendBatchCard({
   );
 }
 
-export default function MerchantOrderDetail() {
+export default function MerchantOrderDetail({
+  mode = 'merchant',
+}: {
+  mode?: 'merchant' | 'feituanAdmin';
+}) {
   const { shopSlug = '', projectId = '', orderNumber = '' } = useParams<{
-    shopSlug: string;
+    shopSlug?: string;
     projectId: string;
     orderNumber: string;
   }>();
+  const isFeituanAdminMode = mode === 'feituanAdmin';
   const slug = decodeURIComponent(shopSlug);
   const pid = decodeURIComponent(projectId);
   const onum = decodeURIComponent(orderNumber);
@@ -274,11 +280,28 @@ export default function MerchantOrderDetail() {
   const [dpPick, setDpPick] = useState<string>('');
 
   const refresh = useCallback(async () => {
+    if (isFeituanAdminMode && !user) return;
     setLoading(true);
     setErr(null);
     try {
       const r = await getOrderByNumber(pid, onum);
-      if (!r || r.data.shopSlug !== slug) {
+      if (!r) {
+        setRow(null);
+        setErr('订单不存在');
+        return;
+      }
+      if (isFeituanAdminMode) {
+        if (r.data.channel !== 'feituan') {
+          setRow(null);
+          setErr('该订单不是饭团订单');
+          return;
+        }
+        if (!user || !(await isFeituanAdmin(user.uid))) {
+          setRow(null);
+          setErr('无权限访问饭团订单');
+          return;
+        }
+      } else if (r.data.shopSlug !== slug) {
         setRow(null);
         setErr('订单不存在或不属于当前店铺');
         return;
@@ -290,13 +313,18 @@ export default function MerchantOrderDetail() {
     } finally {
       setLoading(false);
     }
-  }, [onum, pid, slug]);
+  }, [isFeituanAdminMode, onum, pid, slug, user]);
 
   useEffect(() => {
     queueMicrotask(() => {
+      if (authLoading) return;
+      if (!user) {
+        setLoading(false);
+        return;
+      }
       void refresh();
     });
-  }, [refresh]);
+  }, [authLoading, refresh, user]);
 
   useEffect(() => {
     if (!dpModalOpen) return;
@@ -468,8 +496,12 @@ export default function MerchantOrderDetail() {
     }
   };
 
-  const baseOrders = `/dashboard/${encodeURIComponent(slug)}/orders`;
-  const customerUrl = `/shop/${encodeURIComponent(slug)}/${encodeURIComponent(pid)}/orders/${encodeURIComponent(onum)}`;
+  const baseOrders = isFeituanAdminMode
+    ? '/admin/feituan/orders'
+    : `/dashboard/${encodeURIComponent(slug)}/orders`;
+  const customerUrl = isFeituanAdminMode
+    ? `/feituan/projects/${encodeURIComponent(pid)}/orders/${encodeURIComponent(onum)}`
+    : `/shop/${encodeURIComponent(slug)}/${encodeURIComponent(pid)}/orders/${encodeURIComponent(onum)}`;
 
   if (authLoading || loading) {
     return (
@@ -504,6 +536,8 @@ export default function MerchantOrderDetail() {
   }
 
   const order: OrderDoc = row.data;
+  const isFeituanOrder = order.channel === 'feituan';
+  const canMerchantManagePayment = !isFeituanOrder || isFeituanAdminMode;
   const displayStatus = deriveDisplayOrderStatus(order);
   const created = order.createdAt?.toDate?.() ?? new Date();
   const timeStr = `${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`;
@@ -565,6 +599,7 @@ export default function MerchantOrderDetail() {
       })
     : false;
   const canConfirmWhole =
+    canMerchantManagePayment &&
     !firstPaymentAcknowledged &&
     firstGroupHasProof &&
     (order.status === 'unpaid' ||
@@ -609,6 +644,7 @@ export default function MerchantOrderDetail() {
 
   // 同一次支付动作覆盖全部待付（首单+所有加购）时，只需一次确认
   const canConfirmAllInOneAction =
+    canMerchantManagePayment &&
     !firstPaymentAcknowledged &&
     firstGroupHasProof &&
     pendingBatches.length > 0 &&
@@ -738,6 +774,7 @@ export default function MerchantOrderDetail() {
                 untaggedNotBeforeMillis={batch.appendedAt.toMillis()}
                 emptyHint="该支付组尚未上传对应付款截图。"
                 emptyAction={
+                  canMerchantManagePayment &&
                   !canConfirm &&
                   order.status !== 'cancelled' &&
                   order.status !== 'confirmed' ? (
@@ -756,7 +793,7 @@ export default function MerchantOrderDetail() {
                 }
               />
             </div>
-            {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
+            {canMerchantManagePayment && order.status !== 'cancelled' && order.status !== 'confirmed' ? (
               <>
                 <ActionButton
                   type="button"
@@ -809,6 +846,17 @@ export default function MerchantOrderDetail() {
       ) : null}
 
       <div className="space-y-4 text-sm text-gray-800">
+        {isFeituanOrder && !isFeituanAdminMode ? (
+          <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-950">
+            饭团订单：店家后台仅用于查看生产与配送信息，收款确认请到「饭团订单」由饭团管理员处理。
+          </p>
+        ) : null}
+        {isFeituanAdminMode ? (
+          <p className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-950">
+            饭团订单详情：本页沿用商户订单支付组界面，由饭团管理员按支付组确认收款。
+          </p>
+        ) : null}
+
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-lg font-bold">#{order.orderNumber}</div>
@@ -930,7 +978,7 @@ export default function MerchantOrderDetail() {
                 可让顾客上传一张凭证，或使用「免提交付款凭证」一次性覆盖本次支付组。
               </p>
             </div>
-            {order.status !== 'cancelled' && order.status !== 'confirmed' ? (
+            {canMerchantManagePayment && order.status !== 'cancelled' && order.status !== 'confirmed' ? (
               <ActionButton
                 type="button"
                 variant="secondary"
@@ -1027,6 +1075,7 @@ export default function MerchantOrderDetail() {
                     emptyAction={
                       !firstPaymentAcknowledged &&
                       !firstGroupHasProof &&
+                      canMerchantManagePayment &&
                       order.status !== 'cancelled' &&
                       order.status !== 'confirmed' ? (
                         <ActionButton

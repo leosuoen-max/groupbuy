@@ -1,0 +1,231 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { PageShell } from '../components/PageShell';
+import { useAuthUser } from '../hooks/useAuthUser';
+import { isFeituanAdmin } from '../lib/feituanService';
+import { formatMYR } from '../lib/formatMYR';
+import {
+  listFeituanOrders,
+  merchantConfirmPaymentGroup,
+  type OrderRow,
+} from '../lib/orderService';
+import { buildPaymentGroups, type PaymentGroup } from '../lib/paymentGroups';
+import { deriveDisplayOrderStatus } from '../lib/paymentGroupView';
+import type { OrderStatus } from '../types/firestore';
+
+function statusLabel(s: OrderStatus): string {
+  if (s === 'unpaid') return '待付款';
+  if (s === 'pending') return '待确认';
+  if (s === 'confirmed') return '已确认';
+  if (s === 'partial_paid') return '部分已确认';
+  if (s === 'cancelled') return '已取消';
+  return s;
+}
+
+function groupStatusLabel(s: PaymentGroup['status']): string {
+  if (s === 'unpaid') return '待付款';
+  if (s === 'pending') return '待确认';
+  if (s === 'confirmed') return '已确认';
+  return s;
+}
+
+function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
+  const d = t?.toDate?.();
+  if (!d) return '—';
+  return d.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+export default function FeituanOrders() {
+  const { user, loading: authLoading } = useAuthUser();
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    setErr(null);
+    try {
+      const ok = await isFeituanAdmin(user.uid);
+      setAllowed(ok);
+      if (!ok) {
+        setOrders([]);
+        return;
+      }
+      setOrders(await listFeituanOrders());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setAllowed(false);
+      setOrders([]);
+      setLoading(false);
+      return;
+    }
+    void refresh();
+  }, [authLoading, refresh, user]);
+
+  const counts = useMemo(
+    () => ({
+      all: orders.length,
+      pending: orders.filter((o) =>
+        buildPaymentGroups(o.data).some((g) => g.status === 'pending')
+      ).length,
+      unpaid: orders.filter((o) =>
+        buildPaymentGroups(o.data).some((g) => g.status === 'unpaid')
+      ).length,
+      done: orders.filter((o) =>
+        buildPaymentGroups(o.data).some((g) => g.status === 'confirmed')
+      ).length,
+    }),
+    [orders]
+  );
+
+  const confirm = async (row: OrderRow, groupId: string) => {
+    if (!user) return;
+    setBusyId(`${row.id}:${groupId}`);
+    setErr(null);
+    try {
+      await merchantConfirmPaymentGroup(row.id, groupId, user.uid);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '确认失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (authLoading || loading || allowed == null) {
+    return (
+      <PageShell title="饭团订单" subtitle="加载中">
+        <p className="text-sm text-gray-600">请稍候…</p>
+      </PageShell>
+    );
+  }
+
+  if (!allowed) {
+    return (
+      <PageShell title="饭团订单" subtitle="无权限">
+        <p className="text-sm text-gray-700">当前账号无饭团管理员权限。</p>
+      </PageShell>
+    );
+  }
+
+  return (
+    <PageShell
+      title="饭团订单"
+      subtitle={`全部 ${counts.all} · 待确认 ${counts.pending} · 待付款 ${counts.unpaid}`}
+    >
+      <div className="mb-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => void refresh()}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
+        >
+          {loading ? '刷新中…' : '刷新'}
+        </button>
+        <Link
+          to="/admin/feituan"
+          className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
+        >
+          返回饭团管理
+        </Link>
+      </div>
+      {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
+      {orders.length === 0 ? (
+        <p className="text-sm text-gray-600">暂无饭团订单。</p>
+      ) : (
+        <div className="space-y-3">
+          {orders.map((row) => {
+            const o = row.data;
+            const groups = buildPaymentGroups(o);
+            const displayStatus = deriveDisplayOrderStatus(o, groups);
+            return (
+              <article
+                key={row.id}
+                className="rounded-xl border border-gray-100 bg-white p-4 text-sm shadow-sm"
+              >
+                <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h2 className="font-semibold text-gray-900">
+                      #{o.orderNumber} · {o.projectTitle}
+                    </h2>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {o.customerName} · {o.customerPhone} · {fmtTime(o.createdAt)}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-900">
+                    {statusLabel(displayStatus)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 sm:grid-cols-4">
+                  <div>金额：{formatMYR(o.totalAmount)}</div>
+                  <div>待付：{formatMYR(o.pendingAmount ?? 0)}</div>
+                  <div>配送：{o.deliveryPointSnapshot?.name ?? '未填写'}</div>
+                  <div>支付组：{groups.length}</div>
+                </div>
+                <div className="mt-3 space-y-2 rounded-xl border border-gray-100 bg-gray-50 p-2">
+                  {groups.map((g, index) => {
+                    const busyKey = `${row.id}:${g.id}`;
+                    return (
+                      <div
+                        key={g.id}
+                        className="rounded-lg border border-gray-100 bg-white px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-900">
+                              支付组 {index + 1} · {groupStatusLabel(g.status)}
+                            </p>
+                            <p className="mt-0.5 text-xs text-gray-500">
+                              {formatMYR(g.subtotal)} · {g.lines.length} 项
+                              {g.proofs.length > 0 ? ` · 凭证 ${g.proofs.length} 张` : ''}
+                              {g.hasCardAuto ? ' · 卡/钱包自动确认' : ''}
+                            </p>
+                          </div>
+                          {g.status === 'pending' ? (
+                            <button
+                              type="button"
+                              disabled={busyId === busyKey}
+                              onClick={() => void confirm(row, g.id)}
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
+                            >
+                              {busyId === busyKey ? '确认中…' : '确认本组收款'}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Link
+                    to={`/admin/feituan/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`}
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700"
+                  >
+                    查看订单详情
+                  </Link>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </PageShell>
+  );
+}

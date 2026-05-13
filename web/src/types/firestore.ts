@@ -385,6 +385,8 @@ export type OrderLineDoc = {
   cardCoveredQuantity?: number;
 };
 
+export type OrderChannel = 'shop' | 'feituan';
+
 /** 单次钱包/次卡结算快照（一笔对应一次支付动作、一组清偿） */
 export type OrderCardPaymentDoc = {
   /** 本次清偿涵盖的分段（与支付组对齐）；旧数据可能缺失 */
@@ -424,6 +426,8 @@ export type OrderAppendBatchDoc = {
 
 export type OrderDoc = {
   orderNumber: string;
+  /** 订单入口渠道；旧订单缺省视为 shop */
+  channel?: OrderChannel;
   shopId: string;
   shopSlug: string;
   projectId: string;
