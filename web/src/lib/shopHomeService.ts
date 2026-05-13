@@ -16,7 +16,8 @@ export type ShopHomeLoadError =
   | 'SHOP_DISABLED'
   | 'PROJECT_NOT_FOUND'
   | 'PROJECT_WRONG_SHOP'
-  | 'PROJECT_DRAFT';
+  | 'PROJECT_DRAFT'
+  | 'FEITUAN_ONLY';
 
 const ERROR_MESSAGES: Record<ShopHomeLoadError, string> = {
   SHOP_NOT_FOUND: '找不到该店铺链接，请核对网址。',
@@ -24,6 +25,7 @@ const ERROR_MESSAGES: Record<ShopHomeLoadError, string> = {
   PROJECT_NOT_FOUND: '找不到该团购项目，可能已删除或链接有误。',
   PROJECT_WRONG_SHOP: '项目与店铺不匹配。',
   PROJECT_DRAFT: '该项目尚未发布，暂不可访问。',
+  FEITUAN_ONLY: '该项目已在大马饭团上架，请从饭团入口参团。',
 };
 
 export function shopHomeErrorMessage(code: ShopHomeLoadError): string {
@@ -158,6 +160,9 @@ export async function loadShopHomeFromFirestore(
   }
   if (proj.status === 'draft') {
     return { ok: false, code: 'PROJECT_DRAFT' };
+  }
+  if (proj.feituanStatus === 'listed') {
+    return { ok: false, code: 'FEITUAN_ONLY' };
   }
 
   const products = [...(proj.products ?? [])]

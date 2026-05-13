@@ -150,6 +150,21 @@ export async function setShopActiveForPlatform(
   });
 }
 
+export async function setShopFeituanEnabledForPlatform(
+  actorUid: string,
+  shopId: string,
+  feituanEnabled: boolean
+): Promise<void> {
+  if (!(await isPlatformAdmin(actorUid))) {
+    throw new Error('PLATFORM_ADMIN_REQUIRED');
+  }
+  const db = getDb();
+  await updateDoc(doc(db, 'shops', shopId), {
+    feituanEnabled,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function updateShop(
   shopId: string,
   patch: {

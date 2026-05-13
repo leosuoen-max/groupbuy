@@ -27,6 +27,9 @@ import CustomerCards from './pages/customer/CustomerCards';
 import CustomerCardBuy from './pages/customer/CustomerCardBuy';
 import PlatformRegistrations from './pages/PlatformRegistrations';
 import PlatformShops from './pages/PlatformShops';
+import FeituanAdmin from './pages/FeituanAdmin';
+import FeituanHome from './pages/FeituanHome';
+import FeituanProject from './pages/FeituanProject';
 
 export function AppRoutes() {
   return (
@@ -40,6 +43,10 @@ export function AppRoutes() {
 
       <Route path="/admin/registrations" element={<PlatformRegistrations />} />
       <Route path="/admin/shops" element={<PlatformShops />} />
+      <Route path="/admin/feituan" element={<FeituanAdmin />} />
+
+      <Route path="/feituan" element={<FeituanHome />} />
+      <Route path="/feituan/projects/:projectId" element={<FeituanProject />} />
 
       <Route path="/dashboard" element={<ShopList />} />
       <Route path="/dashboard/:shopSlug" element={<MerchantDashboard />} />

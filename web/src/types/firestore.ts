@@ -14,6 +14,8 @@ export type ShopDoc = {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   isActive: boolean;
+  /** 是否已开通「大马饭团」发布能力；未设置按 false 处理 */
+  feituanEnabled?: boolean;
 };
 
 export type ProjectProduct = {
@@ -125,6 +127,18 @@ export type ProjectDoc = {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   publishedAt?: Timestamp | null;
+  /** 大马饭团发布/审核状态；未设置表示从未发布到饭团 */
+  feituanStatus?: 'pending' | 'listed' | 'rejected' | 'delisted';
+  feituanSubmittedAt?: Timestamp | null;
+  feituanReviewedAt?: Timestamp | null;
+  feituanReviewedBy?: string;
+  feituanRejectReason?: string;
+  feituanChangeLog?: {
+    at: Timestamp;
+    by: string;
+    action: 'submit' | 'approve' | 'reject' | 'delist';
+    note?: string;
+  }[];
 };
 
 export type PermissionDoc = {

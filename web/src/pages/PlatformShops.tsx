@@ -7,6 +7,7 @@ import { createSignupInvite } from '../lib/signupInviteService';
 import {
   createShopByPlatformAdmin,
   listAllShopsForPlatform,
+  setShopFeituanEnabledForPlatform,
   setShopActiveForPlatform,
   type ShopRow,
 } from '../lib/shopService';
@@ -177,6 +178,20 @@ export default function PlatformShops() {
     }
   };
 
+  const toggleFeituan = async (shop: ShopRow, next: boolean) => {
+    if (!user) return;
+    setBusy(true);
+    setLoadErr(null);
+    try {
+      await setShopFeituanEnabledForPlatform(user.uid, shop.id, next);
+      await refresh();
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : '更新失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (authLoading || allowed === null) {
     return (
       <PageShell title="商户管理" subtitle="平台后台">
@@ -230,6 +245,12 @@ export default function PlatformShops() {
             className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 hover:bg-gray-50"
           >
             用户登记
+          </Link>
+          <Link
+            to="/admin/feituan"
+            className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900 hover:bg-orange-100"
+          >
+            饭团管理
           </Link>
           <button
             type="button"
@@ -327,6 +348,7 @@ export default function PlatformShops() {
               <th className="px-3 py-2 font-semibold">店主 UID</th>
               <th className="whitespace-nowrap px-3 py-2 font-semibold">手机（脱敏）</th>
               <th className="whitespace-nowrap px-3 py-2 font-semibold">状态</th>
+              <th className="whitespace-nowrap px-3 py-2 font-semibold">饭团</th>
               <th className="whitespace-nowrap px-3 py-2 font-semibold">创建</th>
               <th className="px-3 py-2 font-semibold">操作</th>
             </tr>
@@ -334,13 +356,14 @@ export default function PlatformShops() {
           <tbody className="divide-y divide-gray-100 text-gray-800">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-gray-500">
+                <td colSpan={8} className="px-3 py-8 text-center text-gray-500">
                   暂无商户。
                 </td>
               </tr>
             ) : (
               rows.map((r) => {
                 const open = r.data.isActive !== false;
+                const feituan = r.data.feituanEnabled === true;
                 const dash = `/dashboard/${encodeURIComponent(r.data.slug)}`;
                 return (
                   <tr key={r.id} className="hover:bg-gray-50/80">
@@ -369,10 +392,18 @@ export default function PlatformShops() {
                         <span className="rounded-full bg-slate-200 px-2 py-0.5 text-slate-800">停用</span>
                       )}
                     </td>
+                    <td className="px-3 py-2">
+                      {feituan ? (
+                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-orange-900">已开通</span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">未开通</span>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2 text-gray-600">
                       {fmtTs(r.data.createdAt)}
                     </td>
                     <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1.5">
                       {open ? (
                         <button
                           type="button"
@@ -392,6 +423,15 @@ export default function PlatformShops() {
                           启用
                         </button>
                       )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        className="rounded border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-900 disabled:opacity-50"
+                        onClick={() => void toggleFeituan(r, !feituan)}
+                      >
+                        {feituan ? '关闭饭团' : '开通饭团'}
+                      </button>
+                      </div>
                     </td>
                   </tr>
                 );

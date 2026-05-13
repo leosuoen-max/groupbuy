@@ -138,6 +138,10 @@ export default function OrderForm() {
             if (!cancelled) setBootErr('项目与店铺不匹配。');
             return;
           }
+          if (projectRow.data.feituanStatus === 'listed') {
+            if (!cancelled) setBootErr('该项目已在大马饭团上架，请从饭团入口参团。');
+            return;
+          }
 
           const allPoints = await withTimeout(
             listDeliveryPointsByOwnerId(shopRow.data.ownerId, {

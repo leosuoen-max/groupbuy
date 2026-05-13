@@ -353,6 +353,7 @@ export default function ProjectEdit() {
   const [products, setProducts] = useState<ProjectProduct[]>([newProduct(0)]);
   const [bundleTools, setBundleTools] = useState<BundleToolDoc[]>([]);
   const [status, setStatus] = useState<'draft' | 'published' | 'closed'>('draft');
+  const [feituanStatus, setFeituanStatus] = useState<ProjectDoc['feituanStatus']>();
 
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -556,6 +557,7 @@ export default function ProjectEdit() {
     setDescriptionAssets(editor.assets);
     setImageBlocks(row.data.imageBlocks ?? []);
     setStatus(row.data.status);
+    setFeituanStatus(row.data.feituanStatus);
     setClosesAt(
       toDatetimeLocalValue(row.data.closesAt?.toDate?.() ?? new Date())
     );
@@ -1269,6 +1271,10 @@ export default function ProjectEdit() {
 
   const handleSaveDraft = async () => {
     if (!resolvedPid) return;
+    if (feituanStatus === 'listed') {
+      setMsg('该项目已在大马饭团上架，店端不可修改；如需变更请联系饭团管理员。');
+      return;
+    }
     if (bundleSchemeDuplicateValidation) {
       setMsg(bundleSchemeDuplicateValidation.message);
       focusValidationTarget(bundleSchemeDuplicateValidation.key);
@@ -1318,6 +1324,10 @@ export default function ProjectEdit() {
 
   const handlePublish = async () => {
     if (!resolvedPid) return;
+    if (feituanStatus === 'listed') {
+      setMsg('该项目已在大马饭团上架，店端不可发布/修改；如需变更请联系饭团管理员。');
+      return;
+    }
     if (bundleSchemeDuplicateValidation) {
       setMsg(bundleSchemeDuplicateValidation.message);
       focusValidationTarget(bundleSchemeDuplicateValidation.key);
@@ -1425,6 +1435,7 @@ export default function ProjectEdit() {
 
   const input =
     'mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[16px] leading-6 text-gray-900 shadow-sm transition focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100';
+  const feituanLocked = feituanStatus === 'listed';
   const toolBtn =
     'rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-[15px] text-gray-800 shadow-sm transition active:scale-[0.99]';
 
@@ -1460,6 +1471,11 @@ export default function ProjectEdit() {
       ) : null}
 
       <div className="space-y-5">
+        {feituanLocked ? (
+          <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm leading-relaxed text-orange-950">
+            该项目已在「大马饭团」上架。店端已锁定不可修改；如需变更请联系饭团管理员。
+          </div>
+        ) : null}
         <label className="block text-sm font-medium text-gray-800">
           项目标题
           <input className={input} value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -3330,7 +3346,7 @@ export default function ProjectEdit() {
           <button
             type="button"
             className="inline-flex h-11 min-w-[7rem] flex-1 items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-900 shadow-sm disabled:bg-gray-100"
-            disabled={saving || !resolvedPid}
+            disabled={saving || !resolvedPid || feituanLocked}
             onClick={() => void handleSaveDraft()}
           >
             {saving ? '保存中…' : '保存草稿'}
@@ -3338,7 +3354,7 @@ export default function ProjectEdit() {
           <button
             type="button"
             className="inline-flex h-11 min-w-[7rem] flex-1 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm disabled:bg-gray-300"
-            disabled={publishing || !resolvedPid}
+            disabled={publishing || !resolvedPid || feituanLocked}
             onClick={() => void handlePublish()}
           >
             {publishing ? '发布中…' : '发布'}

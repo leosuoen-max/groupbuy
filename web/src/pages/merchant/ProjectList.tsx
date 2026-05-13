@@ -12,13 +12,22 @@ import {
   updateProjectDoc,
   type ProjectRow,
 } from '../../lib/projectService';
-import { getShopBySlug } from '../../lib/shopService';
+import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import { getProjectSharePageUrl } from '../../lib/shareLink';
+import { submitProjectToFeituan } from '../../lib/feituanService';
 
 function statusLabel(s: ProjectRow['data']['status']) {
   if (s === 'draft') return '草稿';
   if (s === 'published') return '已发布';
   return '已截止';
+}
+
+function feituanStatusLabel(s: ProjectRow['data']['feituanStatus']): string | null {
+  if (s === 'pending') return '饭团待审';
+  if (s === 'listed') return '饭团已上架';
+  if (s === 'rejected') return '饭团已驳回';
+  if (s === 'delisted') return '饭团已下架';
+  return null;
 }
 
 function isProjectPublished(p: ProjectRow): boolean {
@@ -43,6 +52,7 @@ export default function ProjectList() {
   const { user, loading: authLoading } = useAuthUser();
   const navigate = useNavigate();
   const [shopId, setShopId] = useState<string | null>(null);
+  const [shopRow, setShopRow] = useState<ShopRow | null>(null);
   const [shopName, setShopName] = useState('');
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,17 +74,20 @@ export default function ProjectList() {
       const shop = await getShopBySlug(slug);
       if (!shop) {
         setShopId(null);
+        setShopRow(null);
         setProjects([]);
         setErr('未找到该商户链接');
         return;
       }
       if (shop.data.ownerId !== user.uid) {
         setShopId(null);
+        setShopRow(null);
         setProjects([]);
         setErr('无权限访问该店铺');
         return;
       }
       setShopId(shop.id);
+      setShopRow(shop);
       setShopName(shop.data.name);
       setProjects(await listProjectsByShopId(shop.id));
     } catch (e) {
@@ -208,6 +221,25 @@ export default function ProjectList() {
     }
   };
 
+  const handleSubmitToFeituan = async (p: ProjectRow) => {
+    if (!user || busyId) return;
+    const title = p.data.title?.trim() || '未命名项目';
+    const ok = window.confirm(
+      `确定发布到「大马饭团」审批队列吗？\n\n${title}\n\n提交后需饭团管理员审核，通过后将只允许从饭团入口参团。`
+    );
+    if (!ok) return;
+    setBusyId(p.id);
+    setErr(null);
+    try {
+      await submitProjectToFeituan(p.id, user.uid);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '提交饭团失败');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   if (authLoading || (user && loading)) {
     return (
       <PageShell title="项目列表" subtitle="加载中…">
@@ -240,6 +272,17 @@ export default function ProjectList() {
   return (
     <PageShell title="项目列表" subtitle={shopName}>
       {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
+      <section className="mb-4 rounded-xl border border-orange-100 bg-orange-50/60 p-3 text-xs leading-relaxed text-orange-950">
+        {shopRow?.data.feituanEnabled ? (
+          <p>
+            本店已开通「大马饭团」。项目可提交到饭团审批，上架后店端只读，顾客仅使用饭团链接参团。
+          </p>
+        ) : (
+          <p>
+            想发布到「大马饭团」？请联系饭团管理员开通合作（电话 / 微信 / WhatsApp）。
+          </p>
+        )}
+      </section>
       <div className="mb-4 flex flex-wrap gap-2">
         <button
           type="button"
@@ -286,6 +329,8 @@ export default function ProjectList() {
         <ul className="space-y-2">
           {projects.map((p) => {
             const publishedLine = formatPublishedAtLine(p);
+            const feituanLabel = feituanStatusLabel(p.data.feituanStatus);
+            const feituanListed = p.data.feituanStatus === 'listed';
             return (
             <li key={p.id}>
               <div className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm">
@@ -307,9 +352,24 @@ export default function ProjectList() {
                     <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
                       {statusLabel(p.data.status)}
                     </span>
+                    {feituanLabel ? (
+                      <span className="shrink-0 rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-900">
+                        {feituanLabel}
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {shopRow?.data.feituanEnabled && !p.data.feituanStatus ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-orange-300 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-900 disabled:opacity-50"
+                        disabled={busyId === p.id}
+                        onClick={() => void handleSubmitToFeituan(p)}
+                      >
+                        发布到饭团
+                      </button>
+                    ) : null}
                     {isProjectPublished(p) ? (
                       <button
                         type="button"
@@ -322,7 +382,7 @@ export default function ProjectList() {
                     <button
                       type="button"
                       className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
-                      disabled={busyId === p.id}
+                      disabled={busyId === p.id || feituanListed}
                       onClick={() => void handleDeleteProject(p)}
                     >
                       删除
@@ -337,9 +397,15 @@ export default function ProjectList() {
                       <input
                         type="checkbox"
                         className="peer sr-only"
-                        disabled={busyId === p.id}
+                        disabled={busyId === p.id || feituanListed}
                         checked={isProjectPublished(p)}
-                        onChange={() => void togglePublish(p)}
+                        onChange={() => {
+                          if (feituanListed) {
+                            setErr('饭团已上架项目由饭团管理员管理，店端不可发布/撤回。');
+                            return;
+                          }
+                          void togglePublish(p);
+                        }}
                       />
                       <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-emerald-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300"></div>
                       <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5"></div>
