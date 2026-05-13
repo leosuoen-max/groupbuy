@@ -1,7 +1,116 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isPlatformAdmin() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/platform_admins/$(request.auth.uid));
+    }
+
+    function isFeituanAdmin() {
+      return isPlatformAdmin() ||
+        (signedIn() &&
+          exists(/databases/$(database)/documents/feituan_admins/$(request.auth.uid)));
+    }
+
+    function isSelfWalletCreate(uid) {
+      return isSelf(uid) &&
+        request.resource.data.userId == uid &&
+        request.resource.data.balance == 0 &&
+        request.resource.data.totalPayAmount == 0 &&
+        request.resource.data.totalBonusAmount == 0 &&
+        request.resource.data.totalCreditAmount == 0 &&
+        request.resource.data.totalSpentAmount == 0 &&
+        request.resource.data.status == 'active';
+    }
+
+    function isSelfWalletProfileUpdate(uid) {
+      return isSelf(uid) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['phoneE164', 'phoneMasked', 'updatedAt']);
+    }
+
+    function isSelfWalletDebitUpdate(uid) {
+      return isSelf(uid) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['balance', 'totalSpentAmount', 'updatedAt']) &&
+        request.resource.data.balance is number &&
+        request.resource.data.totalSpentAmount is number &&
+        request.resource.data.balance >= 0 &&
+        request.resource.data.balance < resource.data.balance &&
+        request.resource.data.totalSpentAmount ==
+          resource.data.totalSpentAmount + (resource.data.balance - request.resource.data.balance);
+    }
+
+    match /platform_admins/{adminUid} {
+      allow read: if isSelf(adminUid);
+      allow write: if false;
+    }
+
+    match /feituan_admins/{adminUid} {
+      allow read: if isSelf(adminUid) || isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /registered_users/{uid} {
+      allow create, update: if isSelf(uid);
+      allow read: if isSelf(uid) || isPlatformAdmin();
+      allow delete: if false;
+    }
+
+    match /feituan_wallet_settings/{settingsId} {
+      allow read: if true;
+      allow create, update: if isFeituanAdmin();
+      allow delete: if false;
+    }
+
+    match /feituan_wallet_accounts/{uid} {
+      allow read: if isSelf(uid) || isFeituanAdmin();
+      allow create: if isSelfWalletCreate(uid) || isFeituanAdmin();
+      allow update: if isFeituanAdmin() ||
+        isSelfWalletProfileUpdate(uid) ||
+        isSelfWalletDebitUpdate(uid);
+      allow delete: if false;
+    }
+
+    match /feituan_wallet_topup_requests/{requestId} {
+      allow read: if signedIn() &&
+        (resource.data.userId == request.auth.uid || isFeituanAdmin());
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.walletId == request.auth.uid &&
+        request.resource.data.status == 'pending';
+      allow update: if isFeituanAdmin() ||
+        (signedIn() &&
+          resource.data.userId == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['paymentScreenshots', 'updatedAt']));
+      allow delete: if false;
+    }
+
+    match /feituan_wallet_ledger/{ledgerId} {
+      allow read: if signedIn() &&
+        (resource.data.userId == request.auth.uid || isFeituanAdmin());
+      allow create: if signedIn() &&
+        (isFeituanAdmin() ||
+          (request.resource.data.userId == request.auth.uid &&
+            request.resource.data.walletId == request.auth.uid &&
+            request.resource.data.type == 'order_payment' &&
+            request.resource.data.delta < 0));
+      allow update, delete: if false;
+    }
+
     // 开发期宽松规则：上线前务必按 docs/06 收紧，并改为「仅本人可写自己的店铺」等。
+    // 上方已补饭团钱包相关正式口径；全局兜底仍保留，避免现有未规则化模块被打断。
     match /{document=**} {
       allow read, write: if request.time < timestamp.date(2027, 1, 1);
     }

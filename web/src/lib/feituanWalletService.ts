@@ -197,6 +197,25 @@ export async function saveFeituanWalletSettings(
   );
 }
 
+export async function uploadFeituanWalletPaymentMethodImage(params: {
+  actorUid: string;
+  file: File;
+}): Promise<string> {
+  if (!(await isFeituanAdmin(params.actorUid))) throw new Error('需要饭团管理员权限');
+  if (!params.file.type.startsWith('image/')) throw new Error('请上传图片文件');
+  const rawExt = params.file.name.split('.').pop()?.toLowerCase() ?? '';
+  const safeExt = rawExt && /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : 'jpg';
+  const name = `${globalThis.crypto.randomUUID()}.${safeExt}`;
+  const path = `feituanWalletSettings/${params.actorUid}/paymentMethods/${name}`;
+  const storageRef = ref(getStorageClient(), path);
+  const contentType =
+    params.file.type && params.file.type.startsWith('image/')
+      ? params.file.type
+      : 'image/jpeg';
+  await uploadBytes(storageRef, params.file, { contentType });
+  return getDownloadURL(storageRef);
+}
+
 export async function getFeituanWalletAccount(
   userId: string
 ): Promise<FeituanWalletAccountRow | null> {

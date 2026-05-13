@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
@@ -12,6 +12,7 @@ import {
   getFeituanWalletSettings,
   rejectFeituanWalletTopupRequest,
   saveFeituanWalletSettings,
+  uploadFeituanWalletPaymentMethodImage,
   type FeituanWalletAccountRow,
   type FeituanWalletLedgerRow,
   type FeituanWalletTopupRequestRow,
@@ -56,6 +57,8 @@ export default function FeituanWalletAdmin() {
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [uploadingMethodId, setUploadingMethodId] = useState<string | null>(null);
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -153,6 +156,26 @@ export default function FeituanWalletAdmin() {
       setMsg(e instanceof Error ? e.message : '驳回失败');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const uploadPaymentMethodQr = async (methodId: string, file: File | null) => {
+    if (!user || !file) return;
+    setUploadingMethodId(methodId);
+    setMsg(null);
+    try {
+      const url = await uploadFeituanWalletPaymentMethodImage({
+        actorUid: user.uid,
+        file,
+      });
+      setMethods((rows) =>
+        rows.map((row) => (row.id === methodId ? { ...row, qrCodeUrl: url } : row))
+      );
+      setMsg('收款码已上传，请记得保存钱包配置。');
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '上传收款码失败');
+    } finally {
+      setUploadingMethodId(null);
     }
   };
 
@@ -355,13 +378,36 @@ export default function FeituanWalletAdmin() {
                 placeholder="收款码图片 URL"
                 className="rounded-lg border border-gray-200 px-2 py-1 text-sm"
               />
-              <button
-                type="button"
-                onClick={() => setMethods((rows) => rows.filter((_, i) => i !== index))}
-                className="rounded-lg border border-red-100 bg-red-50 px-2 py-1 text-xs text-red-700"
-              >
-                删除
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  ref={(el) => {
+                    fileInputRefs.current[method.id] = el;
+                  }}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.currentTarget.files?.[0] ?? null;
+                    void uploadPaymentMethodQr(method.id, file);
+                    e.currentTarget.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={uploadingMethodId === method.id}
+                  onClick={() => fileInputRefs.current[method.id]?.click()}
+                  className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900 disabled:opacity-50"
+                >
+                  {uploadingMethodId === method.id ? '上传中…' : '上传图片'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMethods((rows) => rows.filter((_, i) => i !== index))}
+                  className="rounded-lg border border-red-100 bg-red-50 px-2 py-1 text-xs text-red-700"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           ))}
         </div>

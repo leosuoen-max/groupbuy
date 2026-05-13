@@ -1,0 +1,40 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isPlatformAdmin() {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/platform_admins/$(request.auth.uid));
+    }
+
+    function isFeituanAdmin() {
+      return isPlatformAdmin() ||
+        (signedIn() &&
+          firestore.exists(/databases/(default)/documents/feituan_admins/$(request.auth.uid)));
+    }
+
+    function isImage() {
+      return request.resource != null &&
+        request.resource.contentType.matches('image/.*') &&
+        request.resource.size < 5 * 1024 * 1024;
+    }
+
+    match /feituanWalletSettings/{uid}/paymentMethods/{fileName} {
+      allow read: if true;
+      allow write: if isFeituanAdmin() && request.auth.uid == uid && isImage();
+    }
+
+    match /feituanWalletPayments/{uid}/{requestId}/{fileName} {
+      allow read: if signedIn() && (request.auth.uid == uid || isFeituanAdmin());
+      allow write: if signedIn() && request.auth.uid == uid && isImage();
+    }
+
+    // 现有功能仍主要依赖控制台规则；后续应继续收紧其它目录。
+    match /{allPaths=**} {
+      allow read, write: if request.time < timestamp.date(2027, 1, 1);
+    }
+  }
+}
