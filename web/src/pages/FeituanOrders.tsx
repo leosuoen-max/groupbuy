@@ -41,6 +41,12 @@ function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
   });
 }
 
+type FeituanOrderView = {
+  row: OrderRow;
+  groups: PaymentGroup[];
+  displayStatus: OrderStatus;
+};
+
 export default function FeituanOrders() {
   const { user, loading: authLoading } = useAuthUser();
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -79,20 +85,33 @@ export default function FeituanOrders() {
     void refresh();
   }, [authLoading, refresh, user]);
 
+  const orderViews = useMemo<FeituanOrderView[]>(
+    () =>
+      orders.map((row) => {
+        const groups = buildPaymentGroups(row.data);
+        return {
+          row,
+          groups,
+          displayStatus: deriveDisplayOrderStatus(row.data, groups),
+        };
+      }),
+    [orders]
+  );
+
   const counts = useMemo(
     () => ({
-      all: orders.length,
-      pending: orders.filter((o) =>
-        buildPaymentGroups(o.data).some((g) => g.status === 'pending')
+      all: orderViews.length,
+      pending: orderViews.filter((o) =>
+        o.groups.some((g) => g.status === 'pending')
       ).length,
-      unpaid: orders.filter((o) =>
-        buildPaymentGroups(o.data).some((g) => g.status === 'unpaid')
+      unpaid: orderViews.filter((o) =>
+        o.groups.some((g) => g.status === 'unpaid')
       ).length,
-      done: orders.filter((o) =>
-        buildPaymentGroups(o.data).some((g) => g.status === 'confirmed')
+      done: orderViews.filter((o) =>
+        o.groups.some((g) => g.status === 'confirmed')
       ).length,
     }),
-    [orders]
+    [orderViews]
   );
 
   const confirm = async (row: OrderRow, groupId: string) => {
@@ -147,14 +166,12 @@ export default function FeituanOrders() {
         </Link>
       </div>
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
-      {orders.length === 0 ? (
+      {orderViews.length === 0 ? (
         <p className="text-sm text-gray-600">暂无饭团订单。</p>
       ) : (
         <div className="space-y-3">
-          {orders.map((row) => {
+          {orderViews.map(({ row, groups, displayStatus }) => {
             const o = row.data;
-            const groups = buildPaymentGroups(o);
-            const displayStatus = deriveDisplayOrderStatus(o, groups);
             return (
               <article
                 key={row.id}

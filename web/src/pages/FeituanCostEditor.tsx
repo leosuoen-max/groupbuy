@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
@@ -102,9 +102,13 @@ export default function FeituanCostEditor() {
     void refresh();
   }, [authLoading, refresh, user]);
 
+  const zeroCostLabels = useMemo(
+    () => (row ? collectZeroCostLabels(row, productCosts, schemeCosts) : []),
+    [productCosts, row, schemeCosts]
+  );
+
   const save = async () => {
     if (!user || !row) return;
-    const zeroCostLabels = collectZeroCostLabels(row, productCosts, schemeCosts);
     if (zeroCostLabels.length > 0) {
       const preview = zeroCostLabels.slice(0, 8).join('\n');
       const more =
@@ -184,7 +188,6 @@ export default function FeituanCostEditor() {
   }
 
   const p = row.data;
-  const zeroCostLabels = collectZeroCostLabels(row, productCosts, schemeCosts);
 
   return (
     <PageShell title="饭团成本" subtitle={p.title || '未命名项目'}>

@@ -26,31 +26,68 @@ function aggKeyForLine(line: OrderLineDoc): string {
   return `product:${line.productId}`;
 }
 
-function getRetailUnit(project: ProjectDoc, line: OrderLineDoc): number | null {
+type ProjectMenuIndex = {
+  productById: Map<string, ProjectDoc['products'][number]>;
+  schemeByKey: Map<
+    string,
+    NonNullable<ProjectDoc['bundleTools']>[number]['schemes'][number]
+  >;
+};
+
+function bundleKey(toolId: string, schemeId: string): string {
+  return `${toolId}:${schemeId}`;
+}
+
+function buildProjectMenuIndex(project: ProjectDoc): ProjectMenuIndex {
+  const productById = new Map(
+    (project.products ?? []).map((product) => [product.id, product] as const)
+  );
+  const schemeByKey = new Map<
+    string,
+    NonNullable<ProjectDoc['bundleTools']>[number]['schemes'][number]
+  >();
+  for (const tool of project.bundleTools ?? []) {
+    for (const scheme of tool.schemes) {
+      schemeByKey.set(bundleKey(tool.id, scheme.id), scheme);
+    }
+  }
+  return { productById, schemeByKey };
+}
+
+function buildProjectMenuIndexes(
+  projectsById: Map<string, ProjectDoc>
+): Map<string, ProjectMenuIndex> {
+  return new Map(
+    [...projectsById.entries()].map(([projectId, project]) => [
+      projectId,
+      buildProjectMenuIndex(project),
+    ])
+  );
+}
+
+function getRetailUnit(index: ProjectMenuIndex, line: OrderLineDoc): number | null {
   const b = parseBundleProductId(line.productId);
   if (!b) {
-    const p = project.products.find((x) => x.id === line.productId);
+    const p = index.productById.get(line.productId);
     return p ? Number(p.price) || 0 : null;
   }
-  const tool = project.bundleTools?.find((t) => t.id === b.toolId);
-  const sch = tool?.schemes.find((s) => s.id === b.schemeId);
+  const sch = index.schemeByKey.get(bundleKey(b.toolId, b.schemeId));
   return sch ? Number(sch.price) || 0 : null;
 }
 
-function getPurchaseCost(project: ProjectDoc, line: OrderLineDoc): {
+function getPurchaseCost(index: ProjectMenuIndex, line: OrderLineDoc): {
   cost: number;
   missing: boolean;
 } {
   const b = parseBundleProductId(line.productId);
   if (!b) {
-    const p = project.products.find((x) => x.id === line.productId);
+    const p = index.productById.get(line.productId);
     if (!p) return { cost: 0, missing: true };
     const c = p.purchaseCost;
     if (c == null || Number.isNaN(Number(c))) return { cost: 0, missing: true };
     return { cost: Math.max(0, Number(c)), missing: false };
   }
-  const tool = project.bundleTools?.find((t) => t.id === b.toolId);
-  const sch = tool?.schemes.find((s) => s.id === b.schemeId);
+  const sch = index.schemeByKey.get(bundleKey(b.toolId, b.schemeId));
   if (!sch) return { cost: 0, missing: true };
   const c = sch.purchaseCost;
   if (c == null || Number.isNaN(Number(c))) return { cost: 0, missing: true };
@@ -108,6 +145,7 @@ export function buildProfitTotals(
   let specialReduction = 0;
   let missingProjectCount = 0;
   let missingCostLineCount = 0;
+  const projectMenuIndexes = buildProjectMenuIndexes(projectsById);
 
   for (const row of rows) {
     const o = row.data;
@@ -115,8 +153,8 @@ export function buildProfitTotals(
     const groups = listOrderPaymentGroups(o);
     if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
 
-    const project = projectsById.get(o.projectId);
-    if (!project) {
+    const projectIndex = projectMenuIndexes.get(o.projectId);
+    if (!projectIndex) {
       missingProjectCount += 1;
       continue;
     }
@@ -127,7 +165,10 @@ export function buildProfitTotals(
       if (qty <= 0) continue;
 
       const sales = Number(line.subtotal) || 0;
-      const { cost: unitCost, missing: costMissing } = getPurchaseCost(project, line);
+      const { cost: unitCost, missing: costMissing } = getPurchaseCost(
+        projectIndex,
+        line
+      );
       if (costMissing) missingCostLineCount += 1;
       const lineCost = unitCost * qty;
 
@@ -137,7 +178,7 @@ export function buildProfitTotals(
 
       let lineDiscountReduction = 0;
       if (line.isDiscount) {
-        const retail = getRetailUnit(project, line);
+        const retail = getRetailUnit(projectIndex, line);
         const unitPaid = Number(line.unitPrice) || 0;
         if (retail != null && retail > unitPaid) {
           lineDiscountReduction = (retail - unitPaid) * qty;

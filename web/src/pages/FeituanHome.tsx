@@ -16,6 +16,14 @@ function pickCover(p: ProjectRow): string | undefined {
   return prod || undefined;
 }
 
+async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRow | null>> {
+  const shopIds = [...new Set(projects.map((project) => project.data.shopId))];
+  const entries = await Promise.all(
+    shopIds.map(async (shopId) => [shopId, await getShopById(shopId)] as const)
+  );
+  return new Map(entries);
+}
+
 export default function FeituanHome() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -28,12 +36,11 @@ export default function FeituanHome() {
       setErr(null);
       try {
         const projects = await listListedFeituanProjects();
-        const items = await Promise.all(
-          projects.map(async (project) => ({
-            project,
-            shop: await getShopById(project.data.shopId),
-          }))
-        );
+        const shopsById = await loadShopsById(projects);
+        const items = projects.map((project) => ({
+          project,
+          shop: shopsById.get(project.data.shopId) ?? null,
+        }));
         if (!cancelled) setRows(items);
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : '加载失败');

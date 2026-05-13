@@ -35,6 +35,14 @@ function statusLabel(s: ProjectRow['data']['feituanStatus']): string {
   return '未提交';
 }
 
+async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRow | null>> {
+  const shopIds = [...new Set(projects.map((project) => project.data.shopId))];
+  const entries = await Promise.all(
+    shopIds.map(async (shopId) => [shopId, await getShopById(shopId)] as const)
+  );
+  return new Map(entries);
+}
+
 export default function FeituanAdmin() {
   const { user, loading: authLoading } = useAuthUser();
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -55,12 +63,11 @@ export default function FeituanAdmin() {
         return;
       }
       const projects = await listFeituanProjects(['pending', 'listed', 'rejected', 'delisted']);
-      const items = await Promise.all(
-        projects.map(async (project) => ({
-          project,
-          shop: await getShopById(project.data.shopId),
-        }))
-      );
+      const shopsById = await loadShopsById(projects);
+      const items = projects.map((project) => ({
+        project,
+        shop: shopsById.get(project.data.shopId) ?? null,
+      }));
       setRows(items);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
