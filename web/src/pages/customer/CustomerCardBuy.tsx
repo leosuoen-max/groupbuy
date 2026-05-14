@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { useAuthUser } from '../../hooks/useAuthUser';
+import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getShopBySlug, isShopOpenForCustomers, type ShopRow } from '../../lib/shopService';
 import {
@@ -39,7 +41,13 @@ const inputCls =
 /** 与下单页一致：弱网下 Firestore 久无返回时用超时提示，避免一直停在「加载中」 */
 const LOAD_TIMEOUT_MS = 12_000;
 
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 4 ? `****${digits.slice(-4)}` : phone;
+}
+
 export default function CustomerCardBuy({ mode }: CardBuyProps) {
+  useWechatNotifySession();
   const params = useParams<{ shopSlug: string; templateId?: string; cardId?: string }>();
   const slug = decodeURIComponent(params.shopSlug ?? '');
   const navigate = useNavigate();
@@ -48,6 +56,9 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
   /** 从「我的卡片」返回继续上传凭证时携带，与 pending 请求 id 一致则进入付款页而非拦截 */
   const resumeRequestId = search.get('resumeRequest')?.trim() ?? '';
   const customerKey = useMemo(() => getOrCreateCustomerKey(), []);
+  const { user, loading: authLoading } = useAuthUser();
+  const hasPhone = Boolean(user?.phoneNumber);
+  const customerPhoneMasked = user?.phoneNumber ? maskPhone(user.phoneNumber) : null;
 
   const [shop, setShop] = useState<ShopRow | null>(null);
   const [bootErr, setBootErr] = useState<string | null>(null);
@@ -87,6 +98,11 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     let cancelled = false;
     void (async () => {
       try {
+        if (authLoading) return;
+        if (!hasPhone) {
+          setLoading(false);
+          return;
+        }
         if (mode === 'purchase') {
           if (!params.templateId) throw new Error('缺少卡模板参数');
           const [row, t] = await Promise.all([
@@ -109,9 +125,12 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           if (t.data.type === 'stored') {
             const [cards, reqs] = await withTimeout(
               Promise.all([
-                listCustomerCardsByCustomer(customerKey, row.id),
+                listCustomerCardsByCustomer(customerKey, row.id, {
+                  customerUserId: user?.uid,
+                }),
                 listCardRequestsByCustomer(customerKey, row.id, {
                   status: 'pending',
+                  customerUserId: user?.uid,
                 }),
               ]),
               LOAD_TIMEOUT_MS,
@@ -141,9 +160,12 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           } else if (t.data.type === 'pass') {
             const [cards, reqs] = await withTimeout(
               Promise.all([
-                listCustomerCardsByCustomer(customerKey, row.id),
+                listCustomerCardsByCustomer(customerKey, row.id, {
+                  customerUserId: user?.uid,
+                }),
                 listCardRequestsByCustomer(customerKey, row.id, {
                   status: 'pending',
+                  customerUserId: user?.uid,
                 }),
               ]),
               LOAD_TIMEOUT_MS,
@@ -191,7 +213,9 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
           if (!row) throw new Error('店铺不存在');
           if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
           if (!c) throw new Error('卡不存在');
-          if (c.data.customerKey !== customerKey) throw new Error('无权操作他人卡');
+          if (c.data.customerKey !== customerKey && c.data.customerUserId !== user?.uid) {
+            throw new Error('无权操作他人卡');
+          }
           if (c.data.shopId !== row.id) throw new Error('卡与店铺不匹配');
           if (cancelled) return;
           setShop(row);
@@ -207,6 +231,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
             const reqs = await withTimeout(
               listCardRequestsByCustomer(customerKey, row.id, {
                 status: 'pending',
+                customerUserId: user?.uid,
               }),
               LOAD_TIMEOUT_MS,
               '充值记录加载'
@@ -232,7 +257,17 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     return () => {
       cancelled = true;
     };
-  }, [slug, mode, params.templateId, params.cardId, customerKey, resumeRequestId]);
+  }, [
+    authLoading,
+    hasPhone,
+    slug,
+    mode,
+    params.templateId,
+    params.cardId,
+    customerKey,
+    resumeRequestId,
+    user?.uid,
+  ]);
 
   // 计算"应付 / 到账"
   const tplData = template?.data;
@@ -295,6 +330,8 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
         kind: mode,
         customerCardId: existingCard?.id,
         customerKey,
+        customerUserId: user?.uid,
+        customerPhoneMasked,
         customerName: mode === 'purchase' ? name.trim() : undefined,
         customerPhone: mode === 'purchase' ? phone.trim() : undefined,
         payAmount: selected.pay,
@@ -349,7 +386,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     if (!requestId) return;
     if (!confirm('确认撤销本笔购卡请求？')) return;
     try {
-      await cancelCardPurchaseRequest(requestId, customerKey);
+      await cancelCardPurchaseRequest(requestId, customerKey, user?.uid);
       setMsg('已撤销，将返回卡片首页');
       const back = `/shop/${encodeURIComponent(slug)}/cards${
         fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''
@@ -374,7 +411,7 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
   const primaryPaymentMethod = shopPaymentMethods[0] ?? null;
   const extraPaymentMethods = shopPaymentMethods.slice(1);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <PageShell title={mode === 'purchase' ? '购买优惠卡' : '充值'} subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -385,6 +422,25 @@ export default function CustomerCardBuy({ mode }: CardBuyProps) {
     );
   }
   if (bootErr || !shop || !template) {
+    if (!hasPhone) {
+      const returnTo =
+        mode === 'purchase'
+          ? `/shop/${encodeURIComponent(slug)}/cards/buy/${encodeURIComponent(params.templateId ?? '')}${fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''}`
+          : `/shop/${encodeURIComponent(slug)}/cards/topup/${encodeURIComponent(params.cardId ?? '')}${fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''}`;
+      return (
+        <PageShell title="优惠卡" subtitle="需要手机号验证">
+          <div className="space-y-3 rounded-2xl border border-orange-100 bg-orange-50 px-3 py-4 text-sm text-orange-950">
+            <p>购买、充值或使用商户优惠卡前，请先绑定手机号，方便长期保存权益。</p>
+            <Link
+              to={`/account?returnTo=${encodeURIComponent(returnTo)}`}
+              className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-orange-600 text-sm font-semibold text-white"
+            >
+              去绑定手机号
+            </Link>
+          </div>
+        </PageShell>
+      );
+    }
     return (
       <PageShell title={mode === 'purchase' ? '购买优惠卡' : '充值'} subtitle="错误">
         <p className="text-sm text-red-600">{bootErr ?? '加载失败'}</p>

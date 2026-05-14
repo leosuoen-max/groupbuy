@@ -85,8 +85,13 @@ export default function FeituanHome() {
       <div className="space-y-3">
         {rows.map(({ project, shop }) => {
           const img = pickCover(project) || shop?.data.bannerImage || shop?.data.logoImage;
+          const href = `/feituan/projects/${encodeURIComponent(project.id)}`;
           return (
-            <article key={project.id} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+            <Link
+              key={project.id}
+              to={href}
+              className="block overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm transition active:scale-[0.99]"
+            >
               {img ? (
                 <img src={img} alt="" className="h-40 w-full object-cover" loading="lazy" />
               ) : null}
@@ -96,22 +101,9 @@ export default function FeituanHome() {
                 <p className="mt-2 text-sm leading-relaxed text-gray-600 line-clamp-3">
                   {project.data.textContent?.replace(/\s+/g, ' ').trim() || '点击查看团购详情。'}
                 </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Link
-                    to={`/feituan/projects/${encodeURIComponent(project.id)}`}
-                    className="inline-flex rounded-xl bg-orange-600 px-4 py-2 text-sm font-semibold text-white"
-                  >
-                    查看饭团项目
-                  </Link>
-                  <Link
-                    to={`/feituan/projects/${encodeURIComponent(project.id)}/my-orders`}
-                    className="inline-flex rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-900"
-                  >
-                    我的订单
-                  </Link>
-                </div>
+                <p className="mt-3 text-xs font-semibold text-orange-700">点击查看详情</p>
               </div>
-            </article>
+            </Link>
           );
         })}
       </div>

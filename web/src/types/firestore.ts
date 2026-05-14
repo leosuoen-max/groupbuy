@@ -415,6 +415,8 @@ export type CustomerCardDoc = {
   /** 关联的购卡订单号（首次购买时） */
   purchaseOrderNumber?: string;
   customerKey: string;
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   /** 购卡时填写的姓名/电话快照（用于商户对账） */
   customerName?: string;
   customerPhone?: string;
@@ -452,6 +454,8 @@ export type CardPurchaseRequestDoc = {
   customerCardId?: string;
   kind: CardPurchaseRequestKind;
   customerKey: string;
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   customerName?: string;
   customerPhone?: string;
   /** 顾客实付金额 (RM) */
@@ -483,6 +487,8 @@ export type CardLedgerDoc = {
   customerCardId: string;
   templateId: string;
   customerKey: string;
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   type: CardLedgerType;
   /** 变动量：入账正数，出账负数 */
   delta: number;
@@ -609,9 +615,18 @@ export type OrderDoc = {
   /** 手机号验证用户；饭团钱包抵扣时必须写入/校验 */
   customerUserId?: string;
   customerPhoneMasked?: string | null;
+  customerUserLinkedAt?: Timestamp;
   /** 微信内静默 OAuth 通知会话；后端发送订单通知时用它解析 openid */
   wechatNotifyOAuthStateId?: string;
   wechatNotifyAttachedAt?: Timestamp;
+  wechatOrderSubmittedNotification?: {
+    status: 'sent' | 'failed' | 'skipped';
+    reason?: string;
+    msgId?: string | null;
+    error?: string;
+    sentAt?: Timestamp;
+    updatedAt?: Timestamp;
+  };
   customerName: string;
   customerPhone: string;
   customerAddress: string;

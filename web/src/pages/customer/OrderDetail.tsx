@@ -56,6 +56,11 @@ import type {
   ProjectDoc,
 } from '../../types/firestore';
 
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length >= 4 ? `****${digits.slice(-4)}` : phone;
+}
+
 const statusLabel: Record<string, string> = {
   unpaid: '待付款',
   pending: '待确认',
@@ -449,6 +454,8 @@ export default function OrderDetail() {
     !!order &&
     !!projectDoc &&
     order.channel !== 'feituan' &&
+    !authLoading &&
+    !!user?.phoneNumber &&
     order.status !== 'cancelled' &&
     hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
@@ -467,7 +474,9 @@ export default function OrderDetail() {
     }
     let cancelled = false;
     setCardPlanLoading(true);
-    void planCardPayment(order, projectDoc, customerKey)
+    void planCardPayment(order, projectDoc, customerKey, {
+      customerUserId: user?.uid,
+    })
       .then((plan) => {
         if (!cancelled) setCardPlan(plan);
       })
@@ -480,7 +489,7 @@ export default function OrderDetail() {
     return () => {
       cancelled = true;
     };
-  }, [canCardPay, order, projectDoc, customerKey]);
+  }, [canCardPay, order, projectDoc, customerKey, user?.uid]);
 
   useEffect(() => {
     if (!canFeituanWalletPay || !order || authLoading || !user?.phoneNumber) {
@@ -524,6 +533,8 @@ export default function OrderDetail() {
         projectId: order.projectId,
         orderId: orderDocId,
         customerKey,
+        customerUserId: user?.uid,
+        customerPhoneMasked: user?.phoneNumber ? maskPhone(user.phoneNumber) : null,
       });
       setCardSuccess('卡支付成功，订单已确认');
       const next = await getOrderByNumber(order.projectId, order.orderNumber);
@@ -533,7 +544,16 @@ export default function OrderDetail() {
     } finally {
       setCardPaying(false);
     }
-  }, [order, projectDoc, cardPlan, orderRow?.id, customerKey, applyOrderRow]);
+  }, [
+    order,
+    projectDoc,
+    cardPlan,
+    orderRow?.id,
+    customerKey,
+    user?.uid,
+    user?.phoneNumber,
+    applyOrderRow,
+  ]);
 
   const handleFeituanWalletPay = useCallback(async () => {
     if (!order || !orderRow?.id || !user?.uid || !feituanWalletPlan?.ok) return;

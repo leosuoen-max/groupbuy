@@ -14,7 +14,10 @@ import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import { withTimeout } from '../../lib/withTimeout';
-import { getWechatNotifyOAuthStateId } from '../../lib/wechatService';
+import {
+  getWechatNotifyOAuthStateId,
+  sendOrderSubmittedWechatNotification,
+} from '../../lib/wechatService';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
 
@@ -349,7 +352,7 @@ export default function OrderForm() {
     const customerKey = getOrCreateCustomerKey();
     try {
       setSubmitting(true);
-      const { orderNumber, timedPromoPaymentDueAt } = await createOrder({
+      const { orderId, orderNumber, timedPromoPaymentDueAt } = await createOrder({
         shopSlug: resolvedShopSlug,
         projectId,
         channel: isFeituanOrder ? 'feituan' : 'shop',
@@ -375,6 +378,9 @@ export default function OrderForm() {
         isManualMatch,
         lines,
         bundleSelections,
+      });
+      void sendOrderSubmittedWechatNotification({ orderId, customerKey }).catch(() => {
+        /* 微信通知失败不影响下单 */
       });
       if (timedPromoPaymentDueAt) {
         const dueText = new Date(timedPromoPaymentDueAt).toLocaleString('zh-CN', {

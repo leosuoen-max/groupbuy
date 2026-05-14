@@ -11,6 +11,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
 import { compressImageFileForUpload } from './imageCompress';
@@ -480,6 +481,38 @@ export async function listFeituanOrdersForCustomer(input: {
     })
   );
   return rows;
+}
+
+export async function attachCustomerOrdersToPhoneUser(input: {
+  customerKey: string;
+  customerUserId: string;
+  customerPhoneMasked?: string | null;
+}): Promise<number> {
+  const customerKey = input.customerKey.trim();
+  const userId = input.customerUserId.trim();
+  if (!customerKey || !userId) return 0;
+
+  const db = getDb();
+  const snap = await getDocs(
+    query(collection(db, 'orders'), where('customerKey', '==', customerKey))
+  );
+  const rows = snap.docs.filter((d) => {
+    const data = d.data() as OrderDoc;
+    return !data.customerUserId || data.customerUserId === userId;
+  });
+  if (rows.length === 0) return 0;
+
+  const batch = writeBatch(db);
+  for (const d of rows) {
+    batch.update(d.ref, {
+      customerUserId: userId,
+      ...(input.customerPhoneMasked ? { customerPhoneMasked: input.customerPhoneMasked } : {}),
+      customerUserLinkedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+  return rows.length;
 }
 
 async function md5DuplicateInShopOtherOrders(

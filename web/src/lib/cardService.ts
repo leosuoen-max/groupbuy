@@ -12,6 +12,7 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
@@ -120,6 +121,42 @@ export function cardRequestAwaitingCustomerProof(
   );
 }
 export type CardLedgerRow = { id: string; data: CardLedgerDoc };
+
+export async function attachCustomerCardsToPhoneUser(input: {
+  customerKey: string;
+  customerUserId: string;
+  customerPhoneMasked?: string | null;
+}): Promise<number> {
+  const customerKey = input.customerKey.trim();
+  const userId = input.customerUserId.trim();
+  if (!customerKey || !userId) return 0;
+
+  const db = getDb();
+  const [cardsSnap, requestsSnap] = await Promise.all([
+    getDocs(
+      query(collection(db, CUSTOMER_CARDS_COLL), where('customerKey', '==', customerKey))
+    ),
+    getDocs(
+      query(collection(db, CARD_REQUESTS_COLL), where('customerKey', '==', customerKey))
+    ),
+  ]);
+  const targets = [...cardsSnap.docs, ...requestsSnap.docs].filter((d) => {
+    const data = d.data() as { customerUserId?: string };
+    return !data.customerUserId || data.customerUserId === userId;
+  });
+  if (targets.length === 0) return 0;
+
+  const batch = writeBatch(db);
+  for (const d of targets) {
+    batch.update(d.ref, {
+      customerUserId: userId,
+      ...(input.customerPhoneMasked ? { customerPhoneMasked: input.customerPhoneMasked } : {}),
+      updatedAt: serverTimestamp(),
+    });
+  }
+  await batch.commit();
+  return targets.length;
+}
 
 function sanitizeTopupRules(rules: CardTopupRule[] | undefined): CardTopupRule[] {
   if (!Array.isArray(rules)) return [];
@@ -394,6 +431,8 @@ export type SubmitCardRequestInput = {
   customerCardId?: string;
   kind: CardPurchaseRequestKind;
   customerKey: string;
+  customerUserId?: string;
+  customerPhoneMasked?: string | null;
   customerName?: string;
   customerPhone?: string;
   payAmount: number;
@@ -417,47 +456,27 @@ function autoExpireFlag(card: CustomerCardDoc, now: Date): CustomerCardStatus {
 async function findExistingActiveWalletForCustomer(
   shopId: string,
   templateId: string,
-  customerKey: string
+  customerKey: string,
+  customerUserId?: string | null
 ): Promise<{
   activeCard: CustomerCardRow | null;
   pendingRequest: CardPurchaseRequestRow | null;
 }> {
-  const db = getDb();
-  const [cardsSnap, reqSnap] = await Promise.all([
-    getDocs(
-      query(
-        collection(db, CUSTOMER_CARDS_COLL),
-        where('shopId', '==', shopId),
-        where('templateId', '==', templateId),
-        where('customerKey', '==', customerKey)
-      )
-    ),
-    getDocs(
-      query(
-        collection(db, CARD_REQUESTS_COLL),
-        where('shopId', '==', shopId),
-        where('templateId', '==', templateId),
-        where('customerKey', '==', customerKey),
-        where('kind', '==', 'purchase'),
-        where('status', '==', 'pending')
-      )
-    ),
+  const [cards, requests] = await Promise.all([
+    listCustomerCardsByCustomer(customerKey, shopId, { customerUserId }),
+    listCardRequestsByCustomer(customerKey, shopId, {
+      status: 'pending',
+      customerUserId,
+    }),
   ]);
-  const now = new Date();
   const activeCard =
-    cardsSnap.docs
-      .map((d) => ({ id: d.id, data: d.data() as CustomerCardDoc }))
-      .map((row) => ({
-        id: row.id,
-        data: { ...row.data, status: autoExpireFlag(row.data, now) },
-      }))
+    cards
+      .filter((row) => row.data.templateId === templateId)
       .find((row) => row.data.status === 'active') ?? null;
-  const pendingRequest = reqSnap.empty
-    ? null
-    : ({
-        id: reqSnap.docs[0]!.id,
-        data: reqSnap.docs[0]!.data() as CardPurchaseRequestDoc,
-      } as CardPurchaseRequestRow);
+  const pendingRequest =
+    requests.find(
+      (row) => row.data.templateId === templateId && row.data.kind === 'purchase'
+    ) ?? null;
   return { activeCard, pendingRequest };
 }
 
@@ -465,36 +484,28 @@ async function findExistingActiveWalletForCustomer(
 async function assertCanPurchasePassTemplate(
   shopId: string,
   templateId: string,
-  customerKey: string
+  customerKey: string,
+  customerUserId?: string | null
 ): Promise<void> {
-  const db = getDb();
-  const reqSnap = await getDocs(
-    query(
-      collection(db, CARD_REQUESTS_COLL),
-      where('shopId', '==', shopId),
-      where('templateId', '==', templateId),
-      where('customerKey', '==', customerKey),
-      where('kind', '==', 'purchase'),
-      where('status', '==', 'pending')
+  const [requests, cards] = await Promise.all([
+    listCardRequestsByCustomer(customerKey, shopId, {
+      status: 'pending',
+      customerUserId,
+    }),
+    listCustomerCardsByCustomer(customerKey, shopId, { customerUserId }),
+  ]);
+  if (
+    requests.some(
+      (row) => row.data.templateId === templateId && row.data.kind === 'purchase'
     )
-  );
-  if (!reqSnap.empty) {
+  ) {
     throw new Error(
       '你已有一笔待确认的购买请求，请先完成或撤销后再试'
     );
   }
-  const cardsSnap = await getDocs(
-    query(
-      collection(db, CUSTOMER_CARDS_COLL),
-      where('shopId', '==', shopId),
-      where('templateId', '==', templateId),
-      where('customerKey', '==', customerKey)
-    )
-  );
   const now = new Date();
-  for (const d of cardsSnap.docs) {
-    const raw = d.data() as CustomerCardDoc;
-    const st = autoExpireFlag(raw, now);
+  for (const row of cards.filter((c) => c.data.templateId === templateId)) {
+    const st = autoExpireFlag(row.data, now);
     if (st !== 'cancelled') {
       throw new Error(
         '你已持有该次卡，请对该卡「充值」续次数；首购专享价仅适用于首次购买'
@@ -554,6 +565,9 @@ function validateTopupAmountsAgainstRules(
 export async function submitCardPurchaseRequest(
   input: SubmitCardRequestInput
 ): Promise<string> {
+  if (!input.customerUserId) {
+    throw new Error('请先绑定手机号后再购买或充值优惠卡');
+  }
   const tplSnap = await getDoc(doc(getDb(), COLL, input.templateId));
   if (!tplSnap.exists()) throw new Error('优惠卡模板不存在或已删除');
   const tpl = tplSnap.data() as CardTemplateDoc;
@@ -575,7 +589,8 @@ export async function submitCardPurchaseRequest(
       await findExistingActiveWalletForCustomer(
         input.shopId,
         input.templateId,
-        input.customerKey
+        input.customerKey,
+        input.customerUserId
       );
     if (activeCard) {
       throw new Error('你已持有此钱包，请前往「充值」续值');
@@ -589,7 +604,8 @@ export async function submitCardPurchaseRequest(
     await assertCanPurchasePassTemplate(
       input.shopId,
       input.templateId,
-      input.customerKey
+      input.customerKey,
+      input.customerUserId
     );
   }
 
@@ -608,6 +624,8 @@ export async function submitCardPurchaseRequest(
     templateId: input.templateId,
     kind: input.kind,
     customerKey: input.customerKey,
+    ...(input.customerUserId ? { customerUserId: input.customerUserId } : {}),
+    ...(input.customerPhoneMasked ? { customerPhoneMasked: input.customerPhoneMasked } : {}),
     payAmount: Number(input.payAmount) || 0,
     gainValue: Number(input.gainValue) || 0,
     paymentScreenshots: [],
@@ -782,20 +800,35 @@ export async function listCardRequestsByTemplate(
 export async function listCardRequestsByCustomer(
   customerKey: string,
   shopId: string,
-  opts?: { status?: CardPurchaseRequestDoc['status'] }
+  opts?: { status?: CardPurchaseRequestDoc['status']; customerUserId?: string | null }
 ): Promise<CardPurchaseRequestRow[]> {
   const db = getDb();
-  const snap = await getDocs(
-    query(
-      collection(db, CARD_REQUESTS_COLL),
-      where('customerKey', '==', customerKey),
-      where('shopId', '==', shopId)
-    )
-  );
-  let rows = snap.docs.map((d) => ({
-    id: d.id,
-    data: d.data() as CardPurchaseRequestDoc,
-  }));
+  const snaps = await Promise.all([
+    getDocs(
+      query(
+        collection(db, CARD_REQUESTS_COLL),
+        where('customerKey', '==', customerKey),
+        where('shopId', '==', shopId)
+      )
+    ),
+    opts?.customerUserId
+      ? getDocs(
+          query(
+            collection(db, CARD_REQUESTS_COLL),
+            where('customerUserId', '==', opts.customerUserId),
+            where('shopId', '==', shopId)
+          )
+        )
+      : Promise.resolve(null),
+  ]);
+  const byId = new Map<string, CardPurchaseRequestRow>();
+  for (const snap of snaps) {
+    if (!snap) continue;
+    for (const d of snap.docs) {
+      byId.set(d.id, { id: d.id, data: d.data() as CardPurchaseRequestDoc });
+    }
+  }
+  let rows = Array.from(byId.values());
   if (opts?.status) {
     rows = rows.filter((r) => r.data.status === opts.status);
   }
@@ -829,7 +862,8 @@ export async function confirmCardPurchaseRequest(
     const { activeCard } = await findExistingActiveWalletForCustomer(
       preReq.shopId,
       preReq.templateId,
-      preReq.customerKey
+      preReq.customerKey,
+      preReq.customerUserId
     );
     if (activeCard) {
       throw new Error(
@@ -873,6 +907,8 @@ export async function confirmCardPurchaseRequest(
         templateNameSnapshot: req.templateNameSnapshot ?? tpl.name,
         type: req.templateTypeSnapshot ?? tpl.type,
         customerKey: req.customerKey,
+        ...(req.customerUserId ? { customerUserId: req.customerUserId } : {}),
+        ...(req.customerPhoneMasked ? { customerPhoneMasked: req.customerPhoneMasked } : {}),
         remaining: Number(req.gainValue) || 0,
         totalIn: Number(req.gainValue) || 0,
         totalOut: 0,
@@ -893,6 +929,8 @@ export async function confirmCardPurchaseRequest(
         customerCardId: newCardRef.id,
         templateId: req.templateId,
         customerKey: req.customerKey,
+        ...(req.customerUserId ? { customerUserId: req.customerUserId } : {}),
+        ...(req.customerPhoneMasked ? { customerPhoneMasked: req.customerPhoneMasked } : {}),
         type: 'purchase' satisfies CardLedgerType,
         delta: Number(req.gainValue) || 0,
         remainingAfter: Number(req.gainValue) || 0,
@@ -931,6 +969,12 @@ export async function confirmCardPurchaseRequest(
       status: 'active' satisfies CustomerCardStatus,
       updatedAt: serverTimestamp(),
     };
+    if (req.customerUserId && !card.customerUserId) {
+      cardPatch.customerUserId = req.customerUserId;
+    }
+    if (req.customerPhoneMasked && !card.customerPhoneMasked) {
+      cardPatch.customerPhoneMasked = req.customerPhoneMasked;
+    }
     // 充值后顺延有效期：以"现有 validUntil 与当前时间的较大值"为基准 + 模板有效期
     if (Number(tpl.validityDays ?? 0) > 0) {
       const existing = card.validUntil?.toMillis?.() ?? 0;
@@ -947,6 +991,8 @@ export async function confirmCardPurchaseRequest(
       customerCardId: req.customerCardId,
       templateId: req.templateId,
       customerKey: req.customerKey,
+      ...(req.customerUserId ? { customerUserId: req.customerUserId } : {}),
+      ...(req.customerPhoneMasked ? { customerPhoneMasked: req.customerPhoneMasked } : {}),
       type: 'topup' satisfies CardLedgerType,
       delta: Number(req.gainValue) || 0,
       remainingAfter: newRemaining,
@@ -993,33 +1039,46 @@ export async function rejectCardPurchaseRequest(
 
 export async function listCustomerCardsByCustomer(
   customerKey: string,
-  shopId: string
+  shopId: string,
+  opts?: { customerUserId?: string | null }
 ): Promise<CustomerCardRow[]> {
   const db = getDb();
-  const snap = await getDocs(
-    query(
-      collection(db, CUSTOMER_CARDS_COLL),
-      where('customerKey', '==', customerKey),
-      where('shopId', '==', shopId)
-    )
-  );
+  const snaps = await Promise.all([
+    getDocs(
+      query(
+        collection(db, CUSTOMER_CARDS_COLL),
+        where('customerKey', '==', customerKey),
+        where('shopId', '==', shopId)
+      )
+    ),
+    opts?.customerUserId
+      ? getDocs(
+          query(
+            collection(db, CUSTOMER_CARDS_COLL),
+            where('customerUserId', '==', opts.customerUserId),
+            where('shopId', '==', shopId)
+          )
+        )
+      : Promise.resolve(null),
+  ]);
   const now = new Date();
-  const rows = snap.docs.map((d) => {
-    const data = d.data() as CustomerCardDoc;
-    const next = autoExpireFlag(data, now);
-    return { id: d.id, data: { ...data, status: next } };
-  });
+  const byId = new Map<string, CustomerCardRow>();
+  for (const snap of snaps) {
+    if (!snap) continue;
+    for (const d of snap.docs) {
+      const data = d.data() as CustomerCardDoc;
+      const next = autoExpireFlag(data, now);
+      byId.set(d.id, { id: d.id, data: { ...data, status: next } });
+    }
+  }
+  const rows = Array.from(byId.values());
   // 异步把 expired 真的同步回库（不阻塞 UI）
   for (const r of rows) {
     if (r.data.status === 'expired') {
-      const original = snap.docs.find((d) => d.id === r.id);
-      const orig = original?.data() as CustomerCardDoc | undefined;
-      if (orig?.status !== 'expired') {
-        void updateDoc(doc(db, CUSTOMER_CARDS_COLL, r.id), {
-          status: 'expired',
-          updatedAt: serverTimestamp(),
-        }).catch(() => undefined);
-      }
+      void updateDoc(doc(db, CUSTOMER_CARDS_COLL, r.id), {
+        status: 'expired',
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
     }
   }
   rows.sort((a, b) => {
@@ -1177,7 +1236,8 @@ export async function listCardLedger(opts: {
 /** 顾客取消尚未确认的请求（顾客主动撤销） */
 export async function cancelCardPurchaseRequest(
   requestId: string,
-  customerKey: string
+  customerKey: string,
+  customerUserId?: string | null
 ): Promise<void> {
   const db = getDb();
   await runTransaction(db, async (tx) => {
@@ -1185,7 +1245,9 @@ export async function cancelCardPurchaseRequest(
     const snap = await tx.get(refDoc);
     if (!snap.exists()) throw new Error('请求不存在');
     const cur = snap.data() as CardPurchaseRequestDoc;
-    if (cur.customerKey !== customerKey) throw new Error('无权撤销此请求');
+    if (cur.customerKey !== customerKey && cur.customerUserId !== customerUserId) {
+      throw new Error('无权撤销此请求');
+    }
     if (cur.status !== 'pending') throw new Error('该请求已被处理');
     tx.update(refDoc, {
       status: 'rejected',
@@ -1294,7 +1356,8 @@ export type CardPaymentPlan =
 export async function planCardPayment(
   order: OrderDoc,
   project: ProjectDoc,
-  customerKey: string
+  customerKey: string,
+  opts?: { customerUserId?: string | null }
 ): Promise<CardPaymentPlan> {
   const groups = buildPaymentGroups(order);
   const unpaidGroups = groups.filter((g) => g.status === 'unpaid');
@@ -1306,7 +1369,9 @@ export async function planCardPayment(
   );
   // 1. 拉取本店该顾客所有 active 卡
   const cards = (
-    await listCustomerCardsByCustomer(customerKey, order.shopId)
+    await listCustomerCardsByCustomer(customerKey, order.shopId, {
+      customerUserId: opts?.customerUserId,
+    })
   ).filter((c) => c.data.status === 'active' && Number(c.data.remaining ?? 0) > 0);
   const passCards = cards.filter((c) => c.data.type === 'pass');
   const wallet = cards.find((c) => c.data.type === 'stored') ?? null;
@@ -1459,7 +1524,12 @@ export async function applyCardPaymentToOrder(params: {
   projectId: string;
   orderId: string;
   customerKey: string;
+  customerUserId?: string | null;
+  customerPhoneMasked?: string | null;
 }): Promise<{ confirmed: true; deducted: number }> {
+  if (!params.customerUserId) {
+    throw new Error('请先绑定手机号后再使用优惠卡支付');
+  }
   const db = getDb();
   const orderRef = doc(db, 'orders', params.orderId);
   const projectRef = doc(db, 'projects', params.projectId);
@@ -1473,7 +1543,10 @@ export async function applyCardPaymentToOrder(params: {
   if (!projectSnapPre.exists()) throw new Error('项目不存在');
   const orderPre = orderSnapPre.data() as OrderDoc;
   const projectPre = projectSnapPre.data() as ProjectDoc;
-  if (orderPre.customerKey !== params.customerKey) {
+  if (
+    orderPre.customerKey !== params.customerKey &&
+    orderPre.customerUserId !== params.customerUserId
+  ) {
     throw new Error('无权操作他人订单');
   }
   if (orderPre.status === 'cancelled') {
@@ -1485,7 +1558,9 @@ export async function applyCardPaymentToOrder(params: {
   if (Number(orderPre.pendingAmount ?? 0) <= 0) {
     throw new Error('订单已无未付金额');
   }
-  const plan = await planCardPayment(orderPre, projectPre, params.customerKey);
+  const plan = await planCardPayment(orderPre, projectPre, params.customerKey, {
+    customerUserId: params.customerUserId,
+  });
   if (!plan.ok) {
     const failedPlan = plan as Extract<CardPaymentPlan, { ok: false }>;
     throw new Error(failedPlan.message);
@@ -1526,7 +1601,10 @@ export async function applyCardPaymentToOrder(params: {
       if (!snap.exists()) throw new Error('卡已失效，请刷新');
       const card = snap.data() as CustomerCardDoc;
       if (card.shopId !== order.shopId) throw new Error('卡与店铺不匹配');
-      if (card.customerKey !== params.customerKey)
+      if (
+        card.customerKey !== params.customerKey &&
+        card.customerUserId !== params.customerUserId
+      )
         throw new Error('无权使用他人卡');
       if (card.status !== 'active') throw new Error('卡状态异常，请刷新');
       if (Number(card.remaining ?? 0) < a.uses) {
@@ -1537,7 +1615,7 @@ export async function applyCardPaymentToOrder(params: {
       if (!walletSnap.exists()) throw new Error('钱包不存在，请刷新');
       const w = walletSnap.data() as CustomerCardDoc;
       if (w.shopId !== order.shopId) throw new Error('钱包与店铺不匹配');
-      if (w.customerKey !== params.customerKey)
+      if (w.customerKey !== params.customerKey && w.customerUserId !== params.customerUserId)
         throw new Error('无权使用他人钱包');
       if (w.status !== 'active') throw new Error('钱包不可用');
       if (ROUND2(Number(w.remaining ?? 0)) + 0.0001 < plan.walletDeduct) {
@@ -1569,6 +1647,8 @@ export async function applyCardPaymentToOrder(params: {
         customerCardId: a.customerCardId,
         templateId: a.templateId,
         customerKey: params.customerKey,
+        ...(params.customerUserId ? { customerUserId: params.customerUserId } : {}),
+        ...(params.customerPhoneMasked ? { customerPhoneMasked: params.customerPhoneMasked } : {}),
         type: 'use' satisfies CardLedgerType,
         delta: -a.uses,
         remainingAfter: newRemaining,
@@ -1605,6 +1685,8 @@ export async function applyCardPaymentToOrder(params: {
         customerCardId: plan.walletCardId!,
         templateId: plan.walletTemplateId!,
         customerKey: params.customerKey,
+        ...(params.customerUserId ? { customerUserId: params.customerUserId } : {}),
+        ...(params.customerPhoneMasked ? { customerPhoneMasked: params.customerPhoneMasked } : {}),
         type: 'use' satisfies CardLedgerType,
         delta: -plan.walletDeduct,
         remainingAfter: newRemaining,

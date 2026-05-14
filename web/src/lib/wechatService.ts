@@ -82,3 +82,17 @@ export async function finalizeWechatBind(user: User, bindCode: string): Promise<
     throw new Error(data?.message || '微信绑定失败');
   }
 }
+
+export async function sendOrderSubmittedWechatNotification(input: {
+  orderId: string;
+  customerKey: string;
+}): Promise<void> {
+  const resp = await fetch('/api/wechat/order-submitted', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!resp.ok) {
+    throw new Error('订单通知发送请求失败');
+  }
+}

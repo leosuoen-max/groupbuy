@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { useAuthUser } from '../../hooks/useAuthUser';
+import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getShopBySlug, isShopOpenForCustomers, type ShopRow } from '../../lib/shopService';
 import {
@@ -46,11 +48,14 @@ const cardStatusColor: Record<CustomerCardStatus, string> = {
 };
 
 export default function CustomerCards() {
+  useWechatNotifySession();
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const slug = decodeURIComponent(shopSlug);
   const [search] = useSearchParams();
   const fromProject = search.get('from') ?? '';
   const customerKey = useMemo(() => getOrCreateCustomerKey(), []);
+  const { user, loading: authLoading } = useAuthUser();
+  const hasPhone = Boolean(user?.phoneNumber);
 
   const [shop, setShop] = useState<ShopRow | null>(null);
   const [bootErr, setBootErr] = useState<string | null>(null);
@@ -63,18 +68,23 @@ export default function CustomerCards() {
   const refresh = useCallback(async (sid: string) => {
     const [tpls, cards, reqs] = await Promise.all([
       listCardTemplatesByShop(sid),
-      listCustomerCardsByCustomer(customerKey, sid),
-      listCardRequestsByCustomer(customerKey, sid),
+      listCustomerCardsByCustomer(customerKey, sid, { customerUserId: user?.uid }),
+      listCardRequestsByCustomer(customerKey, sid, { customerUserId: user?.uid }),
     ]);
     setTemplates(tpls);
     setMyCards(cards);
     setRequests(reqs);
-  }, [customerKey]);
+  }, [customerKey, user?.uid]);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
+        if (authLoading) return;
+        if (!hasPhone) {
+          setLoading(false);
+          return;
+        }
         const row = await getShopBySlug(slug);
         if (!row) throw new Error('店铺不存在');
         if (!isShopOpenForCustomers(row.data)) throw new Error('该店铺已停用');
@@ -90,13 +100,13 @@ export default function CustomerCards() {
     return () => {
       cancelled = true;
     };
-  }, [slug, refresh]);
+  }, [authLoading, hasPhone, slug, refresh]);
 
   const handleCancelRequest = async (id: string) => {
     if (!shop) return;
     if (!confirm('确认撤销这笔购卡请求？已上传的截图也会一并失效。')) return;
     try {
-      await cancelCardPurchaseRequest(id, customerKey);
+      await cancelCardPurchaseRequest(id, customerKey, user?.uid);
       setMsg('已撤销');
       await refresh(shop.id);
     } catch (e) {
@@ -111,7 +121,7 @@ export default function CustomerCards() {
     return '/';
   }, [slug, fromProject]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <PageShell title="优惠卡" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -119,6 +129,24 @@ export default function CustomerCards() {
     );
   }
   if (bootErr || !shop) {
+    if (!hasPhone) {
+      const returnTo = `/shop/${encodeURIComponent(slug)}/cards${
+        fromProject ? `?from=${encodeURIComponent(fromProject)}` : ''
+      }`;
+      return (
+        <PageShell title="优惠卡" subtitle="需要手机号验证">
+          <div className="space-y-3 rounded-2xl border border-orange-100 bg-orange-50 px-3 py-4 text-sm text-orange-950">
+            <p>商户储值卡和次卡会长期保留权益，需要先绑定手机号，之后可跨设备找回。</p>
+            <Link
+              to={`/account?returnTo=${encodeURIComponent(returnTo)}`}
+              className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-orange-600 text-sm font-semibold text-white"
+            >
+              去绑定手机号
+            </Link>
+          </div>
+        </PageShell>
+      );
+    }
     return (
       <PageShell title="优惠卡" subtitle="错误">
         <p className="text-sm text-red-600">{bootErr ?? '店铺不存在'}</p>

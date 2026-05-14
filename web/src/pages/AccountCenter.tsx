@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   RecaptchaVerifier,
@@ -8,7 +8,10 @@ import {
 import { PageShell } from '../components/PageShell';
 import { SignOutButton } from '../components/SignOutButton';
 import { useAuthUser } from '../hooks/useAuthUser';
+import { attachCustomerCardsToPhoneUser } from '../lib/cardService';
+import { getOrCreateCustomerKey } from '../lib/customerIdentity';
 import { getAuthClient } from '../lib/firebase';
+import { attachCustomerOrdersToPhoneUser } from '../lib/orderService';
 import { getRegisteredUser } from '../lib/registeredUserService';
 import { buildWechatBindStartUrl, finalizeWechatBind } from '../lib/wechatService';
 import type { RegisteredUserDoc } from '../types/firestore';
@@ -56,6 +59,7 @@ export default function AccountCenter({
   const auth = getAuthClient();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const handledWechatBindCodeRef = useRef('');
+  const claimedOrdersUserRef = useRef('');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
@@ -69,6 +73,31 @@ export default function AccountCenter({
   const hasPhone = Boolean(user?.phoneNumber);
   const wxOpenId = profile?.wxOpenId?.trim() ?? '';
   const wechatBindCode = search.get('wechatBindCode')?.trim() ?? '';
+
+  const claimCurrentVisitorOrders = useCallback(async (uid: string, phoneNumber?: string | null) => {
+    try {
+      const customerKey = getOrCreateCustomerKey();
+      const phoneMasked = phoneNumber ? maskPhone(phoneNumber) : null;
+      const [orderCount, cardCount] = await Promise.all([
+        attachCustomerOrdersToPhoneUser({
+          customerKey,
+          customerUserId: uid,
+          customerPhoneMasked: phoneMasked,
+        }),
+        attachCustomerCardsToPhoneUser({
+          customerKey,
+          customerUserId: uid,
+          customerPhoneMasked: phoneMasked,
+        }),
+      ]);
+      const count = orderCount + cardCount;
+      if (count > 0) {
+        setMsg(`手机号已验证，已同步 ${orderCount} 笔历史订单、${cardCount} 条商户卡记录。`);
+      }
+    } catch {
+      // 归属补写失败不影响手机号登录本身，用户之后仍可用原游客身份查看。
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -119,7 +148,8 @@ export default function AccountCenter({
     setBusy(true);
     setMsg('正在验证手机号…');
     try {
-      await confirmResult.confirm(smsCode);
+      const cred = await confirmResult.confirm(smsCode);
+      await claimCurrentVisitorOrders(cred.user.uid, cred.user.phoneNumber);
       navigate(returnTo, { replace: true });
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '验证码校验失败');
@@ -148,6 +178,13 @@ export default function AccountCenter({
     return () => {
       cancelled = true;
     };
+  }, [claimCurrentVisitorOrders, user]);
+
+  useEffect(() => {
+    if (!user?.uid || !user.phoneNumber) return;
+    if (claimedOrdersUserRef.current === user.uid) return;
+    claimedOrdersUserRef.current = user.uid;
+    void claimCurrentVisitorOrders(user.uid, user.phoneNumber);
   }, [user]);
 
   useEffect(() => {

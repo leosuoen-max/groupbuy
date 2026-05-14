@@ -22,6 +22,7 @@ import {
 } from '../../lib/shopHomeService';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import {
   customerAppendLinesToOrder,
   getOrderByNumber,
@@ -89,6 +90,7 @@ function useTick(ms: number) {
 }
 
 export default function ShopHome() {
+  useWechatNotifySession();
   const { shopSlug = '', projectId = '' } = useParams<{
     shopSlug: string;
     projectId: string;

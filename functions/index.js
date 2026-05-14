@@ -29,6 +29,7 @@ function getWechatConfig() {
     appId: (process.env.WECHAT_APP_ID || '').trim(),
     appSecret: (process.env.WECHAT_APP_SECRET || '').trim(),
     token: (process.env.WECHAT_TOKEN || '').trim(),
+    orderSubmittedTemplateId: (process.env.WECHAT_ORDER_SUBMITTED_TEMPLATE_ID || '').trim(),
   };
 }
 
@@ -64,6 +65,69 @@ function appendQuery(path, params) {
     if (value != null && value !== '') url.searchParams.set(key, String(value));
   }
   return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function formatMoney(n) {
+  return `RM ${(Number(n) || 0).toFixed(2)}`;
+}
+
+async function getWechatAccessToken() {
+  const { appId, appSecret } = getWechatConfig();
+  if (!appId || !appSecret) {
+    throw new Error('WECHAT_APP_ID or WECHAT_APP_SECRET is not configured');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('wechat_runtime').doc('access_token');
+  const snap = await ref.get();
+  const cached = snap.exists ? snap.data() || {} : {};
+  if (
+    cached.accessToken &&
+    Number(cached.expiresAtMillis || 0) > Date.now() + 60_000
+  ) {
+    return cached.accessToken;
+  }
+
+  const url =
+    'https://api.weixin.qq.com/cgi-bin/token?' +
+    new URLSearchParams({
+      grant_type: 'client_credential',
+      appid: appId,
+      secret: appSecret,
+    }).toString();
+  const resp = await fetch(url);
+  const json = await resp.json();
+  if (!resp.ok || json.errcode || !json.access_token) {
+    throw new Error(`wechat access_token failed: ${JSON.stringify(json)}`);
+  }
+  const expiresInSec = Number(json.expires_in || 7200);
+  const expiresAtMillis = Date.now() + Math.max(60, expiresInSec - 300) * 1000;
+  await ref.set(
+    {
+      accessToken: json.access_token,
+      expiresAtMillis,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return json.access_token;
+}
+
+async function sendWechatTemplateMessage(payload) {
+  const token = await getWechatAccessToken();
+  const resp = await fetch(
+    `https://api.weixin.qq.com/cgi-bin/message/template/send?access_token=${encodeURIComponent(token)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  const json = await resp.json();
+  if (!resp.ok || json.errcode) {
+    throw new Error(`wechat template send failed: ${JSON.stringify(json)}`);
+  }
+  return json;
 }
 
 function escapeHtml(s) {
@@ -527,5 +591,149 @@ exports.wechatBindFinalize = onRequest(
     });
 
     res.status(200).json({ ok: true, openidMasked: `****${String(stateData.openid).slice(-6)}` });
+  }
+);
+
+exports.wechatOrderSubmittedNotify = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 20,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ ok: false, message: 'method not allowed' });
+      return;
+    }
+
+    const orderId = String((req.body && req.body.orderId) || '').trim();
+    const customerKey = String((req.body && req.body.customerKey) || '').trim();
+    if (!orderId || !customerKey) {
+      res.status(400).json({ ok: false, message: 'missing orderId or customerKey' });
+      return;
+    }
+
+    const db = admin.firestore();
+    const orderRef = db.collection('orders').doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) {
+      res.status(404).json({ ok: false, message: 'order not found' });
+      return;
+    }
+    const order = orderSnap.data() || {};
+    if (order.customerKey !== customerKey) {
+      res.status(403).json({ ok: false, message: 'not your order' });
+      return;
+    }
+    if (order.channel !== 'feituan') {
+      res.status(200).json({ ok: true, skipped: true, reason: 'not_feituan_order' });
+      return;
+    }
+    if (order.wechatOrderSubmittedNotification?.status === 'sent') {
+      res.status(200).json({ ok: true, skipped: true, reason: 'already_sent' });
+      return;
+    }
+
+    const { orderSubmittedTemplateId } = getWechatConfig();
+    if (!orderSubmittedTemplateId) {
+      await orderRef.set(
+        {
+          wechatOrderSubmittedNotification: {
+            status: 'skipped',
+            reason: 'missing_template_id',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(200).json({ ok: true, skipped: true, reason: 'missing_template_id' });
+      return;
+    }
+
+    const stateId = String(order.wechatNotifyOAuthStateId || '').trim();
+    if (!stateId) {
+      await orderRef.set(
+        {
+          wechatOrderSubmittedNotification: {
+            status: 'skipped',
+            reason: 'missing_wechat_session',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(200).json({ ok: true, skipped: true, reason: 'missing_wechat_session' });
+      return;
+    }
+
+    const stateSnap = await db.collection('wechat_oauth_states').doc(stateId).get();
+    const state = stateSnap.exists ? stateSnap.data() || {} : {};
+    const openid = String(state.openid || '').trim();
+    if (!openid || state.status !== 'authorized') {
+      await orderRef.set(
+        {
+          wechatOrderSubmittedNotification: {
+            status: 'skipped',
+            reason: 'wechat_session_not_authorized',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(200).json({ ok: true, skipped: true, reason: 'wechat_session_not_authorized' });
+      return;
+    }
+
+    const origin = getAppOrigin();
+    const orderUrl = `${origin}/feituan/projects/${encodeURIComponent(order.projectId || '')}/orders/${encodeURIComponent(order.orderNumber || '')}`;
+    const projectTitle = order.projectTitle || '大马饭团订单';
+    const displayOrderNo = `${projectTitle} #${order.orderNumber || orderId}`;
+    const payload = {
+      touser: openid,
+      template_id: orderSubmittedTemplateId,
+      url: orderUrl,
+      data: {
+        first: { value: '您提交了新订单，请关注状态更新。' },
+        keyword1: { value: displayOrderNo },
+        keyword2: { value: projectTitle },
+        keyword3: { value: formatMoney(order.totalAmount) },
+        remark: { value: '点击查看订单详情。' },
+      },
+    };
+
+    try {
+      const sendResult = await sendWechatTemplateMessage(payload);
+      await orderRef.set(
+        {
+          wechatOrderSubmittedNotification: {
+            status: 'sent',
+            msgId: sendResult.msgid || null,
+            sentAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(200).json({ ok: true, sent: true });
+    } catch (e) {
+      console.error('wechatOrderSubmittedNotify', e);
+      await orderRef.set(
+        {
+          wechatOrderSubmittedNotification: {
+            status: 'failed',
+            error: String((e && e.message) || e),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.status(200).json({ ok: true, sent: false, failed: true });
+    }
   }
 );

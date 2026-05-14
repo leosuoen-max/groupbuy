@@ -70,6 +70,13 @@
         }
       },
       {
+        "source": "/api/wechat/order-submitted",
+        "function": {
+          "functionId": "wechatOrderSubmittedNotify",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/share/**",
         "function": {
           "functionId": "shareRedirect",
