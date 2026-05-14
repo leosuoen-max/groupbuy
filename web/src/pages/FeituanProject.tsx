@@ -50,7 +50,7 @@ type Props = {
   mode?: 'customer' | 'adminPreview';
 };
 
-const FEITUAN_THEME_COLOR = '#f97316';
+const FEITUAN_THEME_COLOR = '#08c279';
 
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
@@ -507,7 +507,11 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
               onOpenMore={() => undefined}
               hideActions
             />
-            <ShopProjectStatusCard data={shopHomeData} now={now} />
+            <ShopProjectStatusCard
+              data={shopHomeData}
+              now={now}
+              accentColor={shopHomeData.themeColor}
+            />
 
             {hasProjectDescription ? (
               <>
@@ -795,7 +799,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
                                                 soldOut
                                                   ? 'border-gray-100 bg-gray-50 text-gray-400'
                                                   : checked
-                                                    ? 'border-orange-400 bg-white text-orange-950 ring-2 ring-orange-200'
+                                                    ? 'border-emerald-400 bg-white text-emerald-950 ring-2 ring-emerald-200'
                                                     : 'border-gray-200 bg-white text-gray-800'
                                               }`}
                                               onClick={() =>
@@ -818,7 +822,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
                                                   {opt.note}
                                                 </div>
                                               ) : null}
-                                              <div className="mt-1 text-[11px] text-orange-700">
+                                              <div className="mt-1 text-[11px] text-teal-700">
                                                 {soldOut ? '已售罄' : `余 ${opt.stock}`}
                                               </div>
                                             </button>

@@ -5,6 +5,7 @@ import { DESIGN_PRICE_TEAL } from '../../lib/shopTheme';
 type ShopProjectStatusCardProps = {
   data: MockShopHome;
   now: Date;
+  accentColor?: string;
 };
 
 function formatDeadlineDisplay(closesAt: Date, referenceNow: Date): string {
@@ -18,9 +19,14 @@ function formatDeadlineDisplay(closesAt: Date, referenceNow: Date): string {
   return `${datePart} ${hh}:${mm}`;
 }
 
-export function ShopProjectStatusCard({ data, now }: ShopProjectStatusCardProps) {
+export function ShopProjectStatusCard({
+  data,
+  now,
+  accentColor,
+}: ShopProjectStatusCardProps) {
   const closes = new Date(data.closesAt);
   const timeLabel = formatDeadlineDisplay(closes, now);
+  const emphasisColor = accentColor ?? DESIGN_PRICE_TEAL;
 
   const remaining = formatRemainingShort(data.closesAt, now);
 
@@ -44,7 +50,7 @@ export function ShopProjectStatusCard({ data, now }: ShopProjectStatusCardProps)
         <span className="text-slate-600">距截止还有 </span>
         <span
           className="font-semibold tabular-nums tracking-tight"
-          style={{ color: DESIGN_PRICE_TEAL }}
+          style={{ color: emphasisColor }}
         >
           {remaining}
         </span>

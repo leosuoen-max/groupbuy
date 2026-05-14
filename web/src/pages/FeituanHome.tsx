@@ -121,7 +121,7 @@ export default function FeituanHome() {
     <main className="min-h-svh bg-[#fffaf4] px-4 pb-28 pt-5">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-base font-bold text-gray-950">{listedText}</h2>
-        <span className="text-xs text-orange-700">点卡片进入下单</span>
+        <span className="text-xs font-medium text-emerald-700">点卡片进入下单</span>
       </div>
 
       {loading ? <p className="text-sm text-gray-600">加载中…</p> : null}
@@ -143,7 +143,7 @@ export default function FeituanHome() {
             <Link
               key={project.id}
               to={href}
-              className="block overflow-hidden rounded-3xl border border-orange-100 bg-white shadow-sm transition active:scale-[0.99]"
+              className="block overflow-hidden rounded-3xl border border-orange-100 bg-white shadow-sm transition active:scale-[0.99] active:border-emerald-200"
             >
               <div className="px-3.5 pb-3.5 pt-3">
                 <div className="mb-2 flex items-start justify-between gap-2">
@@ -163,7 +163,9 @@ export default function FeituanHome() {
                 <p className="line-clamp-2 text-[13px] leading-relaxed text-gray-600">
                   {intro}
                 </p>
-                <p className="mt-2 text-xs font-bold text-orange-700">进入饭团项目 →</p>
+                <p className="mt-2 inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                  进入饭团项目 →
+                </p>
               </div>
             </Link>
           );
@@ -174,23 +176,23 @@ export default function FeituanHome() {
           {JSON.stringify(wechatShareDebug, null, 2)}
         </pre>
       ) : null}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-orange-100 bg-white/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(251,146,60,0.12)] backdrop-blur">
-        <div className="mx-auto grid max-w-xl grid-cols-3 overflow-hidden rounded-2xl border border-orange-100 bg-orange-50">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-orange-100 bg-white/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(251,146,60,0.10)] backdrop-blur">
+        <div className="mx-auto grid max-w-xl grid-cols-3 overflow-hidden rounded-2xl border border-orange-100 bg-white">
           <Link
             to="/feituan/wallet"
-            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-emerald-50"
           >
             饭团钱包
           </Link>
           <Link
             to="/feituan/my-orders"
-            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-emerald-50"
           >
             我的订单
           </Link>
           <Link
             to="/feituan/account"
-            className="bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+            className="bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-emerald-50"
           >
             账号中心
           </Link>
