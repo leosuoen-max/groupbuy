@@ -347,6 +347,7 @@ export default function ProjectEdit() {
   const [closesAt, setClosesAt] = useState(() =>
     toDatetimeLocalValue(new Date(Date.now() + 24 * 60 * 60 * 1000))
   );
+  const [deliveryTimeText, setDeliveryTimeText] = useState('');
   const [textContent, setTextContent] = useState('');
   const [descriptionAssets, setDescriptionAssets] = useState<DescriptionAsset[]>([]);
   const [imageBlocks, setImageBlocks] = useState<ProjectImageBlock[]>([]);
@@ -398,6 +399,7 @@ export default function ProjectEdit() {
     savedAt: number;
     title: string;
     closesAt: string;
+    deliveryTimeText?: string;
     textContent: string;
     descriptionAssets?: DescriptionAsset[];
     imageBlocks?: ProjectImageBlock[];
@@ -502,6 +504,7 @@ export default function ProjectEdit() {
       }
       if (typeof d.title === 'string') setTitle(d.title);
       if (typeof d.closesAt === 'string') setClosesAt(d.closesAt);
+      if (typeof d.deliveryTimeText === 'string') setDeliveryTimeText(d.deliveryTimeText);
       if (typeof d.textContent === 'string') {
         const parsed = splitDescription(d.textContent);
         const editor = parseEditorContent(parsed.body);
@@ -554,6 +557,7 @@ export default function ProjectEdit() {
       return;
     }
     setTitle(row.data.title);
+    setDeliveryTimeText(row.data.deliveryTimeText ?? '');
     const parsedDesc = splitDescription(row.data.textContent ?? '');
     const editor = parseEditorContent(parsedDesc.body);
     setTextContent(editor.plain);
@@ -684,6 +688,7 @@ export default function ProjectEdit() {
       savedAt: Date.now(),
       title,
       closesAt,
+      deliveryTimeText,
       textContent,
       imageBlocks,
       products,
@@ -705,6 +710,7 @@ export default function ProjectEdit() {
     draftHydrated,
     title,
     closesAt,
+    deliveryTimeText,
     textContent,
     imageBlocks,
     products,
@@ -1289,6 +1295,11 @@ export default function ProjectEdit() {
       focusValidationTarget(promotionValidation.key);
       return;
     }
+    const deliveryText = deliveryTimeText.trim();
+    if (!deliveryText) {
+      setMsg('请填写送达时间，例如「5/20 午餐时间」或「5/20 晚餐时间」');
+      return;
+    }
     setValidationHighlightKey(null);
     setSaving(true);
     setMsg(null);
@@ -1297,6 +1308,7 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: title.trim() || '未命名项目',
         closesAt: Timestamp.fromDate(d),
+        deliveryTimeText: deliveryText,
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts.length ? normalizedProducts : [],
@@ -1344,8 +1356,13 @@ export default function ProjectEdit() {
     }
     setValidationHighlightKey(null);
     const t = title.trim();
+    const deliveryText = deliveryTimeText.trim();
     if (!t) {
       setMsg('请填写项目标题');
+      return;
+    }
+    if (!deliveryText) {
+      setMsg('请填写送达时间，例如「5/20 午餐时间」或「5/20 晚餐时间」');
       return;
     }
     if (!canPublishByRegularProducts && !canPublishByBundleSchemes) {
@@ -1359,6 +1376,7 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: t,
         closesAt: Timestamp.fromDate(d),
+        deliveryTimeText: deliveryText,
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts,
@@ -1498,6 +1516,18 @@ export default function ProjectEdit() {
             value={closesAt}
             onChange={(e) => setClosesAt(e.target.value)}
           />
+        </label>
+        <label className="block text-sm font-medium text-gray-800">
+          送达时间（必填）
+          <input
+            className={input}
+            value={deliveryTimeText}
+            onChange={(e) => setDeliveryTimeText(e.target.value)}
+            placeholder="例如：5/20 午餐时间、5/20 晚餐时间"
+          />
+          <span className="mt-1 block text-xs font-normal text-gray-500">
+            会显示在饭团首页项目卡片上，建议写成「月/日 + 午餐/晚餐时间」。
+          </span>
         </label>
         <section className="rounded-xl border border-gray-100 bg-white p-3">
           <div className="mb-1 text-sm font-semibold text-gray-900">项目管理员</div>

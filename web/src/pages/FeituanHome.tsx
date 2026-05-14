@@ -23,7 +23,7 @@ function projectImages(p: ProjectRow): string[] {
   )) {
     push(product.imageUrl);
   }
-  return urls.slice(0, 4);
+  return urls.slice(0, 6);
 }
 
 function firstProductNames(p: ProjectRow): string {
@@ -38,13 +38,35 @@ function firstProductNames(p: ProjectRow): string {
 function fmtCloseTime(p: ProjectRow): string {
   const d = p.data.closesAt?.toDate?.();
   if (!d) return '';
-  return d.toLocaleString('zh-CN', {
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const datePart = d.toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
+    hour12: false,
+  });
+  const timePart = d.toLocaleString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   });
+  return `${datePart} ${weekdays[d.getDay()]} ${timePart}`;
+}
+
+function deliveryTimeLabel(p: ProjectRow): string {
+  const text = p.data.deliveryTimeText?.trim();
+  return text || '待商户填写';
+}
+
+function ProjectTimingBadge({ project }: { project: ProjectRow }) {
+  const close = fmtCloseTime(project);
+  const delivery = deliveryTimeLabel(project);
+  if (!close && !delivery) return null;
+  return (
+    <div className="shrink-0 rounded-2xl bg-orange-50 px-2.5 py-1.5 text-right text-[11px] font-semibold leading-snug text-orange-700">
+      {close ? <p>截单：{close}</p> : null}
+      <p>送达：{delivery}</p>
+    </div>
+  );
 }
 
 async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRow | null>> {
@@ -96,42 +118,7 @@ export default function FeituanHome() {
   const listedText = rows.length > 0 ? `正在开团 · ${rows.length} 个饭团项目` : '正在开团';
 
   return (
-    <main className="min-h-svh bg-[#fffaf4] px-4 pb-24 pt-5">
-      <header className="mb-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-[24px] font-black tracking-tight text-gray-950">大马饭团</h1>
-            <p className="mt-1 text-sm text-orange-900/70">今日团购饭菜，集中下单更省心</p>
-          </div>
-          <span className="rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-800">
-            今日团
-          </span>
-        </div>
-        <nav className="mt-4 grid grid-cols-3 gap-2">
-          <Link
-            to="/feituan/wallet"
-            className="rounded-2xl border border-orange-100 bg-white px-2 py-3 text-center shadow-sm active:scale-[0.99]"
-          >
-            <span className="block text-lg">💳</span>
-            <span className="mt-1 block text-xs font-semibold text-gray-900">饭团钱包</span>
-          </Link>
-          <Link
-            to="/feituan/my-orders"
-            className="rounded-2xl border border-orange-100 bg-white px-2 py-3 text-center shadow-sm active:scale-[0.99]"
-          >
-            <span className="block text-lg">🧾</span>
-            <span className="mt-1 block text-xs font-semibold text-gray-900">我的订单</span>
-          </Link>
-          <Link
-            to="/feituan/account"
-            className="rounded-2xl border border-orange-100 bg-white px-2 py-3 text-center shadow-sm active:scale-[0.99]"
-          >
-            <span className="block text-lg">👤</span>
-            <span className="mt-1 block text-xs font-semibold text-gray-900">账号中心</span>
-          </Link>
-        </nav>
-      </header>
-
+    <main className="min-h-svh bg-[#fffaf4] px-4 pb-28 pt-5">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-base font-bold text-gray-950">{listedText}</h2>
         <span className="text-xs text-orange-700">点卡片进入下单</span>
@@ -152,7 +139,6 @@ export default function FeituanHome() {
             compactWechatShareText(project.data.textContent, 72) ||
             firstProductNames(project) ||
             '点击查看饭团详情。';
-          const close = fmtCloseTime(project);
           return (
             <Link
               key={project.id}
@@ -169,36 +155,10 @@ export default function FeituanHome() {
                       {project.data.title || '未命名项目'}
                     </h3>
                   </div>
-                  {close ? (
-                    <span className="shrink-0 rounded-full bg-orange-50 px-2 py-1 text-[11px] font-semibold text-orange-700">
-                      截止 {close}
-                    </span>
-                  ) : null}
+                  <ProjectTimingBadge project={project} />
                 </div>
 
-                {images.length > 0 ? (
-                  <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl bg-orange-50">
-                    <img
-                      src={images[0]}
-                      alt=""
-                      className={`${images.length > 1 ? 'col-span-3' : 'col-span-5'} h-28 w-full object-cover`}
-                      loading="lazy"
-                    />
-                    {images.length > 1 ? (
-                      <div className="col-span-2 grid h-28 grid-cols-2 gap-1.5">
-                        {images.slice(1, 4).map((img, idx) => (
-                          <img
-                            key={img}
-                            src={img}
-                            alt=""
-                            className={`${idx === 0 && images.length === 2 ? 'col-span-2 row-span-2' : ''} h-full min-h-0 w-full object-cover`}
-                            loading="lazy"
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                {images.length > 0 ? <ProjectImageMosaic images={images} /> : null}
 
                 <p className="line-clamp-2 text-[13px] leading-relaxed text-gray-600">
                   {intro}
@@ -214,6 +174,104 @@ export default function FeituanHome() {
           {JSON.stringify(wechatShareDebug, null, 2)}
         </pre>
       ) : null}
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-orange-100 bg-white/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 shadow-[0_-8px_24px_rgba(251,146,60,0.12)] backdrop-blur">
+        <div className="mx-auto grid max-w-xl grid-cols-3 overflow-hidden rounded-2xl border border-orange-100 bg-orange-50">
+          <Link
+            to="/feituan/wallet"
+            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+          >
+            饭团钱包
+          </Link>
+          <Link
+            to="/feituan/my-orders"
+            className="border-r border-orange-100 bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+          >
+            我的订单
+          </Link>
+          <Link
+            to="/feituan/account"
+            className="bg-white py-2.5 text-center text-xs font-bold text-gray-900 active:bg-orange-50"
+          >
+            账号中心
+          </Link>
+        </div>
+      </nav>
     </main>
+  );
+}
+
+function ProjectImageMosaic({ images }: { images: string[] }) {
+  const count = images.length;
+  if (count === 1) {
+    return (
+      <div className="mb-2 overflow-hidden rounded-2xl bg-orange-50">
+        <img src={images[0]} alt="" className="h-28 w-full object-cover" loading="lazy" />
+      </div>
+    );
+  }
+
+  if (count === 2) {
+    return (
+      <div className="mb-2 grid h-28 grid-cols-2 gap-1.5 overflow-hidden rounded-2xl bg-orange-50">
+        {images.map((img) => (
+          <img key={img} src={img} alt="" className="h-28 w-full object-cover" loading="lazy" />
+        ))}
+      </div>
+    );
+  }
+
+  if (count === 3) {
+    return (
+      <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl bg-orange-50">
+        <img src={images[0]} alt="" className="col-span-3 h-28 w-full object-cover" loading="lazy" />
+        <div className="col-span-2 grid h-28 grid-rows-2 gap-1.5">
+          {images.slice(1, 3).map((img) => (
+            <img key={img} src={img} alt="" className="h-full min-h-0 w-full object-cover" loading="lazy" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (count === 4) {
+    return (
+      <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl bg-orange-50">
+        <img src={images[0]} alt="" className="col-span-3 h-28 w-full object-cover" loading="lazy" />
+        <div className="col-span-2 grid h-28 grid-cols-2 grid-rows-2 gap-1.5">
+          {images.slice(1, 4).map((img, idx) => (
+            <img
+              key={img}
+              src={img}
+              alt=""
+              className={`${idx === 0 ? 'col-span-2' : ''} h-full min-h-0 w-full object-cover`}
+              loading="lazy"
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const smallImages = images.slice(1, count >= 6 ? 6 : 5);
+  return (
+    <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl bg-orange-50">
+      <img
+        src={images[0]}
+        alt=""
+        className="col-span-3 h-28 w-full object-cover"
+        loading="lazy"
+      />
+      <div className="col-span-2 grid h-28 grid-cols-2 gap-1.5">
+        {smallImages.map((img, idx) => (
+          <img
+            key={img}
+            src={img}
+            alt=""
+            className={`${smallImages.length === 5 && idx === 0 ? 'row-span-2' : ''} h-full min-h-0 w-full object-cover`}
+            loading="lazy"
+          />
+        ))}
+      </div>
+    </div>
   );
 }

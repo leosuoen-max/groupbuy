@@ -94,6 +94,8 @@ export type ProjectDoc = {
   title: string;
   status: 'draft' | 'published' | 'closed';
   closesAt: Timestamp;
+  /** 商户填写的送达时间文案，例如「5/20 午餐时间」 */
+  deliveryTimeText?: string;
   maxParticipants?: number | null;
   textContent?: string;
   imageBlocks?: {

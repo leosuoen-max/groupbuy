@@ -26,6 +26,7 @@ function defaultProjectPayload(shopId: string): Omit<ProjectDoc, 'createdAt' | '
     title: '未命名项目',
     status: 'draft',
     closesAt: Timestamp.fromDate(new Date(Date.now() + 24 * 60 * 60 * 1000)),
+    deliveryTimeText: '',
     textContent: '',
     imageBlocks: [],
     products: [],
@@ -198,6 +199,7 @@ export async function copyProjectFromCustomerLinkAsDraft(params: {
     title,
     status: 'draft',
     closesAt: resolveCopyClosesAt(src.closesAt),
+    deliveryTimeText: src.deliveryTimeText ?? '',
     maxParticipants: src.maxParticipants ?? null,
     textContent: src.textContent ?? '',
     imageBlocks: [...(src.imageBlocks ?? [])].map((b) => ({ ...b })),
@@ -242,6 +244,7 @@ export async function updateProjectDoc(
     title?: string;
     status?: ProjectDoc['status'];
     closesAt?: Timestamp;
+    deliveryTimeText?: string;
     textContent?: string;
     imageBlocks?: ProjectDoc['imageBlocks'];
     products?: ProjectProduct[];
