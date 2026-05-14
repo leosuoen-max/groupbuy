@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
@@ -9,6 +9,9 @@ import { PageShell } from '../components/PageShell';
 import { SignOutButton } from '../components/SignOutButton';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { getAuthClient } from '../lib/firebase';
+import { getRegisteredUser } from '../lib/registeredUserService';
+import { buildWechatBindStartUrl, finalizeWechatBind } from '../lib/wechatService';
+import type { RegisteredUserDoc } from '../types/firestore';
 
 type AccountCenterProps = {
   defaultReturnTo?: string;
@@ -44,19 +47,28 @@ export default function AccountCenter({
 }: AccountCenterProps) {
   const { user, loading } = useAuthUser();
   const navigate = useNavigate();
+  const location = useLocation();
   const [search] = useSearchParams();
+  const searchText = search.toString();
   const returnTo = safeReturnTo(search.get('returnTo'), defaultReturnTo);
   const bottomHref = homeHref === '/' && search.get('returnTo') ? returnTo : homeHref;
   const bottomLabel = homeHref === '/' && search.get('returnTo') ? '返回上一页' : homeLabel;
   const auth = getAuthClient();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const handledWechatBindCodeRef = useRef('');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [profile, setProfile] = useState<RegisteredUserDoc | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [wechatBusy, setWechatBusy] = useState(false);
+  const [wechatMsg, setWechatMsg] = useState<string | null>(null);
   const phoneE164 = useMemo(() => normalizePhone(phone), [phone]);
   const hasPhone = Boolean(user?.phoneNumber);
+  const wxOpenId = profile?.wxOpenId?.trim() ?? '';
+  const wechatBindCode = search.get('wechatBindCode')?.trim() ?? '';
 
   useEffect(() => {
     return () => {
@@ -115,6 +127,58 @@ export default function AccountCenter({
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!user) {
+      setProfile(null);
+      return;
+    }
+    let cancelled = false;
+    setProfileLoading(true);
+    void getRegisteredUser(user.uid)
+      .then((row) => {
+        if (!cancelled) setProfile(row);
+      })
+      .catch(() => {
+        if (!cancelled) setProfile(null);
+      })
+      .finally(() => {
+        if (!cancelled) setProfileLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !wechatBindCode) return;
+    if (handledWechatBindCodeRef.current === wechatBindCode) return;
+    handledWechatBindCodeRef.current = wechatBindCode;
+    let cancelled = false;
+    setWechatBusy(true);
+    setWechatMsg('正在绑定微信服务号…');
+    void finalizeWechatBind(user, wechatBindCode)
+      .then(async () => {
+        if (cancelled) return;
+        setWechatMsg('微信服务号已绑定，可以用于接收订单通知。');
+        setProfile(await getRegisteredUser(user.uid));
+        const next = new URLSearchParams(searchText);
+        next.delete('wechatBindCode');
+        next.set('wechat', 'bound');
+        navigate(`${location.pathname}?${next.toString()}`, { replace: true });
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setWechatMsg(e instanceof Error ? e.message : '微信绑定失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWechatBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, navigate, searchText, user, wechatBindCode]);
 
   return (
     <PageShell title="账号中心" subtitle="游客可下单，手机号用于钱包、商户和跨设备找回">
@@ -207,9 +271,30 @@ export default function AccountCenter({
         ) : null}
 
         <section className="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-3 text-xs leading-relaxed text-gray-600">
-          <p>
-            微信服务号以后主要负责消息通知；钱包余额、商户注册和管理员权限仍以手机号账号为准。
+          <p className="font-semibold text-gray-800">微信服务号通知</p>
+          <p className="mt-1">
+            微信服务号主要负责消息通知；钱包余额、商户注册和管理员权限仍以手机号账号为准。
           </p>
+          {profileLoading ? (
+            <p className="mt-2 text-gray-500">读取微信绑定状态…</p>
+          ) : wxOpenId ? (
+            <p className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-emerald-800">
+              已绑定微信服务号：****{wxOpenId.slice(-6)}
+            </p>
+          ) : hasPhone ? (
+            <a
+              href={buildWechatBindStartUrl(returnTo)}
+              aria-disabled={wechatBusy}
+              className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white aria-disabled:pointer-events-none aria-disabled:opacity-60"
+            >
+              {wechatBusy ? '绑定中…' : '绑定微信服务号'}
+            </a>
+          ) : (
+            <p className="mt-2 rounded-xl bg-white px-3 py-2 text-gray-600">
+              请先绑定手机号，再绑定微信服务号。
+            </p>
+          )}
+          {wechatMsg ? <p className="mt-2 text-sm text-amber-700">{wechatMsg}</p> : null}
         </section>
 
         <Link

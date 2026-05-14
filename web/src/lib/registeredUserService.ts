@@ -78,6 +78,12 @@ export async function getRegisteredUserPhoneMasked(uid: string): Promise<string 
 
 export type RegisteredUserRow = { id: string; data: RegisteredUserDoc };
 
+export async function getRegisteredUser(uid: string): Promise<RegisteredUserDoc | null> {
+  const snap = await getDoc(doc(getDb(), REGISTERED_USERS, uid));
+  if (!snap.exists()) return null;
+  return snap.data() as RegisteredUserDoc;
+}
+
 /** 按首次出现时间倒序列出（需 composite index：firstSeenAt DESC） */
 export async function listRegisteredUsers(): Promise<RegisteredUserRow[]> {
   const db = getDb();

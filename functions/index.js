@@ -5,6 +5,7 @@
  */
 const { onRequest } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 
 if (!admin.apps.length) {
   admin.initializeApp();
@@ -17,6 +18,44 @@ function getShareAppOrigin() {
       ? env.trim()
       : 'https://groupbuy-app-24c46.web.app';
   return raw.replace(/\/+$/, '');
+}
+
+function getAppOrigin() {
+  return getShareAppOrigin();
+}
+
+function getWechatConfig() {
+  return {
+    appId: (process.env.WECHAT_APP_ID || '').trim(),
+    appSecret: (process.env.WECHAT_APP_SECRET || '').trim(),
+    token: (process.env.WECHAT_TOKEN || '').trim(),
+  };
+}
+
+function safeReturnTo(raw, fallback = '/account') {
+  const v = String(raw || '').trim();
+  if (!v || !v.startsWith('/') || v.startsWith('//')) return fallback;
+  return v;
+}
+
+function verifyWechatSignature(query, token) {
+  const signature = String(query.signature || '').trim();
+  const timestamp = String(query.timestamp || '').trim();
+  const nonce = String(query.nonce || '').trim();
+  if (!signature || !timestamp || !nonce || !token) return false;
+  const expected = crypto
+    .createHash('sha1')
+    .update([token, timestamp, nonce].sort().join(''))
+    .digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+function makeState() {
+  return crypto.randomBytes(18).toString('base64url');
 }
 
 function escapeHtml(s) {
@@ -201,5 +240,259 @@ exports.shareRedirect = onRequest(
       console.error('shareRedirect', e);
       res.redirect(302, targetUrl);
     }
+  }
+);
+
+exports.wechatWebhook = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 15,
+  },
+  async (req, res) => {
+    const { token } = getWechatConfig();
+    if (!token) {
+      res.status(500).send('WECHAT_TOKEN is not configured');
+      return;
+    }
+
+    if (!verifyWechatSignature(req.query || {}, token)) {
+      res.status(403).send('invalid signature');
+      return;
+    }
+
+    if (req.method === 'GET') {
+      res.status(200).send(String(req.query.echostr || ''));
+      return;
+    }
+
+    // 第一版先完成服务号接入校验；后续收到关注/取关等事件时再解析 XML 入队。
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.status(200).send('success');
+  }
+);
+
+exports.wechatOAuthStart = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 15,
+  },
+  async (req, res) => {
+    const { appId } = getWechatConfig();
+    if (!appId) {
+      res.status(500).send('WECHAT_APP_ID is not configured');
+      return;
+    }
+
+    const origin = getAppOrigin();
+    const state = makeState();
+    const returnTo = safeReturnTo(req.query.returnTo, '/account');
+    const scope = String(req.query.scope || 'snsapi_base').trim() === 'snsapi_userinfo'
+      ? 'snsapi_userinfo'
+      : 'snsapi_base';
+
+    await admin.firestore().collection('wechat_oauth_states').doc(state).set({
+      state,
+      returnTo,
+      scope,
+      status: 'started',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const redirectUri = `${origin}/wechat/oauth/callback`;
+    const url =
+      'https://open.weixin.qq.com/connect/oauth2/authorize?' +
+      new URLSearchParams({
+        appid: appId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope,
+        state,
+      }).toString() +
+      '#wechat_redirect';
+
+    res.redirect(302, url);
+  }
+);
+
+exports.wechatOAuthCallback = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 20,
+  },
+  async (req, res) => {
+    const { appId, appSecret } = getWechatConfig();
+    const origin = getAppOrigin();
+    const code = String(req.query.code || '').trim();
+    const state = String(req.query.state || '').trim();
+    const fallback = `${origin}/account?wechat=failed`;
+
+    if (!appId || !appSecret) {
+      res.redirect(302, `${fallback}&reason=config`);
+      return;
+    }
+    if (!code || !state) {
+      res.redirect(302, `${fallback}&reason=missing_code`);
+      return;
+    }
+
+    const db = admin.firestore();
+    const stateRef = db.collection('wechat_oauth_states').doc(state);
+    const stateSnap = await stateRef.get();
+    if (!stateSnap.exists) {
+      res.redirect(302, `${fallback}&reason=invalid_state`);
+      return;
+    }
+    const stateData = stateSnap.data() || {};
+    const returnTo = safeReturnTo(stateData.returnTo, '/account');
+
+    try {
+      const tokenUrl =
+        'https://api.weixin.qq.com/sns/oauth2/access_token?' +
+        new URLSearchParams({
+          appid: appId,
+          secret: appSecret,
+          code,
+          grant_type: 'authorization_code',
+        }).toString();
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson = await tokenResp.json();
+      if (!tokenResp.ok || tokenJson.errcode || !tokenJson.openid) {
+        console.error('wechatOAuthCallback token error', tokenJson);
+        await stateRef.set(
+          {
+            status: 'failed',
+            error: tokenJson,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        res.redirect(302, `${origin}/account?wechat=failed&reason=wechat&returnTo=${encodeURIComponent(returnTo)}`);
+        return;
+      }
+
+      await stateRef.set(
+        {
+          status: 'authorized',
+          openid: tokenJson.openid,
+          unionid: tokenJson.unionid || null,
+          scope: tokenJson.scope || stateData.scope || null,
+          authorizedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      res.redirect(
+        302,
+        `${origin}/account?wechat=authorized&wechatBindCode=${encodeURIComponent(state)}&returnTo=${encodeURIComponent(returnTo)}`
+      );
+    } catch (e) {
+      console.error('wechatOAuthCallback', e);
+      await stateRef.set(
+        {
+          status: 'failed',
+          error: String((e && e.message) || e),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      res.redirect(302, `${origin}/account?wechat=failed&reason=exception&returnTo=${encodeURIComponent(returnTo)}`);
+    }
+  }
+);
+
+exports.wechatBindFinalize = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 20,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ ok: false, message: 'method not allowed' });
+      return;
+    }
+
+    const authHeader = String(req.headers.authorization || '');
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+      res.status(401).json({ ok: false, message: 'missing auth token' });
+      return;
+    }
+
+    let decoded;
+    try {
+      decoded = await admin.auth().verifyIdToken(m[1]);
+    } catch {
+      res.status(401).json({ ok: false, message: 'invalid auth token' });
+      return;
+    }
+
+    const bindCode = String((req.body && req.body.bindCode) || '').trim();
+    if (!bindCode) {
+      res.status(400).json({ ok: false, message: 'missing bindCode' });
+      return;
+    }
+
+    const db = admin.firestore();
+    const stateRef = db.collection('wechat_oauth_states').doc(bindCode);
+    const stateSnap = await stateRef.get();
+    if (!stateSnap.exists) {
+      res.status(404).json({ ok: false, message: 'binding session not found' });
+      return;
+    }
+    const stateData = stateSnap.data() || {};
+    if (stateData.status !== 'authorized' || !stateData.openid) {
+      res.status(400).json({ ok: false, message: 'binding session is not ready' });
+      return;
+    }
+
+    const uid = decoded.uid;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const userRef = db.collection('registered_users').doc(uid);
+    const openidRef = db.collection('wechat_openids').doc(stateData.openid);
+
+    await db.runTransaction(async (tx) => {
+      tx.set(
+        userRef,
+        {
+          uid,
+          wxOpenId: stateData.openid,
+          wxUnionId: stateData.unionid || null,
+          wxBoundAt: now,
+          lastSeenAt: now,
+        },
+        { merge: true }
+      );
+      tx.set(
+        openidRef,
+        {
+          openid: stateData.openid,
+          unionid: stateData.unionid || null,
+          uid,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+      tx.set(
+        stateRef,
+        {
+          status: 'bound',
+          boundUid: uid,
+          boundAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+    });
+
+    res.status(200).json({ ok: true, openidMasked: `****${String(stateData.openid).slice(-6)}` });
   }
 );

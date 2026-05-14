@@ -42,6 +42,34 @@
     ],
     "rewrites": [
       {
+        "source": "/wechat",
+        "function": {
+          "functionId": "wechatWebhook",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/wechat/oauth/start",
+        "function": {
+          "functionId": "wechatOAuthStart",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/wechat/oauth/callback",
+        "function": {
+          "functionId": "wechatOAuthCallback",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/wechat/bind",
+        "function": {
+          "functionId": "wechatBindFinalize",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/share/**",
         "function": {
           "functionId": "shareRedirect",

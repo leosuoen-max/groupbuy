@@ -49,6 +49,31 @@ service cloud.firestore {
           resource.data.totalSpentAmount + (resource.data.balance - request.resource.data.balance);
     }
 
+    function isSelfRegisteredUserCreate(uid) {
+      return isSelf(uid) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.keys().hasOnly([
+          'uid',
+          'phoneE164',
+          'phoneMasked',
+          'phoneVerifiedAt',
+          'isAnonymous',
+          'firstSeenAt',
+          'lastSeenAt'
+        ]);
+    }
+
+    function isSelfRegisteredUserUpdate(uid) {
+      return isSelf(uid) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'phoneE164',
+          'phoneMasked',
+          'phoneVerifiedAt',
+          'isAnonymous',
+          'lastSeenAt'
+        ]);
+    }
+
     match /platform_admins/{adminUid} {
       allow read: if isSelf(adminUid);
       allow write: if false;
@@ -60,9 +85,18 @@ service cloud.firestore {
     }
 
     match /registered_users/{uid} {
-      allow create, update: if isSelf(uid);
+      allow create: if isSelfRegisteredUserCreate(uid);
+      allow update: if isSelfRegisteredUserUpdate(uid);
       allow read: if isSelf(uid) || isPlatformAdmin();
       allow delete: if false;
+    }
+
+    match /wechat_oauth_states/{stateId} {
+      allow read, write: if false;
+    }
+
+    match /wechat_openids/{openid} {
+      allow read, write: if false;
     }
 
     match /feituan_wallet_settings/{settingsId} {
