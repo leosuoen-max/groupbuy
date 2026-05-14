@@ -4,6 +4,7 @@ export type ShopHeaderProps = {
   data: MockShopHome;
   onShare: () => void;
   onOpenMore: () => void;
+  hideActions?: boolean;
 };
 
 function shopInitial(name: string) {
@@ -68,7 +69,7 @@ function MoreHorizontalIcon({ className }: { className?: string }) {
   );
 }
 
-export function ShopHeader({ data, onShare, onOpenMore }: ShopHeaderProps) {
+export function ShopHeader({ data, onShare, onOpenMore, hideActions = false }: ShopHeaderProps) {
   const logoUrl = data.shopLogoUrl?.trim();
 
   return (
@@ -114,6 +115,7 @@ export function ShopHeader({ data, onShare, onOpenMore }: ShopHeaderProps) {
               {data.shopName}
             </span>
           </div>
+          {hideActions ? null : (
           <div className="flex shrink-0 gap-2">
             <button
               type="button"
@@ -132,6 +134,7 @@ export function ShopHeader({ data, onShare, onOpenMore }: ShopHeaderProps) {
               <MoreHorizontalIcon />
             </button>
           </div>
+          )}
         </div>
       </div>
 

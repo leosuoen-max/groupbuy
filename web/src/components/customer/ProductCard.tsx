@@ -10,6 +10,7 @@ type ProductCardProps = {
   quantity: number;
   now: Date;
   themeColor: string;
+  accentColor?: string;
   onInc: () => void;
   onDec: () => void;
 };
@@ -19,11 +20,13 @@ export function ProductCard({
   quantity,
   now,
   themeColor,
+  accentColor,
   onInc,
   onDec,
 }: ProductCardProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const { unit, isDiscount, discountType, discountEndsAt } = getEffectivePrice(product, now);
+  const emphasisColor = accentColor ?? DESIGN_PRICE_TEAL;
   const soldOut = product.stock <= 0;
   const lowStock = !soldOut && product.stock <= 5;
   const canInc = !soldOut && quantity < product.stock;
@@ -64,7 +67,7 @@ export function ProductCard({
       className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
         lowStock ? 'bg-orange-50 text-orange-700' : 'bg-teal-50'
       }`}
-      style={lowStock ? undefined : { color: DESIGN_PRICE_TEAL }}
+      style={lowStock ? undefined : { color: emphasisColor }}
     >
       余 {product.stock}
     </span>
@@ -121,7 +124,7 @@ export function ProductCard({
     <div className="flex items-baseline gap-1.5">
       <span
         className="text-[17px] font-extrabold leading-none tracking-tight"
-        style={{ color: soldOut ? '#94a3b8' : DESIGN_PRICE_TEAL }}
+        style={{ color: soldOut ? '#94a3b8' : emphasisColor }}
       >
         {formatMYR(unit)}
       </span>

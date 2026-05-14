@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
+import { ProductCard } from '../components/customer/ProductCard';
+import { ShopContentBlocks } from '../components/customer/ShopContentBlocks';
+import { ShopHeader } from '../components/customer/ShopHeader';
+import { ShopProjectStatusCard } from '../components/customer/ShopProjectStatusCard';
+import { useAuthUser } from '../hooks/useAuthUser';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { useWechatShareCard } from '../hooks/useWechatShareCard';
+import { shopHomeAnnouncementHasVisibleBody } from '../lib/shopDescriptionMixedLines';
+import { isFeituanAdmin } from '../lib/feituanService';
 import { getProject, type ProjectRow } from '../lib/projectService';
 import { getShopById, type ShopRow } from '../lib/shopService';
 import { buildWechatShareCardFromProject } from '../lib/wechatShareMeta';
 import { formatMYR } from '../lib/formatMYR';
 import { formatRemainingShort } from '../lib/countdown';
+import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../lib/shopTheme';
 import {
   customerAppendLinesToOrder,
   getOrderByNumber,
@@ -20,6 +28,7 @@ import {
 } from '../lib/productAvailability';
 import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type { BundleSchemeDoc, BundleToolDoc, ProjectProduct } from '../types/firestore';
+import type { MockProduct, MockShopHome, ProjectStatus } from '../data/mockShopHome';
 
 function stripText(s: string | undefined): string {
   return (s ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -37,6 +46,12 @@ type BundleDraft = {
   selectedBySeries: Record<string, string[]>;
 };
 
+type Props = {
+  mode?: 'customer' | 'adminPreview';
+};
+
+const FEITUAN_THEME_COLOR = '#f97316';
+
 function useTick(ms: number) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -48,6 +63,39 @@ function useTick(ms: number) {
 
 function tsToDate(t: { toDate?: () => Date } | null | undefined): Date | null {
   return t?.toDate ? t.toDate() : null;
+}
+
+function tsToIso(t: { toDate?: () => Date } | null | undefined): string | undefined {
+  return t?.toDate ? t.toDate().toISOString() : undefined;
+}
+
+function mapProjectProductToMock(p: ProjectProduct): MockProduct {
+  const scheduledIso = tsToIso(p.scheduledOffAt);
+  return {
+    id: p.id,
+    name: p.name,
+    note: p.description,
+    sortOrder: p.sortOrder ?? 0,
+    price: Number(p.price) || 0,
+    discountPrice: p.discountPrice,
+    discountStart: tsToIso(p.discountStart),
+    discountEnd: tsToIso(p.discountEnd),
+    stock: p.stock,
+    imageUrl: p.imageUrl,
+    isActive: p.isActive,
+    ...(scheduledIso ? { scheduledOffAt: scheduledIso } : {}),
+  };
+}
+
+function resolveProjectStatus(project: ProjectRow['data'], now: Date): ProjectStatus {
+  if (project.status === 'closed') return 'closed';
+  const closes = project.closesAt?.toDate?.() ?? null;
+  if (closes && now.getTime() > closes.getTime()) return 'closed';
+  const max = project.maxParticipants;
+  if (max != null && max > 0 && (project.stats?.totalOrders ?? 0) >= max) {
+    return 'full';
+  }
+  return 'open';
 }
 
 function effectiveProductPrice(p: ProjectProduct, now: Date): PriceInfo {
@@ -117,8 +165,10 @@ function getSeriesRequiredCount(
   return 0;
 }
 
-export default function FeituanProject() {
+export default function FeituanProject({ mode = 'customer' }: Props) {
   useWechatNotifySession();
+  const isAdminPreview = mode === 'adminPreview';
+  const { user, loading: authLoading } = useAuthUser();
   const { projectId = '' } = useParams<{ projectId: string }>();
   const [searchParams] = useSearchParams();
   const appendOrderNumber = searchParams.get('appendOrder')?.trim() ?? '';
@@ -149,12 +199,23 @@ export default function FeituanProject() {
 
   useEffect(() => {
     let cancelled = false;
+    if (isAdminPreview && authLoading) return;
     void (async () => {
       setLoading(true);
       setErr(null);
       try {
         const row = await getProject(decodeURIComponent(projectId));
-        if (!row || row.data.feituanStatus !== 'listed') {
+        if (!row) {
+          if (!cancelled) setErr('饭团项目不存在。');
+          return;
+        }
+        if (isAdminPreview) {
+          const ok = user ? await isFeituanAdmin(user.uid) : false;
+          if (!ok) {
+            if (!cancelled) setErr('当前账号无饭团管理员权限。');
+            return;
+          }
+        } else if (row.data.feituanStatus !== 'listed') {
           if (!cancelled) setErr('饭团项目不存在或尚未上架。');
           return;
         }
@@ -172,13 +233,16 @@ export default function FeituanProject() {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [authLoading, isAdminPreview, projectId, user]);
 
   useEffect(() => {
     let cancelled = false;
     if (!isAppendMode) {
-      setAppendTarget(null);
-      setAppendErr(null);
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setAppendTarget(null);
+        setAppendErr(null);
+      });
       return;
     }
     void (async () => {
@@ -209,7 +273,7 @@ export default function FeituanProject() {
   const sellableProducts = useMemo(
     () =>
       [...(project?.data.products ?? [])]
-        .filter((p) => isProjectProductSellable(p, now) && p.stock > 0)
+        .filter((p) => isProjectProductSellable(p, now))
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
     [project?.data.products, now]
   );
@@ -225,6 +289,35 @@ export default function FeituanProject() {
         )
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)),
     [now, project?.data.bundleTools]
+  );
+
+  const shopHomeData = useMemo<MockShopHome | null>(() => {
+    if (!project) return null;
+    const p = project.data;
+    const cover = p.imageBlocks?.find((b) => b.isCoverImage)?.url?.trim();
+    return {
+      shopName: shop?.data.name ?? '店铺',
+      shopLogoUrl: shop?.data.logoImage?.trim() || undefined,
+      projectTitle: p.title || '未命名项目',
+      bannerUrl: cover || shop?.data.bannerImage?.trim() || undefined,
+      themeColor: FEITUAN_THEME_COLOR,
+      status: resolveProjectStatus(p, now),
+      closesAt: p.closesAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
+      orderCount: p.stats?.totalOrders ?? 0,
+      deliveryLabel: '按配送点',
+      textContent: p.textContent?.trim() || undefined,
+      imageBlocks:
+        p.imageBlocks
+          ?.filter((b) => !b.isCoverImage)
+          .map((b) => ({ url: b.url, caption: b.caption })) ?? [],
+      products: sellableProducts.map(mapProjectProductToMock),
+      bundleTools: [],
+    };
+  }, [now, project, sellableProducts, shop?.data]);
+
+  const hasProjectDescription = useMemo(
+    () => (shopHomeData ? shopHomeAnnouncementHasVisibleBody(shopHomeData) : false),
+    [shopHomeData]
   );
 
   const mixedItems = useMemo(() => {
@@ -368,7 +461,7 @@ export default function FeituanProject() {
   };
 
   const goOrder = () => {
-    if (!project || orderLines.length === 0) return;
+    if (isAdminPreview || !project || orderLines.length === 0) return;
     if (isAppendMode) {
       if (!appendTarget || appendSubmitting) return;
       setAppendSubmitting(true);
@@ -403,18 +496,459 @@ export default function FeituanProject() {
     });
   };
 
+  if (!isAdminPreview) {
+    return (
+      <div className="pb-36">
+        {shopHomeData ? (
+          <>
+            <ShopHeader
+              data={shopHomeData}
+              onShare={() => undefined}
+              onOpenMore={() => undefined}
+              hideActions
+            />
+            <ShopProjectStatusCard data={shopHomeData} now={now} />
+
+            {hasProjectDescription ? (
+              <>
+                <hr className="h-px w-full border-0 bg-[#e5e7eb]" aria-hidden />
+                <section className="px-4 pb-2.5 pt-3.5" aria-label="公告">
+                  <div className="rounded-[10px] border border-[#e5e7eb] bg-white px-3.5 py-3">
+                    <ShopContentBlocks
+                      data={shopHomeData}
+                      embeddedInCard
+                      dedupeTitleWithProject={shopHomeData.projectTitle}
+                    />
+                  </div>
+                </section>
+              </>
+            ) : null}
+
+            {isAppendMode ? (
+              <section className="px-4 pb-2 pt-1">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
+                  <p className="font-semibold">
+                    加购模式 · 订单 #{appendTarget?.data.orderNumber ?? appendOrderNumber}
+                  </p>
+                  <p className="mt-0.5">
+                    本次提交将作为加购补单写回原订单，不会新建订单。
+                  </p>
+                  {appendErr ? <p className="mt-1 text-red-700">{appendErr}</p> : null}
+                </div>
+              </section>
+            ) : null}
+
+            <section className="px-4 pb-6 pt-1.5" aria-label="商品清单">
+              <div className="mb-2 flex items-baseline justify-between px-0 pt-1">
+                <h2 className="text-[15px] font-bold tracking-tight text-slate-900">
+                  商品清单
+                </h2>
+                <span className="text-[11px] text-slate-400">
+                  截单与库存以页面状态为准
+                </span>
+              </div>
+              <div>
+                {mixedItems.map((item) => {
+                  if (item.kind === 'product') {
+                    const p = item.product;
+                    const mockProduct = mapProjectProductToMock(p);
+                    const cur = qty[p.id] ?? 0;
+                    return (
+                      <ProductCard
+                        key={item.key}
+                        product={mockProduct}
+                        quantity={cur}
+                        now={now}
+                        themeColor={shopHomeData.themeColor}
+                        accentColor={shopHomeData.themeColor}
+                        onInc={() => {
+                          if (cur >= p.stock) return;
+                          setQty((prev) => ({ ...prev, [p.id]: cur + 1 }));
+                        }}
+                        onDec={() => {
+                          if (cur <= 0) return;
+                          setQty((prev) => ({ ...prev, [p.id]: cur - 1 }));
+                        }}
+                      />
+                    );
+                  }
+
+                  const tool = item.tool;
+                  const draft = bundleBuilder[tool.id] ?? {
+                    schemeId: '',
+                    selectedBySeries: {},
+                  };
+                  const scheme = getCurrentScheme(tool);
+                  const isOpen = openBundleToolId === tool.id;
+                  const previewOptions = tool.series
+                    .flatMap((series) => series.options)
+                    .filter((option) => option.isActive && option.imageUrl)
+                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                  const activeSchemes = tool.schemes
+                    .filter((x) => x.isActive)
+                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                  const compactPreviewOptions = previewOptions.slice(0, isOpen ? 9 : 4);
+                  const hiddenPreviewCount = Math.max(
+                    0,
+                    previewOptions.length - compactPreviewOptions.length
+                  );
+                  const bundleAddDisabled =
+                    !scheme ||
+                    tool.series.some((series) => {
+                      const required = scheme
+                        ? getSeriesRequiredCount(scheme.requirements, series)
+                        : 0;
+                      if (required <= 0) return false;
+                      const selected = draft.selectedBySeries[series.id] ?? [];
+                      return selected.length !== required;
+                    });
+
+                  return (
+                    <article key={item.key} className="py-3.5">
+                      <div>
+                        <button
+                          type="button"
+                          className="float-right ml-2 rounded-lg px-4 py-2 text-xs font-semibold text-white shadow-sm transition active:scale-95"
+                          style={{ backgroundColor: shopHomeData.themeColor }}
+                          onClick={() => setOpenBundleToolId(isOpen ? null : tool.id)}
+                        >
+                          {isOpen ? '收起' : '选择'}
+                        </button>
+                        <div className="leading-[2.05rem]">
+                          <span className="mr-2 align-middle text-[17px] font-semibold leading-tight text-slate-900">
+                            {tool.name}
+                          </span>
+                          {activeSchemes.map((s) => {
+                            const ep = effectiveSchemePrice(s, now);
+                            const isEarlyBird = Boolean(ep.discountEndsAt);
+                            return (
+                              <span
+                                key={s.id}
+                                className="mb-1.5 mr-1.5 inline-flex max-w-full align-middle items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[12px] leading-tight text-slate-700"
+                              >
+                                <span className="font-medium">{s.name}</span>
+                                <span>· RM {ep.unit.toFixed(2)}</span>
+                                {ep.isDiscount ? (
+                                  <span
+                                    className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                                      isEarlyBird
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : 'bg-rose-100 text-rose-700'
+                                    }`}
+                                  >
+                                    {isEarlyBird ? '早鸟价' : '特惠'}
+                                  </span>
+                                ) : null}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        <div className="clear-both" />
+                      </div>
+
+                      {tool.description?.trim() ? (
+                        <p className="mt-1 truncate text-[12px] leading-snug text-slate-500">
+                          {tool.description.trim()}
+                        </p>
+                      ) : null}
+
+                      {previewOptions.length > 0 ? (
+                        <div
+                          className={`${
+                            isOpen ? 'mt-3 grid grid-cols-3 gap-2' : 'mt-2 grid grid-cols-4 gap-1.5'
+                          }`}
+                        >
+                          {compactPreviewOptions.map((option, idx) => {
+                            const soldOut = option.stock <= 0;
+                            const showMore =
+                              !isOpen &&
+                              hiddenPreviewCount > 0 &&
+                              idx === compactPreviewOptions.length - 1;
+                            return (
+                              <div key={option.id} className="flex min-w-0 flex-col gap-1">
+                                <div
+                                  className={`relative aspect-square overflow-hidden bg-slate-50 ring-1 ring-slate-100 ${
+                                    isOpen ? 'rounded-2xl' : 'rounded-xl'
+                                  }`}
+                                >
+                                  <img
+                                    src={option.imageUrl}
+                                    alt=""
+                                    loading="lazy"
+                                    className={`h-full w-full object-cover ${
+                                      soldOut ? 'opacity-60' : ''
+                                    }`}
+                                  />
+                                  {soldOut ? (
+                                    <span className="absolute inset-x-0 bottom-0 bg-slate-900/70 py-0.5 text-center text-[11px] font-medium text-white">
+                                      已售罄
+                                    </span>
+                                  ) : null}
+                                  {showMore ? (
+                                    <span className="absolute right-1 top-1 rounded-full bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                                      +{hiddenPreviewCount}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div
+                                  className={`truncate px-0.5 text-center font-medium text-slate-700 ${
+                                    isOpen ? 'text-[12px]' : 'text-[10px]'
+                                  }`}
+                                >
+                                  {option.name}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+
+                      {isOpen ? (
+                        <div className="mt-3">
+                          <div className="border-y border-dashed border-slate-200 py-3">
+                            <div className="mb-2 text-[12px] font-medium text-slate-700">
+                              选择一个组合
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {activeSchemes.map((s) => {
+                                const ep = effectiveSchemePrice(s, now);
+                                const isEarlyBird = Boolean(ep.discountEndsAt);
+                                const selectedScheme = draft.schemeId === s.id;
+                                return (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
+                                      selectedScheme
+                                        ? 'bg-gray-900 text-white'
+                                        : 'border border-gray-200 bg-white text-gray-700'
+                                    }`}
+                                    onClick={() =>
+                                      setBundleBuilder((prev) => ({
+                                        ...prev,
+                                        [tool.id]: {
+                                          schemeId: s.id,
+                                          selectedBySeries:
+                                            prev[tool.id]?.selectedBySeries ?? {},
+                                        },
+                                      }))
+                                    }
+                                  >
+                                    <span>{s.name}</span>
+                                    {ep.isDiscount ? (
+                                      <span
+                                        className={`text-[11px] line-through ${
+                                          selectedScheme ? 'opacity-70' : 'opacity-60'
+                                        }`}
+                                      >
+                                        RM {s.price.toFixed(2)}
+                                      </span>
+                                    ) : null}
+                                    <span>RM {ep.unit.toFixed(2)}</span>
+                                    {ep.isDiscount ? (
+                                      <span
+                                        className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                                          isEarlyBird
+                                            ? 'bg-amber-200 text-amber-900'
+                                            : 'bg-rose-200 text-rose-800'
+                                        }`}
+                                      >
+                                        {isEarlyBird ? '早鸟价' : '特惠'}
+                                      </span>
+                                    ) : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {scheme ? (
+                            <div className="space-y-3 py-3">
+                              {tool.series.map((series) => {
+                                const required = getSeriesRequiredCount(
+                                  scheme.requirements,
+                                  series
+                                );
+                                if (required <= 0) return null;
+                                const selected = draft.selectedBySeries[series.id] ?? [];
+                                return (
+                                  <div key={series.id}>
+                                    <div className="mb-1.5 flex justify-between text-[12px] text-slate-700">
+                                      <span className="font-medium">{series.name}</span>
+                                      <span>
+                                        选 {required} 项（已选 {selected.length}）
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {series.options
+                                        .filter((o) => o.isActive)
+                                        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+                                        .map((opt) => {
+                                          const checked = selected.includes(opt.id);
+                                          const soldOut = opt.stock <= 0;
+                                          return (
+                                            <button
+                                              key={opt.id}
+                                              type="button"
+                                              disabled={soldOut}
+                                              className={`rounded-xl border p-2 text-left text-xs ${
+                                                soldOut
+                                                  ? 'border-gray-100 bg-gray-50 text-gray-400'
+                                                  : checked
+                                                    ? 'border-orange-400 bg-white text-orange-950 ring-2 ring-orange-200'
+                                                    : 'border-gray-200 bg-white text-gray-800'
+                                              }`}
+                                              onClick={() =>
+                                                toggleBundleOption(tool, series.id, opt.id)
+                                              }
+                                            >
+                                              {opt.imageUrl ? (
+                                                <img
+                                                  src={opt.imageUrl}
+                                                  alt=""
+                                                  className={`mb-1.5 h-20 w-full rounded-lg object-cover ${
+                                                    soldOut ? 'opacity-60' : ''
+                                                  }`}
+                                                  loading="lazy"
+                                                />
+                                              ) : null}
+                                              <div className="font-semibold">{opt.name}</div>
+                                              {opt.note ? (
+                                                <div className="mt-0.5 line-clamp-2 text-[11px] text-gray-500">
+                                                  {opt.note}
+                                                </div>
+                                              ) : null}
+                                              <div className="mt-1 text-[11px] text-orange-700">
+                                                {soldOut ? '已售罄' : `余 ${opt.stock}`}
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="py-3 text-xs text-gray-500">请先选择套餐规格。</p>
+                          )}
+
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              disabled={bundleAddDisabled}
+                              className="h-10 flex-1 rounded-xl text-sm font-semibold text-white disabled:bg-gray-300"
+                              style={{
+                                backgroundColor: bundleAddDisabled
+                                  ? undefined
+                                  : shopHomeData.themeColor,
+                              }}
+                              onClick={() => addBundleToCart(tool)}
+                            >
+                              加入购物车
+                            </button>
+                            <button
+                              type="button"
+                              className="h-10 shrink-0 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700"
+                              onClick={() => setOpenBundleToolId(null)}
+                            >
+                              收起
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+
+            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
+              <div className={`pointer-events-auto flex w-full gap-2.5 px-4 ${H5_COLUMN_CLASS}`}>
+                <Link
+                  to={`/feituan/projects/${encodeURIComponent(projectId)}/my-orders`}
+                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-[18px] py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50"
+                  style={{ borderColor: DESIGN_BORDER }}
+                >
+                  我的订单
+                </Link>
+                <button
+                  type="button"
+                  className="flex min-h-[46px] flex-1 items-center justify-center rounded-full px-4 py-3 text-[15px] font-semibold text-white shadow-[0_2px_10px_rgba(249,115,22,0.25)] transition disabled:bg-gray-300 disabled:text-gray-100 disabled:shadow-none"
+                  style={{
+                    backgroundColor:
+                      shopHomeData.status === 'open' && totalQty > 0
+                        ? shopHomeData.themeColor
+                        : undefined,
+                  }}
+                  disabled={
+                    shopHomeData.status !== 'open' ||
+                    totalQty === 0 ||
+                    appendSubmitting ||
+                    (isAppendMode && !appendTarget)
+                  }
+                  onClick={goOrder}
+                >
+                  {appendSubmitting
+                    ? '加购中…'
+                    : isAppendMode
+                      ? totalQty > 0
+                        ? `确认加购 · ${totalQty} 件 · ${formatMYR(total)}`
+                        : '请选择商品'
+                      : totalQty > 0
+                        ? `填写订单 · ${totalQty} 件 · ${formatMYR(total)}`
+                        : '请选择商品'}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <main className="px-4 py-5">
+            {loading ? <p className="text-sm text-gray-600">加载中…</p> : null}
+            {err ? <p className="text-sm text-red-600">{err}</p> : null}
+          </main>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <PageShell title="饭团项目" subtitle={shop?.data.name ?? '大马饭团'}>
+    <PageShell
+      title={isAdminPreview ? '饭团项目预览' : '饭团项目'}
+      subtitle={shop?.data.name ?? '大马饭团'}
+    >
       <div className="mb-3 flex flex-wrap gap-2">
-        <Link to="/feituan" className="text-sm text-indigo-600">
-          ← 返回大马饭团
-        </Link>
-        <Link
-          to={`/feituan/projects/${encodeURIComponent(projectId)}/my-orders`}
-          className="text-sm font-medium text-orange-700"
-        >
-          我的订单
-        </Link>
+        {isAdminPreview ? (
+          <>
+            <Link to="/admin/feituan" className="text-sm text-indigo-600">
+              ← 返回饭团管理
+            </Link>
+            <Link
+              to={`/admin/feituan/costs/${encodeURIComponent(projectId)}`}
+              className="text-sm font-medium text-orange-700"
+            >
+              成本确认/更新
+            </Link>
+            <Link
+              to={`/admin/feituan/project-delivery/${encodeURIComponent(projectId)}`}
+              className="text-sm font-medium text-orange-700"
+            >
+              配送设置
+            </Link>
+          </>
+        ) : (
+          <>
+            <Link to="/feituan" className="text-sm text-indigo-600">
+              ← 返回大马饭团
+            </Link>
+            <Link
+              to={`/feituan/projects/${encodeURIComponent(projectId)}/my-orders`}
+              className="text-sm font-medium text-orange-700"
+            >
+              我的订单
+            </Link>
+          </>
+        )}
       </div>
       {loading ? <p className="text-sm text-gray-600">加载中…</p> : null}
       {err ? <p className="text-sm text-red-600">{err}</p> : null}
@@ -423,6 +957,11 @@ export default function FeituanProject() {
           <section className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
             <p className="mb-1 text-xs text-gray-500">{shop?.data.name ?? '店铺'}</p>
             <h1 className="text-2xl font-bold text-gray-900">{project.data.title || '未命名项目'}</h1>
+            {isAdminPreview ? (
+              <p className="mt-3 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-sm text-orange-950">
+                后台只读预览：用于审批前查看项目完整内容。商品、价格、文案仍以商户提交内容为准；成本和配送请通过上方入口维护。
+              </p>
+            ) : null}
             {isAppendMode ? (
               <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-950">
                 正在为订单 #{appendOrderNumber} 加购。若还没有发生新的支付动作，本次加购会并入当前待付款支付组。
@@ -496,28 +1035,34 @@ export default function FeituanProject() {
                             </p>
                           ) : null}
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <button
-                            type="button"
-                            className="h-8 w-8 rounded-full border border-gray-200 bg-white text-lg"
-                            onClick={() => setQty((prev) => ({ ...prev, [p.id]: Math.max(0, cur - 1) }))}
-                          >
-                            -
-                          </button>
-                          <span className="w-6 text-center text-sm font-semibold">{cur}</span>
-                          <button
-                            type="button"
-                            className="h-8 w-8 rounded-full bg-orange-600 text-lg text-white"
-                            onClick={() =>
-                              setQty((prev) => ({
-                                ...prev,
-                                [p.id]: Math.min(p.stock, cur + 1),
-                              }))
-                            }
-                          >
-                            +
-                          </button>
-                        </div>
+                        {isAdminPreview ? (
+                          <div className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
+                            库存 {p.stock}
+                          </div>
+                        ) : (
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              className="h-8 w-8 rounded-full border border-gray-200 bg-white text-lg"
+                              onClick={() => setQty((prev) => ({ ...prev, [p.id]: Math.max(0, cur - 1) }))}
+                            >
+                              -
+                            </button>
+                            <span className="w-6 text-center text-sm font-semibold">{cur}</span>
+                            <button
+                              type="button"
+                              className="h-8 w-8 rounded-full bg-orange-600 text-lg text-white"
+                              onClick={() =>
+                                setQty((prev) => ({
+                                  ...prev,
+                                  [p.id]: Math.min(p.stock, cur + 1),
+                                }))
+                              }
+                            >
+                              +
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -729,14 +1274,16 @@ export default function FeituanProject() {
                           ) : (
                             <p className="text-xs text-gray-500">请先选择套餐规格。</p>
                           )}
-                          <button
-                            type="button"
-                            disabled={bundleAddDisabled}
-                            className="h-10 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
-                            onClick={() => addBundleToCart(tool)}
-                          >
-                            加入购物车
-                          </button>
+                          {isAdminPreview ? null : (
+                            <button
+                              type="button"
+                              disabled={bundleAddDisabled}
+                              className="h-10 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
+                              onClick={() => addBundleToCart(tool)}
+                            >
+                              加入购物车
+                            </button>
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -763,24 +1310,26 @@ export default function FeituanProject() {
               </div>
             ) : null}
           </section>
-          <section className="sticky bottom-0 -mx-1 rounded-t-2xl border border-orange-100 bg-white/95 p-3 shadow-lg backdrop-blur">
-            <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="text-gray-600">已选 {totalQty} 件</span>
-              <span className="font-bold text-gray-900">{formatMYR(total)}</span>
-            </div>
-            <button
-              type="button"
-              disabled={orderLines.length === 0 || appendSubmitting || (isAppendMode && !appendTarget)}
-              onClick={goOrder}
-              className="h-11 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
-            >
-              {appendSubmitting
-                ? '加购中…'
-                : isAppendMode
-                  ? '确认加购'
-                  : '填写订单'}
-            </button>
-          </section>
+          {isAdminPreview ? null : (
+            <section className="sticky bottom-0 -mx-1 rounded-t-2xl border border-orange-100 bg-white/95 p-3 shadow-lg backdrop-blur">
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="text-gray-600">已选 {totalQty} 件</span>
+                <span className="font-bold text-gray-900">{formatMYR(total)}</span>
+              </div>
+              <button
+                type="button"
+                disabled={orderLines.length === 0 || appendSubmitting || (isAppendMode && !appendTarget)}
+                onClick={goOrder}
+                className="h-11 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
+              >
+                {appendSubmitting
+                  ? '加购中…'
+                  : isAppendMode
+                    ? '确认加购'
+                    : '填写订单'}
+              </button>
+            </section>
+          )}
         </div>
       ) : null}
       {wechatShareDebug ? (

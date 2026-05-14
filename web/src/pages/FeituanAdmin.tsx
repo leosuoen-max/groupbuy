@@ -217,11 +217,19 @@ export default function FeituanAdmin() {
                 提交 {fmtTs(p.feituanSubmittedAt)} · 审核 {fmtTs(p.feituanReviewedAt)}
               </p>
             </div>
-            <span
-              className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${statusChipClass(p.feituanStatus)}`}
-            >
-              {statusLabel(p.feituanStatus)}
-            </span>
+            <div className="flex shrink-0 flex-col items-end gap-1.5">
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusChipClass(p.feituanStatus)}`}
+              >
+                {statusLabel(p.feituanStatus)}
+              </span>
+              <Link
+                to={`/admin/feituan/project/${encodeURIComponent(project.id)}`}
+                className="text-xs font-semibold text-orange-700 underline-offset-2 hover:underline"
+              >
+                查看项目
+              </Link>
+            </div>
           </div>
           <div className="mb-3 grid grid-cols-3 gap-2 rounded-2xl bg-orange-50/50 p-2 text-center text-xs text-gray-700">
             <div>

@@ -67,6 +67,10 @@ export function AppRoutes() {
         element={<FeituanProjectDelivery />}
       />
       <Route
+        path="/admin/feituan/project/:projectId"
+        element={<FeituanProject mode="adminPreview" />}
+      />
+      <Route
         path="/admin/feituan/reconciliation"
         element={<FeituanReconciliation />}
       />
