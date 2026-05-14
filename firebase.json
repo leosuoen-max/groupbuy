@@ -70,6 +70,13 @@
         }
       },
       {
+        "source": "/api/wechat/js-sdk-signature",
+        "function": {
+          "functionId": "wechatJsSdkSignature",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/wechat/order-submitted",
         "function": {
           "functionId": "wechatOrderSubmittedNotify",

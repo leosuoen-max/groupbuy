@@ -113,6 +113,81 @@ async function getWechatAccessToken() {
   return json.access_token;
 }
 
+async function getWechatJsapiTicket() {
+  const db = admin.firestore();
+  const ref = db.collection('wechat_runtime').doc('jsapi_ticket');
+  const snap = await ref.get();
+  const cached = snap.exists ? snap.data() || {} : {};
+  if (
+    cached.ticket &&
+    Number(cached.expiresAtMillis || 0) > Date.now() + 60_000
+  ) {
+    return cached.ticket;
+  }
+
+  const token = await getWechatAccessToken();
+  const url =
+    'https://api.weixin.qq.com/cgi-bin/ticket/getticket?' +
+    new URLSearchParams({
+      access_token: token,
+      type: 'jsapi',
+    }).toString();
+  const resp = await fetch(url);
+  const json = await resp.json();
+  if (!resp.ok || json.errcode || !json.ticket) {
+    throw new Error(`wechat jsapi_ticket failed: ${JSON.stringify(json)}`);
+  }
+  const expiresInSec = Number(json.expires_in || 7200);
+  const expiresAtMillis = Date.now() + Math.max(60, expiresInSec - 300) * 1000;
+  await ref.set(
+    {
+      ticket: json.ticket,
+      expiresAtMillis,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return json.ticket;
+}
+
+function normalizeWechatJsSdkUrl(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  let parsed;
+  try {
+    parsed = new URL(v);
+  } catch {
+    return '';
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+function isAllowedWechatJsSdkUrl(url) {
+  const origin = getAppOrigin();
+  try {
+    const target = new URL(url);
+    const app = new URL(origin);
+    return target.host === app.host && target.protocol === app.protocol;
+  } catch {
+    return false;
+  }
+}
+
+function makeWechatJsSdkSignature(ticket, url) {
+  const nonceStr = crypto.randomBytes(12).toString('hex');
+  const timestamp = Math.floor(Date.now() / 1000);
+  const plain = [
+    `jsapi_ticket=${ticket}`,
+    `noncestr=${nonceStr}`,
+    `timestamp=${timestamp}`,
+    `url=${url}`,
+  ].join('&');
+  const signature = crypto.createHash('sha1').update(plain).digest('hex');
+  return { nonceStr, timestamp, signature };
+}
+
 async function sendWechatTemplateMessage(payload) {
   const token = await getWechatAccessToken();
   const resp = await fetch(
@@ -269,7 +344,9 @@ exports.shareRedirect = onRequest(
       }
 
       const slug = (shop.slug || '').toString().trim();
-      if (slug) {
+      if (project.feituanStatus === 'listed') {
+        targetUrl = `${origin}/feituan/projects/${encodeURIComponent(projectId)}`;
+      } else if (slug) {
         targetUrl = `${origin}/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
       }
 
@@ -591,6 +668,55 @@ exports.wechatBindFinalize = onRequest(
     });
 
     res.status(200).json({ ok: true, openidMasked: `****${String(stateData.openid).slice(-6)}` });
+  }
+);
+
+exports.wechatJsSdkSignature = onRequest(
+  {
+    region: 'us-central1',
+    invoker: 'public',
+    memory: '256MiB',
+    timeoutSeconds: 20,
+  },
+  async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ ok: false, message: 'method not allowed' });
+      return;
+    }
+
+    const { appId } = getWechatConfig();
+    if (!appId) {
+      res.status(500).json({ ok: false, message: 'WECHAT_APP_ID is not configured' });
+      return;
+    }
+
+    const url = normalizeWechatJsSdkUrl(req.body && req.body.url);
+    if (!url) {
+      res.status(400).json({ ok: false, message: 'missing url' });
+      return;
+    }
+    if (!isAllowedWechatJsSdkUrl(url)) {
+      res.status(403).json({ ok: false, message: 'url origin is not allowed' });
+      return;
+    }
+
+    try {
+      const ticket = await getWechatJsapiTicket();
+      const sign = makeWechatJsSdkSignature(ticket, url);
+      res.status(200).json({
+        ok: true,
+        appId,
+        nonceStr: sign.nonceStr,
+        timestamp: sign.timestamp,
+        signature: sign.signature,
+      });
+    } catch (e) {
+      console.error('wechatJsSdkSignature', e);
+      res.status(500).json({
+        ok: false,
+        message: String((e && e.message) || e),
+      });
+    }
   }
 );
 

@@ -96,3 +96,30 @@ export async function sendOrderSubmittedWechatNotification(input: {
     throw new Error('订单通知发送请求失败');
   }
 }
+
+export type WechatJsSdkSignature = {
+  appId: string;
+  nonceStr: string;
+  timestamp: number;
+  signature: string;
+};
+
+export async function getWechatJsSdkSignature(url: string): Promise<WechatJsSdkSignature> {
+  const resp = await fetch('/api/wechat/js-sdk-signature', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const data = (await resp.json().catch(() => null)) as
+    | (WechatJsSdkSignature & { message?: string })
+    | null;
+  if (!resp.ok || !data?.appId || !data.signature) {
+    throw new Error(data?.message || '微信 JS-SDK 签名获取失败');
+  }
+  return {
+    appId: data.appId,
+    nonceStr: data.nonceStr,
+    timestamp: data.timestamp,
+    signature: data.signature,
+  };
+}

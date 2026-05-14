@@ -23,6 +23,7 @@ import {
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
+import { useWechatShareCard } from '../../hooks/useWechatShareCard';
 import {
   customerAppendLinesToOrder,
   getOrderByNumber,
@@ -34,6 +35,7 @@ import { getShopBySlug } from '../../lib/shopService';
 import { listCardTemplatesByShop } from '../../lib/cardService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { getProjectSharePageUrl } from '../../lib/shareLink';
+import { buildWechatShareCardFromShopHome } from '../../lib/wechatShareMeta';
 import type { BundleSelectionDraft, CartLocationState } from '../../types/orderDraft';
 
 function getEffectiveSchemePrice(
@@ -264,6 +266,11 @@ export default function ShopHome() {
   const data: MockShopHome | null = useMock ? mockData : remote.data ?? null;
   const loading = !useMock && remote.loading;
   const errorText = !useMock ? remote.error : undefined;
+  const wechatShareCard = useMemo(
+    () => (data ? buildWechatShareCardFromShopHome(projectId, data) : null),
+    [data, projectId]
+  );
+  const wechatShareDebug = useWechatShareCard(wechatShareCard);
 
   const [cart, setCart] = useState<Record<string, number>>({});
   const [bundleBuilder, setBundleBuilder] = useState<
@@ -1245,6 +1252,11 @@ export default function ShopHome() {
         showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
         onSystemShare={() => void handleShareSheetSystemShare()}
       />
+      {wechatShareDebug ? (
+        <pre className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
+          {JSON.stringify(wechatShareDebug, null, 2)}
+        </pre>
+      ) : null}
     </div>
   );
 }

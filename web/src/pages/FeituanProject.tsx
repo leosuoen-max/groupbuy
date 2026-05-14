@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
+import { useWechatShareCard } from '../hooks/useWechatShareCard';
 import { getProject, type ProjectRow } from '../lib/projectService';
 import { getShopById, type ShopRow } from '../lib/shopService';
+import { buildWechatShareCardFromProject } from '../lib/wechatShareMeta';
 import { formatMYR } from '../lib/formatMYR';
 import { formatRemainingShort } from '../lib/countdown';
 import {
@@ -134,6 +136,16 @@ export default function FeituanProject() {
   const [bundleCart, setBundleCart] = useState<BundleSelectionDraft[]>([]);
   const [openBundleToolId, setOpenBundleToolId] = useState<string | null>(null);
   const now = useTick(30_000);
+  const wechatShareCard = useMemo(
+    () =>
+      project
+        ? buildWechatShareCardFromProject(project.id, project.data, shop?.data, {
+            prefix: '大马饭团',
+          })
+        : null,
+    [project, shop?.data]
+  );
+  const wechatShareDebug = useWechatShareCard(wechatShareCard);
 
   useEffect(() => {
     let cancelled = false;
@@ -770,6 +782,11 @@ export default function FeituanProject() {
             </button>
           </section>
         </div>
+      ) : null}
+      {wechatShareDebug ? (
+        <pre className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
+          {JSON.stringify(wechatShareDebug, null, 2)}
+        </pre>
       ) : null}
     </PageShell>
   );
