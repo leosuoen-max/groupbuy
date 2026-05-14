@@ -58,10 +58,34 @@ async function updateFeituanProject(
   });
 }
 
+export function getFeituanProjectPublishBlocker(project: ProjectDoc): string | null {
+  if (project.status !== 'published') {
+    return '项目尚未发布，请商户先发布项目';
+  }
+  const closesAt = project.closesAt?.toDate?.();
+  if (!closesAt || closesAt.getTime() <= Date.now()) {
+    return '项目截止时间已过，请先延长截止时间';
+  }
+  if (!project.deliveryTimeText?.trim()) {
+    return '请先填写送达时间';
+  }
+  return null;
+}
+
+function assertReadyForFeituan(row: ProjectRow): void {
+  const blocker = getFeituanProjectPublishBlocker(row.data);
+  if (blocker) throw new Error(blocker);
+}
+
 export async function submitProjectToFeituan(
   projectId: string,
   actorUid: string
 ): Promise<void> {
+  const row = await getProject(projectId);
+  if (!row) throw new Error('项目不存在');
+  if (row.data.feituanStatus === 'pending') throw new Error('项目已在饭团待审中');
+  if (row.data.feituanStatus === 'listed') throw new Error('项目已在饭团上架');
+  assertReadyForFeituan(row);
   await updateFeituanProject(projectId, actorUid, 'submit', {
     feituanStatus: 'pending',
     feituanSubmittedAt: Timestamp.now(),
@@ -76,6 +100,12 @@ export async function approveFeituanProject(
   actorUid: string
 ): Promise<void> {
   if (!(await isFeituanAdmin(actorUid))) throw new Error('需要饭团管理员权限');
+  const row = await getProject(projectId);
+  if (!row) throw new Error('项目不存在');
+  if (row.data.feituanStatus !== 'pending') {
+    throw new Error('只有待审项目可以批准上架');
+  }
+  assertReadyForFeituan(row);
   await updateFeituanProject(projectId, actorUid, 'approve', {
     feituanStatus: 'listed',
     feituanReviewedAt: Timestamp.now(),

@@ -14,7 +14,10 @@ import {
 } from '../../lib/projectService';
 import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import { getProjectSharePageUrl } from '../../lib/shareLink';
-import { submitProjectToFeituan } from '../../lib/feituanService';
+import {
+  getFeituanProjectPublishBlocker,
+  submitProjectToFeituan,
+} from '../../lib/feituanService';
 
 function statusLabel(s: ProjectRow['data']['status']) {
   if (s === 'draft') return '草稿';
@@ -28,6 +31,10 @@ function feituanStatusLabel(s: ProjectRow['data']['feituanStatus']): string | nu
   if (s === 'rejected') return '饭团已驳回';
   if (s === 'delisted') return '饭团已下架';
   return null;
+}
+
+function canSubmitToFeituan(s: ProjectRow['data']['feituanStatus']): boolean {
+  return !s || s === 'rejected' || s === 'delisted';
 }
 
 function isProjectPublished(p: ProjectRow): boolean {
@@ -232,6 +239,23 @@ export default function ProjectList() {
     setErr(null);
     try {
       await submitProjectToFeituan(p.id, user.uid);
+      setProjects((prev) =>
+        prev.map((row) =>
+          row.id === p.id
+            ? {
+                ...row,
+                data: {
+                  ...row.data,
+                  feituanStatus: 'pending',
+                  feituanSubmittedAt: Timestamp.now(),
+                  feituanReviewedAt: null,
+                  feituanReviewedBy: '',
+                  feituanRejectReason: '',
+                },
+              }
+            : row
+        )
+      );
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : '提交饭团失败');
@@ -331,6 +355,11 @@ export default function ProjectList() {
             const publishedLine = formatPublishedAtLine(p);
             const feituanLabel = feituanStatusLabel(p.data.feituanStatus);
             const feituanListed = p.data.feituanStatus === 'listed';
+            const showFeituanSubmit =
+              shopRow?.data.feituanEnabled && canSubmitToFeituan(p.data.feituanStatus);
+            const feituanSubmitBlocker = showFeituanSubmit
+              ? getFeituanProjectPublishBlocker(p.data)
+              : null;
             return (
             <li key={p.id}>
               <div className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm shadow-sm">
@@ -360,15 +389,20 @@ export default function ProjectList() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    {shopRow?.data.feituanEnabled && !p.data.feituanStatus ? (
+                    {showFeituanSubmit ? (
                       <button
                         type="button"
                         className="rounded-lg border border-orange-300 bg-orange-50 px-2 py-1 text-xs font-medium text-orange-900 disabled:opacity-50"
-                        disabled={busyId === p.id}
+                        disabled={busyId === p.id || Boolean(feituanSubmitBlocker)}
                         onClick={() => void handleSubmitToFeituan(p)}
                       >
                         发布到饭团
                       </button>
+                    ) : null}
+                    {feituanSubmitBlocker ? (
+                      <span className="text-[11px] text-amber-700">
+                        需先处理：{feituanSubmitBlocker}
+                      </span>
                     ) : null}
                     {isProjectPublished(p) ? (
                       <button
