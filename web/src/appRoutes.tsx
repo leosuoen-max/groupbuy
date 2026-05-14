@@ -35,7 +35,7 @@ import FeituanProjectDelivery from './pages/FeituanProjectDelivery';
 import FeituanReconciliation from './pages/FeituanReconciliation';
 import FeituanHome from './pages/FeituanHome';
 import FeituanProject from './pages/FeituanProject';
-import FeituanAccount from './pages/FeituanAccount';
+import AccountCenter from './pages/AccountCenter';
 import FeituanWallet from './pages/FeituanWallet';
 import FeituanWalletAdmin from './pages/FeituanWalletAdmin';
 import FeituanWalletTopup from './pages/FeituanWalletTopup';
@@ -46,6 +46,7 @@ export function AppRoutes() {
       <Route path="/" element={<MerchantEntry />} />
       <Route path="/home" element={<HomeLinks />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/account" element={<AccountCenter />} />
       <Route path="/invite-register/:token" element={<Register />} />
       <Route path="/register" element={<Register />} />
       <Route path="/invite/:code" element={<InviteAccept />} />
@@ -74,7 +75,16 @@ export function AppRoutes() {
       />
 
       <Route path="/feituan" element={<FeituanHome />} />
-      <Route path="/feituan/account" element={<FeituanAccount />} />
+      <Route
+        path="/feituan/account"
+        element={
+          <AccountCenter
+            defaultReturnTo="/feituan/wallet"
+            homeHref="/feituan"
+            homeLabel="返回饭团主页"
+          />
+        }
+      />
       <Route path="/feituan/wallet" element={<FeituanWallet />} />
       <Route path="/feituan/wallet/topup" element={<FeituanWalletTopup />} />
       <Route path="/feituan/projects/:projectId" element={<FeituanProject />} />

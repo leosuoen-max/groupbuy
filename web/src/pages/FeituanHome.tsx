@@ -66,7 +66,7 @@ export default function FeituanHome() {
           to="/feituan/account"
           className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800"
         >
-          手机号登录
+          账号中心
         </Link>
       </div>
       {loading ? <p className="text-sm text-gray-600">加载中…</p> : null}

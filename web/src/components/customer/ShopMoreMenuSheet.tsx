@@ -76,6 +76,13 @@ export function ShopMoreMenuSheet({
               💳 钱包 / 优惠卡
             </Link>
           ) : null}
+          <Link
+            to={`/account?returnTo=${encodeURIComponent(base)}`}
+            onClick={onClose}
+            className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
+          >
+            📱 账号 / 手机号
+          </Link>
           <a
             href={`mailto:?subject=${encodeURIComponent('意见反馈')}&body=${encodeURIComponent(`页面：${window.location.href}`)}`}
             className="block rounded-lg px-3 py-2 text-gray-800 hover:bg-gray-50"
