@@ -3,23 +3,15 @@ import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { PaymentScreenshotsPanel } from '../../components/merchant/PaymentScreenshotsPanel';
 import { ActionButton } from '../../components/ui/ActionButton';
-import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
 import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { formatMYR } from '../../lib/formatMYR';
-import {
-  canMerchantConfirmAppendBatchByScreenshots,
-  hasPaymentScreenshotForAppendBatch,
-} from '../../lib/paymentScreenshotHelpers';
-import { orderHasNoPaymentActionYet } from '../../lib/paymentGrouping';
 import { deriveDisplayOrderStatus } from '../../lib/paymentGroupView';
 import {
   getOrderByNumber,
   merchantAppendInternalNote,
   merchantAssignManualDeliveryMatch,
-  merchantConfirmAppendBatch,
-  merchantConfirmPayment,
-  merchantConfirmPendingAppendBatches,
+  merchantConfirmPaymentGroup,
   merchantWaiveInitialPaymentScreenshot,
   merchantWaiveAppendBatchScreenshot,
   type OrderRow,
@@ -31,12 +23,15 @@ import {
 } from '../../lib/deliveryPointService';
 import { getShopBySlug } from '../../lib/shopService';
 import {
-  cardApplicationsForAppendBatch,
+  cardApplicationsForPaymentGroup,
   listOrderCardPaymentApplications,
 } from '../../lib/orderCardPaymentApplications';
-import { listOrderFeituanWalletPaymentApplications } from '../../lib/orderFeituanWalletApplications';
+import {
+  feituanWalletApplicationsForPaymentGroup,
+  listOrderFeituanWalletPaymentApplications,
+} from '../../lib/orderFeituanWalletApplications';
+import { buildPaymentGroups, type PaymentGroup } from '../../lib/paymentGroups';
 import type {
-  OrderAppendBatchDoc,
   OrderCardPaymentDoc,
   OrderFeituanWalletPaymentDoc,
   OrderDoc,
@@ -50,6 +45,18 @@ const statusLabel: Record<string, string> = {
   partial_paid: '待付款',
   cancelled: '已取消',
 };
+
+const paymentGroupStatusLabel: Record<PaymentGroup['status'], string> = {
+  unpaid: '待付款',
+  pending: '待确认',
+  confirmed: '已确认',
+};
+
+function paymentGroupBadgeClass(status: PaymentGroup['status']): string {
+  if (status === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (status === 'pending') return 'bg-sky-100 text-sky-950';
+  return 'bg-amber-100 text-amber-950';
+}
 
 function toChipTone(
   s: string
@@ -72,12 +79,6 @@ function isNoteEntry(
     typeof o.userId === 'string' &&
     typeof ca?.toDate === 'function'
   );
-}
-
-function batchTimeStr(b: OrderAppendBatchDoc): string {
-  const d = b.appendedAt?.toDate?.();
-  if (!d) return '';
-  return d.toLocaleString();
 }
 
 function linePromoTag(line: OrderLineDoc) {
@@ -174,112 +175,6 @@ function FeituanWalletPaymentBreakdown({
   );
 }
 
-function ConfirmedAppendBatchCard({
-  order,
-  batch,
-  groupNumber,
-  paymentScreenshots,
-  orderLines,
-}: {
-  order: OrderDoc;
-  batch: OrderAppendBatchDoc;
-  groupNumber: number;
-  paymentScreenshots: unknown;
-  orderLines: OrderLineDoc[];
-}) {
-  const hasBatchProof = hasPaymentScreenshotForAppendBatch(paymentScreenshots, batch.id);
-  const isCardAutoConfirmed = batch.confirmedByUserId === 'customer_card_auto';
-  const isWalletAutoConfirmed = batch.confirmedByUserId === 'feituan_wallet_auto';
-  const allCardApps = listOrderCardPaymentApplications(order);
-  const allWalletApps = listOrderFeituanWalletPaymentApplications(order);
-  let batchCardApps = cardApplicationsForAppendBatch(order, batch.id);
-  if (
-    batchCardApps.length === 0 &&
-    isCardAutoConfirmed &&
-    allCardApps.length === 1
-  ) {
-    batchCardApps = allCardApps;
-  }
-  const batchWalletApps = allWalletApps.filter((app) =>
-    app.paymentGroupScope.confirmedAppendBatchIds.includes(batch.id)
-  );
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-gray-900">支付组 {groupNumber}（已确认）</h3>
-        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
-          已确认收款
-        </span>
-      </div>
-      <p className="mb-2 text-xs text-gray-600">时间：{batchTimeStr(batch)}</p>
-      {batch.confirmedAt ? (
-        <p className="mb-2 text-xs text-emerald-800">
-          商户已于 {batch.confirmedAt.toDate().toLocaleString()} 确认收款
-        </p>
-      ) : null}
-      <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
-        {aggregateOrderLines(batch.lines).map((l, idx) => (
-          <li
-            key={`${batch.id}-${l.productId}-${idx}`}
-            className="flex justify-between gap-2 px-3 py-2 text-sm"
-          >
-            <span>
-              {l.name}
-              {linePromoTag(l)} ×{l.quantity}
-            </span>
-            <span className="tabular-nums font-medium">
-              {formatMYR(l.subtotal)}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-        <span>本笔小计</span>
-        <span>{formatMYR(batch.deltaAmount)}</span>
-      </div>
-      <div className="mt-3">
-        <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
-        {isCardAutoConfirmed && !hasBatchProof && batchCardApps.length > 0 ? (
-          <div className="space-y-2">
-            {batchCardApps.map((cp, i) => (
-              <CardPaymentBreakdown
-                key={`${cp.appliedAt?.toMillis?.() ?? 0}-${i}`}
-                cardPayment={cp}
-                lines={orderLines}
-                title={
-                  batchCardApps.length > 1
-                    ? `本组卡支付自动确认（第 ${i + 1} 笔）`
-                    : undefined
-                }
-              />
-            ))}
-          </div>
-        ) : isWalletAutoConfirmed && !hasBatchProof && batchWalletApps.length > 0 ? (
-          <div className="space-y-2">
-            {batchWalletApps.map((payment, i) => (
-              <FeituanWalletPaymentBreakdown
-                key={`${payment.appliedAt?.toMillis?.() ?? 0}-${i}`}
-                payment={payment}
-                title={
-                  batchWalletApps.length > 1
-                    ? `本组饭团钱包自动确认（第 ${i + 1} 笔）`
-                    : undefined
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <PaymentScreenshotsPanel
-            paymentScreenshots={paymentScreenshots}
-            appendBatchIdFilter={batch.id}
-            emptyHint="暂无该笔截图记录。"
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function MerchantOrderDetail({
   mode = 'merchant',
 }: {
@@ -302,9 +197,7 @@ export default function MerchantOrderDetail({
   const [noteDraft, setNoteDraft] = useState('');
   const [busy, setBusy] = useState<
     | 'confirm'
-    | 'confirm_all'
     | 'note'
-    | 'confirm_append_single'
     | 'waive_append_proof'
     | 'waive_initial_proof'
     | null
@@ -440,49 +333,12 @@ export default function MerchantOrderDetail({
     }
   };
 
-  const handleConfirmAll = async (includeInitialPayment = false) => {
-    if (!user || !row) return;
-    setBusy('confirm_all');
-    setMsg(null);
-    try {
-      await merchantConfirmPendingAppendBatches(row.id, user.uid, {
-        includeInitialPayment,
-      });
-      setMsg('已确认全部收款');
-      await refresh();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : '操作失败');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleConfirm = async () => {
+  const handleConfirmPaymentGroup = async (paymentGroupId: string) => {
     if (!user || !row) return;
     setBusy('confirm');
     setMsg(null);
     try {
-      await merchantConfirmPayment(row.id, user.uid);
-      setMsg('已确认该支付组收款');
-      await refresh();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : '操作失败');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleConfirmAppendBatch = async (
-    appendBatchId: string,
-    includeInitialPayment = false
-  ) => {
-    if (!user || !row) return;
-    setBusy('confirm_append_single');
-    setMsg(null);
-    try {
-      await merchantConfirmAppendBatch(row.id, appendBatchId, user.uid, {
-        includeInitialPayment,
-      });
+      await merchantConfirmPaymentGroup(row.id, paymentGroupId, user.uid);
       setMsg('已确认该支付组收款');
       await refresh();
     } catch (e) {
@@ -588,296 +444,157 @@ export default function MerchantOrderDetail({
   const legacyNoSplit =
     appendBatches.length > 0 && !(order.initialLines?.length ?? 0);
 
-  const initialLines: OrderLineDoc[] = legacyNoSplit
-    ? order.lines
-    : order.initialLines?.length
-      ? order.initialLines
-      : order.lines;
-  const initialTotal =
-    order.initialTotalAmount ??
-    initialLines.reduce((s, l) => s + l.subtotal, 0);
-
-  const firstPaymentAcknowledged = !!order.initialPaymentConfirmedAt;
-
   const cardAppsAll = listOrderCardPaymentApplications(order);
   const feituanWalletAppsAll = listOrderFeituanWalletPaymentApplications(order);
-  let initialSegmentCardApps = cardAppsAll.filter((a) =>
-    Boolean(a.cardSettlementScope?.includesInitialSegment)
-  );
-  if (initialSegmentCardApps.length === 0 && cardAppsAll.length === 1) {
-    initialSegmentCardApps = cardAppsAll;
-  }
-  let initialSegmentWalletApps = feituanWalletAppsAll.filter((a) =>
-    Boolean(a.paymentGroupScope?.includesInitialSegment)
-  );
-  if (initialSegmentWalletApps.length === 0 && feituanWalletAppsAll.length === 1) {
-    initialSegmentWalletApps = feituanWalletAppsAll;
-  }
-
-  const confirmedBatches = appendBatches
-    .filter((b) => b.confirmedAt)
-    .sort(
-      (a, b) =>
-        (a.appendedAt?.toMillis?.() ?? 0) -
-        (b.appendedAt?.toMillis?.() ?? 0)
-    );
-  const firstActionMergedBatches =
-    order.initialPaymentConfirmedAt && confirmedBatches.length > 0
-      ? confirmedBatches.filter(
-          (b) =>
-            Math.abs(
-              (b.confirmedAt?.toMillis?.() ?? 0) -
-                (order.initialPaymentConfirmedAt?.toMillis?.() ?? 0)
-            ) <= 1000
-        )
-      : [];
-  const restConfirmedBatches = confirmedBatches.filter(
-    (b) => !firstActionMergedBatches.some((x) => x.id === b.id)
-  );
-  const pendingBatches = appendBatches.filter((b) => !b.confirmedAt);
-  const pendingIds = pendingBatches.map((b) => b.id);
-  const firstGroupHasProof = Array.isArray(order.paymentScreenshots)
-    ? order.paymentScreenshots.some((raw) => {
-        if (!raw || typeof raw !== 'object') return false;
-        const o = raw as Record<string, unknown>;
-        const url = typeof o.url === 'string' ? o.url.trim() : '';
-        const bid =
-          typeof o.appendBatchId === 'string' ? o.appendBatchId.trim() : '';
-        const waived = o.waivedNoScreenshot === true;
-        return !bid && (Boolean(url) || waived);
-      })
-    : false;
-  const canConfirmWhole =
-    canMerchantManagePayment &&
-    !firstPaymentAcknowledged &&
-    firstGroupHasProof &&
-    (order.status === 'unpaid' ||
-      order.status === 'pending' ||
-      order.status === 'partial_paid');
-  /** 分组优先级：待确认(0) > 待付款(1) > 已确认(2) */
-  const firstGroupPriority = firstPaymentAcknowledged
-    ? 2
-    : order.status === 'pending'
-      ? 0
-      : 1;
-  const pendingBatchGroups = pendingBatches
-    .map((b) => {
-      const hasTagged = hasPaymentScreenshotForAppendBatch(
-        order.paymentScreenshots,
-        b.id
-      );
-      const canConfirm = canMerchantConfirmAppendBatchByScreenshots(
-        order.paymentScreenshots,
-        b.id,
-        pendingIds,
-        b.appendedAt
-      );
-      const includeUntagged = pendingIds.length === 1 && !hasTagged;
-      const groupPriority = canConfirm ? 0 : 1;
-      return { batch: b, canConfirm, includeUntagged, groupPriority };
-    })
-    .sort((a, b) => {
-      if (a.groupPriority !== b.groupPriority) {
-        return a.groupPriority - b.groupPriority;
-      }
-      return (
-        (a.batch.appendedAt?.toMillis?.() ?? 0) -
-        (b.batch.appendedAt?.toMillis?.() ?? 0)
-      );
-    });
-  const pendingHasTaggedProof = pendingBatches.some((b) =>
-    hasPaymentScreenshotForAppendBatch(order.paymentScreenshots, b.id)
-  );
-  const initialMergeTargetBatchId = null;
-  const hideStandaloneFirstGroup = Boolean(initialMergeTargetBatchId);
-
-  // 同一次支付动作覆盖全部待付（首单+所有加购）时，只需一次确认
-  const canConfirmAllInOneAction =
-    canMerchantManagePayment &&
-    !firstPaymentAcknowledged &&
-    firstGroupHasProof &&
-    pendingBatches.length > 0 &&
-    !pendingHasTaggedProof &&
-    pendingBatchGroups.every((g) => g.canConfirm) &&
-    (order.status === 'unpaid' || order.status === 'pending' || order.status === 'partial_paid');
-
-  // 还未发生支付动作时（首单+加购都未传图），也应按一个待付款组展示
-  const canShowAllAsSingleUnpaidGroup =
-    orderHasNoPaymentActionYet(order) &&
-    pendingBatches.length > 0 &&
-    pendingBatchGroups.every((g) => !g.canConfirm) &&
-    (order.status === 'unpaid' || order.status === 'pending' || order.status === 'partial_paid');
-
-  const allPendingTotal =
-    (canConfirmAllInOneAction || canShowAllAsSingleUnpaidGroup
-      ? initialTotal + pendingBatches.reduce((s, b) => s + (Number(b.deltaAmount) || 0), 0)
-      : 0);
-  const allPendingMergedLines = aggregateOrderLines([
-    ...initialLines,
-    ...pendingBatches.flatMap((b) => b.lines),
-  ]);
-  const showSingleConfirmedGroup =
-    Boolean(order.initialPaymentConfirmedAt) &&
-    firstActionMergedBatches.length > 0 &&
-    pendingBatches.length === 0 &&
-    restConfirmedBatches.length === 0;
-  const confirmedGroupLines =
-    firstActionMergedBatches.length > 0
-      ? [...initialLines, ...firstActionMergedBatches.flatMap((b) => b.lines)]
-      : initialLines;
-  const confirmedGroupTotal =
-    firstActionMergedBatches.length > 0
-      ? Number(initialTotal) +
-        firstActionMergedBatches.reduce(
-          (s, b) => s + (Number(b.deltaAmount) || 0),
-          0
-        )
-      : initialTotal;
-  const confirmedMergedBatchIds = firstActionMergedBatches.map((b) => b.id);
-
-  const pendingGroupPriority = pendingBatchGroups.length > 0
-    ? pendingBatchGroups[0]!.groupPriority
-    : null;
-  const pendingHasUnpaidGroup = pendingBatchGroups.some((g) => !g.canConfirm);
-  const firstGroupTimeMs = order.createdAt?.toMillis?.() ?? 0;
-  const pendingGroupTimeMs =
-    pendingBatchGroups[0]?.batch.appendedAt?.toMillis?.() ??
-    Number.MAX_SAFE_INTEGER;
-  const showPendingBeforeFirst =
-    pendingGroupPriority !== null &&
-    (pendingGroupPriority < firstGroupPriority ||
-      (pendingGroupPriority === firstGroupPriority &&
-        pendingGroupTimeMs < firstGroupTimeMs));
-  const pendingStartNumber = showPendingBeforeFirst ? 1 : hideStandaloneFirstGroup ? 1 : 2;
-  const firstGroupNumber = showPendingBeforeFirst ? pendingBatchGroups.length + 1 : 1;
-  const confirmedStartNumber = (() => {
-    let n = 1;
-    if (showPendingBeforeFirst) n += pendingBatchGroups.length;
-    if (!hideStandaloneFirstGroup) n += 1;
-    if (!showPendingBeforeFirst) n += pendingBatchGroups.length;
-    return n;
-  })();
-
-  const pendingSection = pendingBatchGroups.length > 0 ? (
+  const canonicalPaymentGroups = buildPaymentGroups(order);
+  const pendingHasUnpaidGroup = canonicalPaymentGroups.some((g) => g.status === 'unpaid');
+  const canonicalPaymentSection = (
     <div className="space-y-3">
-      <h2 className="text-sm font-semibold text-amber-950">
-        待确认支付组（按提交凭证行为分组；每组独立确认）
+      <h2 className="text-sm font-semibold text-gray-900">
+        支付组（按支付动作顺序固定编号）
       </h2>
-      <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-        {pendingBatchGroups.map(({ batch, canConfirm, includeUntagged }, index) => {
-          const includeInitialInThisGroup = initialMergeTargetBatchId === batch.id;
-          const groupLines = includeInitialInThisGroup
-            ? [...initialLines, ...batch.lines]
-            : batch.lines;
-          const groupAmount = includeInitialInThisGroup
-            ? Number(initialTotal || 0) + Number(batch.deltaAmount || 0)
-            : Number(batch.deltaAmount || 0);
-          return (
-            <div
-              key={batch.id}
-              className="rounded-xl border border-amber-100 bg-white px-3 py-3"
-            >
+      {canonicalPaymentGroups.map((group, index) => {
+        const cardApps = cardApplicationsForPaymentGroup(order, group);
+        const walletApps = feituanWalletApplicationsForPaymentGroup(order, group);
+        const groupNumber = index + 1;
+        const canConfirmGroup =
+          canMerchantManagePayment &&
+          group.status === 'pending' &&
+          order.status !== 'cancelled';
+        const canWaiveInitial =
+          canMerchantManagePayment &&
+          group.status === 'unpaid' &&
+          group.includesInitial &&
+          group.appendBatchIds.length === 0 &&
+          order.status !== 'cancelled';
+        const canWaiveSingleAppend =
+          canMerchantManagePayment &&
+          group.status === 'unpaid' &&
+          !group.includesInitial &&
+          group.appendBatchIds.length === 1 &&
+          order.status !== 'cancelled';
+        const groupTime =
+          group.timeMs > 0 ? new Date(group.timeMs).toLocaleString() : '—';
+        return (
+          <div
+            key={group.id}
+            className="rounded-xl border border-gray-100 bg-white px-3 py-3 shadow-sm"
+          >
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-gray-900">
-                {includeInitialInThisGroup
-                  ? `支付组 ${pendingStartNumber + index}（含本次动作对应明细）`
-                  : `支付组 ${pendingStartNumber + index}`}
+                支付组 {groupNumber}
               </h3>
-              {canConfirm ? (
-                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-950">
-                  已传图 · 请核对
-                </span>
-              ) : (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
-                  待付款（未传图）
-                </span>
-              )}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${paymentGroupBadgeClass(group.status)}`}
+              >
+                {paymentGroupStatusLabel[group.status]}
+              </span>
             </div>
-            <p className="mb-2 text-xs text-gray-600">时间：{batchTimeStr(batch)}</p>
-            <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 bg-white">
-              {aggregateOrderLines(groupLines).map((l, idx) => (
+            <p className="mb-2 text-xs text-gray-500">时间：{groupTime}</p>
+            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
+              {aggregateOrderLines(group.lines).map((line, lineIndex) => (
                 <li
-                  key={`${batch.id}-${l.productId}-${idx}`}
-                  className="flex justify-between gap-2 px-3 py-2 text-sm"
+                  key={`${group.id}-${line.productId}-${lineIndex}`}
+                  className="flex justify-between gap-2 px-3 py-2"
                 >
                   <span>
-                    {l.name}
-                    {linePromoTag(l)} ×{l.quantity}
+                    {line.name}
+                    {linePromoTag(line)} ×{line.quantity}
                   </span>
                   <span className="tabular-nums font-medium">
-                    {formatMYR(l.subtotal)}
+                    {formatMYR(line.subtotal)}
                   </span>
                 </li>
               ))}
             </ul>
             <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
               <span>本组小计</span>
-              <span>{formatMYR(groupAmount)}</span>
+              <span>{formatMYR(group.subtotal)}</span>
             </div>
             <div className="mt-3">
               <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
-              <PaymentScreenshotsPanel
-                paymentScreenshots={order.paymentScreenshots}
-                appendBatchIdFilter={batch.id}
-                includeUntagged={includeUntagged}
-                untaggedNotBeforeMillis={batch.appendedAt.toMillis()}
-                emptyHint="该支付组尚未上传对应付款截图。"
-                emptyAction={
-                  canMerchantManagePayment &&
-                  !canConfirm &&
-                  order.status !== 'cancelled' &&
-                  order.status !== 'confirmed' ? (
-                    <ActionButton
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy !== null}
-                      onClick={() => void handleWaiveAppendProof(batch.id)}
-                    >
-                      {busy === 'waive_append_proof'
-                        ? '处理中…'
-                        : '免提交付款凭证'}
-                    </ActionButton>
-                  ) : null
-                }
-              />
-            </div>
-            {canMerchantManagePayment && order.status !== 'cancelled' && order.status !== 'confirmed' ? (
-              <>
-                <ActionButton
-                  type="button"
-                  variant="primary"
-                  fullWidth
-                  disabled={busy !== null || !canConfirm}
-                  className="mt-3 h-11"
-                  onClick={() =>
-                    void handleConfirmAppendBatch(
-                      batch.id,
-                      false
-                    )
-                  }
-                >
-                  {busy === 'confirm_append_single'
-                    ? '处理中…'
-                    : `确认本组收款（${formatMYR(groupAmount)}）`}
-                </ActionButton>
-                {!canConfirm ? (
-                  <p className="mt-2 text-xs text-amber-950">
-                    顾客尚未上传该支付组有效付款截图，请先让顾客在订单页上传。
+              {group.proofs.length > 0 ? (
+                <PaymentScreenshotsPanel
+                  paymentScreenshots={group.proofs}
+                  emptyHint="暂无本组截图。"
+                />
+              ) : cardApps.length > 0 ? (
+                <div className="space-y-2">
+                  {cardApps.map((cp, appIndex) => (
+                    <CardPaymentBreakdown
+                      key={`${cp.appliedAt?.toMillis?.() ?? 0}-${appIndex}`}
+                      cardPayment={cp}
+                      lines={group.lines}
+                      title={
+                        cardApps.length > 1
+                          ? `本组卡支付自动确认（第 ${appIndex + 1} 笔）`
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              ) : walletApps.length > 0 ? (
+                <div className="space-y-2">
+                  {walletApps.map((payment, appIndex) => (
+                    <FeituanWalletPaymentBreakdown
+                      key={`${payment.appliedAt?.toMillis?.() ?? 0}-${appIndex}`}
+                      payment={payment}
+                      title={
+                        walletApps.length > 1
+                          ? `本组饭团钱包自动确认（第 ${appIndex + 1} 笔）`
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/60 px-3 py-3 text-sm text-amber-950">
+                  <p className="font-semibold">暂无对应付款截图</p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                    {group.status === 'unpaid'
+                      ? '该支付组尚未上传对应付款截图。'
+                      : '该支付组暂无可展示的付款凭证。'}
                   </p>
-                ) : null}
-              </>
-            ) : (
-              <p className="mt-2 text-xs text-gray-600">
-                当前状态不可确认该支付组收款。
-              </p>
-            )}
+                </div>
+              )}
             </div>
-          );
-        })}
-      </div>
+            {canConfirmGroup ? (
+              <ActionButton
+                type="button"
+                variant="primary"
+                fullWidth
+                disabled={busy !== null}
+                className="mt-3 h-11"
+                onClick={() => void handleConfirmPaymentGroup(group.id)}
+              >
+                {busy === 'confirm'
+                  ? '处理中…'
+                  : `确认本组收款（${formatMYR(group.subtotal)}）`}
+              </ActionButton>
+            ) : null}
+            {canWaiveInitial || canWaiveSingleAppend ? (
+              <ActionButton
+                type="button"
+                variant="secondary"
+                fullWidth
+                disabled={busy !== null}
+                className="mt-3 h-11"
+                onClick={() =>
+                  canWaiveInitial
+                    ? void handleWaiveInitialProof()
+                    : void handleWaiveAppendProof(group.appendBatchIds[0]!)
+                }
+              >
+                {busy === 'waive_initial_proof' || busy === 'waive_append_proof'
+                  ? '处理中…'
+                  : `本组免提交付款凭证（${formatMYR(group.subtotal)}）`}
+              </ActionButton>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
-  ) : null;
+  );
 
   return (
     <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
@@ -886,9 +603,7 @@ export default function MerchantOrderDetail({
           {msg}
         </p>
       ) : null}
-      {busy === 'confirm' ||
-      busy === 'confirm_all' ||
-      busy === 'confirm_append_single' ? (
+      {busy === 'confirm' ? (
         <p className="mb-3 text-xs leading-relaxed text-gray-600">
           正在向服务器写入确认结果，弱网下可能需要十余秒，请勿关闭页面或重复点击。
         </p>
@@ -924,9 +639,7 @@ export default function MerchantOrderDetail({
               </span>
             ) : null}
           </p>
-          {order.status === 'partial_paid' &&
-          pendingIds.length > 0 &&
-          pendingHasUnpaidGroup ? (
+          {order.status === 'partial_paid' && pendingHasUnpaidGroup ? (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-xs text-amber-950">
               当前支付组尚未收到有效付款截图，视同 <strong>待付款</strong>
               ：请先让顾客在手机端上传补款截图后再确认。
@@ -940,269 +653,7 @@ export default function MerchantOrderDetail({
           </p>
         ) : null}
 
-        {/* ── 合并确认区块：同一次支付动作覆盖首单+所有加购时，一次确认 ── */}
-        {canConfirmAllInOneAction ? (
-          <div className="rounded-xl border border-sky-200 bg-sky-50/60 px-3 py-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-sky-950">
-                支付组 1（本次付款明细）
-              </h2>
-              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-950">
-                已传图 · 待确认
-              </span>
-            </div>
-            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-              {allPendingMergedLines.map((l, idx) => (
-                <li
-                  key={`pending-all-${l.productId}-${idx}`}
-                  className="flex justify-between gap-2 px-3 py-2 text-sm"
-                >
-                  <span>
-                    {l.name}
-                    {linePromoTag(l)} ×{l.quantity}
-                  </span>
-                  <span className="tabular-nums font-medium">{formatMYR(l.subtotal)}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-              <span>合计应收</span>
-              <span>{formatMYR(allPendingTotal)}</span>
-            </div>
-            <div className="mt-3">
-              <h3 className="mb-1 text-xs font-semibold text-gray-700">付款凭证</h3>
-              <PaymentScreenshotsPanel
-                paymentScreenshots={order.paymentScreenshots}
-                appendBatchIdFilter={null}
-                emptyHint="暂无截图。"
-              />
-            </div>
-            <ActionButton
-              type="button"
-              variant="primary"
-              fullWidth
-              disabled={busy !== null}
-              className="mt-3 h-11"
-              onClick={() => void handleConfirmAll(true)}
-            >
-              {busy === 'confirm_all'
-                ? '处理中…'
-                : `确认全部收款（${formatMYR(allPendingTotal)}）`}
-            </ActionButton>
-            <p className="mt-2 text-xs text-gray-600">
-              本次付款一张凭证覆盖当前支付组明细，点击后一次性确认本组。
-            </p>
-          </div>
-        ) : canShowAllAsSingleUnpaidGroup ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-amber-950">
-                支付组 1（待付款明细）
-              </h2>
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
-                待付款（未传图）
-              </span>
-            </div>
-            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-              {allPendingMergedLines.map((l, idx) => (
-                <li
-                  key={`unpaid-all-${l.productId}-${idx}`}
-                  className="flex justify-between gap-2 px-3 py-2 text-sm"
-                >
-                  <span>
-                    {l.name}
-                    {linePromoTag(l)} ×{l.quantity}
-                  </span>
-                  <span className="tabular-nums font-medium">{formatMYR(l.subtotal)}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-              <span>合计应收</span>
-              <span>{formatMYR(allPendingTotal)}</span>
-            </div>
-            <div className="mt-3 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
-              <p className="font-medium">当前尚未发起支付动作</p>
-              <p className="mt-1">
-                可让顾客上传一张凭证，或使用「免提交付款凭证」一次性覆盖本次支付组。
-              </p>
-            </div>
-            {canMerchantManagePayment && order.status !== 'cancelled' && order.status !== 'confirmed' ? (
-              <ActionButton
-                type="button"
-                variant="secondary"
-                fullWidth
-                disabled={busy !== null}
-                className="mt-3 h-11"
-                onClick={() => void handleWaiveInitialProof()}
-              >
-                {busy === 'waive_initial_proof'
-                  ? '处理中…'
-                  : `本次免提交付款凭证（${formatMYR(allPendingTotal)}）`}
-              </ActionButton>
-            ) : null}
-          </div>
-        ) : (
-          <>
-            {showPendingBeforeFirst ? pendingSection : null}
-
-            {!hideStandaloneFirstGroup ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold text-gray-900">
-                  {showSingleConfirmedGroup
-                    ? `支付组 ${firstGroupNumber}（已确认）`
-                    : `支付组 ${firstGroupNumber}`}
-                </h2>
-                {firstPaymentAcknowledged ? (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">
-                    已确认收款
-                  </span>
-                ) : firstGroupHasProof ? (
-                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-950">
-                    已传图 · 待确认
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-950">
-                    待付款（未传图）
-                  </span>
-                )}
-              </div>
-              <p className="mb-2 text-xs text-gray-600">时间：{timeStr}</p>
-              <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
-                {aggregateOrderLines(confirmedGroupLines).map((l, idx) => (
-                  <li
-                    key={`${l.productId}-${idx}`}
-                    className="flex justify-between gap-2 px-3 py-2"
-                  >
-                    <span>
-                      {l.name}
-                      {linePromoTag(l)} ×{l.quantity}
-                    </span>
-                    <span className="tabular-nums font-medium">
-                      {formatMYR(l.subtotal)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <div className="mt-2 flex justify-between text-sm font-semibold text-gray-900">
-                <span>本组小计</span>
-                <span>{formatMYR(confirmedGroupTotal)}</span>
-              </div>
-              <div className="mt-3">
-                <h3 className="mb-1 text-xs font-semibold text-gray-700">
-                  本组相关截图（未挂批次的图）
-                </h3>
-                {initialSegmentCardApps.length > 0 &&
-                firstPaymentAcknowledged &&
-                !firstGroupHasProof ? (
-                  <div className="space-y-2">
-                    {initialSegmentCardApps.map((cp, i) => (
-                      <CardPaymentBreakdown
-                        key={`${cp.appliedAt?.toMillis?.() ?? 0}-${i}`}
-                        cardPayment={cp}
-                        lines={initialLines}
-                        title={
-                          initialSegmentCardApps.length > 1
-                            ? `本组卡支付自动确认（第 ${i + 1} 笔）`
-                            : undefined
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : initialSegmentWalletApps.length > 0 &&
-                firstPaymentAcknowledged &&
-                !firstGroupHasProof ? (
-                  <div className="space-y-2">
-                    {initialSegmentWalletApps.map((payment, i) => (
-                      <FeituanWalletPaymentBreakdown
-                        key={`${payment.appliedAt?.toMillis?.() ?? 0}-${i}`}
-                        payment={payment}
-                        title={
-                          initialSegmentWalletApps.length > 1
-                            ? `本组饭团钱包自动确认（第 ${i + 1} 笔）`
-                            : undefined
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <PaymentScreenshotsPanel
-                    paymentScreenshots={order.paymentScreenshots}
-                    {...(confirmedMergedBatchIds.length > 0
-                      ? {
-                          matchAnyAppendBatchIds: confirmedMergedBatchIds,
-                          includeUntagged: true,
-                          untaggedNotBeforeMillis: order.createdAt?.toMillis?.() ?? 0,
-                        }
-                      : { appendBatchIdFilter: null })}
-                    emptyHint="暂无本组截图。"
-                    emptyAction={
-                      !firstPaymentAcknowledged &&
-                      !firstGroupHasProof &&
-                      canMerchantManagePayment &&
-                      order.status !== 'cancelled' &&
-                      order.status !== 'confirmed' ? (
-                        <ActionButton
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          disabled={busy !== null}
-                          onClick={() => void handleWaiveInitialProof()}
-                        >
-                          {busy === 'waive_initial_proof' ? '处理中…' : '免提交付款凭证'}
-                        </ActionButton>
-                      ) : null
-                    }
-                  />
-                )}
-              </div>
-              {canConfirmWhole ? (
-                <>
-                  <ActionButton
-                    type="button"
-                    variant="primary"
-                    fullWidth
-                    disabled={busy !== null}
-                    className="mt-3 h-11"
-                    onClick={() => void handleConfirm()}
-                  >
-                    {busy === 'confirm'
-                      ? '处理中…'
-                      : `确认本组收款（${formatMYR(initialTotal)}）`}
-                  </ActionButton>
-                  <p className="mt-2 text-xs text-gray-600">
-                    本组对应顾客该次付款提交（可多张凭证）。确认后若仍有未确认分组，会保留待收部分到后续组。
-                  </p>
-                </>
-              ) : order.status === 'confirmed' ? (
-                <p className="mt-2 text-xs text-gray-600">本组已完成确认。</p>
-              ) : null}
-            </div>
-            ) : null}
-
-            {!showPendingBeforeFirst ? pendingSection : null}
-          </>
-        )}
-
-        {!showSingleConfirmedGroup && restConfirmedBatches.length > 0 ? (
-          <div className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-900">已确认支付组</h2>
-            {restConfirmedBatches.map((b, index) => (
-              <ConfirmedAppendBatchCard
-                key={b.id}
-                order={order}
-                batch={b}
-                groupNumber={confirmedStartNumber + index}
-                paymentScreenshots={order.paymentScreenshots}
-                orderLines={order.lines}
-              />
-            ))}
-          </div>
-        ) : !showSingleConfirmedGroup ? (
-          <EmptyStateCard title="暂无已确认的支付组" className="py-4" />
-        ) : null}
-
+        {canonicalPaymentSection}
         <div>
           <h2 className="mb-2 text-sm font-semibold text-gray-900">订单当前合计</h2>
           <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100">
