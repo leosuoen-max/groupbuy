@@ -160,7 +160,7 @@ export default function MerchantDashboard() {
   const shopPaused = !isShopOpenForCustomers(shop.data);
 
   return (
-    <PageShell title={shop.data.name}>
+    <PageShell title={shop.data.name} hideBack>
       {shopPaused ? (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
           <strong>店铺已停用：</strong>顾客端无法进店、下单与购卡；你可继续在此处理历史订单与设置。需要恢复请在「平台 ·

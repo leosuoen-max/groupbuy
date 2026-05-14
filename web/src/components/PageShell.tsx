@@ -4,6 +4,7 @@ type PageShellProps = {
   title: string;
   subtitle?: string;
   children?: React.ReactNode;
+  hideBack?: boolean;
 };
 
 const link = 'text-indigo-600 underline-offset-2 hover:underline';
@@ -34,16 +35,18 @@ function pageBackTarget(pathname: string): { href: string; label: string } {
   return { href: '/', label: '商户入口' };
 }
 
-export function PageShell({ title, subtitle, children }: PageShellProps) {
+export function PageShell({ title, subtitle, children, hideBack }: PageShellProps) {
   const location = useLocation();
   const back = pageBackTarget(location.pathname);
   return (
     <main className="min-h-[60vh] w-full px-4 py-5">
-      <p className="mb-3">
-        <Link to={back.href} className={link}>
-          ← {back.label}
-        </Link>
-      </p>
+      {!hideBack ? (
+        <p className="mb-3">
+          <Link to={back.href} className={link}>
+            ← {back.label}
+          </Link>
+        </p>
+      ) : null}
       <h1 className="mb-2 text-xl font-semibold text-gray-900">{title}</h1>
       {subtitle ? (
         <p className="mb-4 text-sm text-gray-600">{subtitle}</p>

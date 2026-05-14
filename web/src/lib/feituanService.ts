@@ -111,6 +111,26 @@ export async function delistFeituanProject(
   });
 }
 
+export async function delistExpiredFeituanProjects(actorUid: string): Promise<number> {
+  if (!(await isFeituanAdmin(actorUid))) throw new Error('需要饭团管理员权限');
+  const projects = await listFeituanProjects(['listed']);
+  const now = Date.now();
+  const expired = projects.filter((row) => {
+    const closes = row.data.closesAt?.toDate?.();
+    return closes ? closes.getTime() <= now : false;
+  });
+  await Promise.all(
+    expired.map((row) =>
+      updateFeituanProject(row.id, actorUid, 'delist', {
+        feituanStatus: 'delisted',
+        feituanReviewedAt: Timestamp.now(),
+        feituanReviewedBy: actorUid,
+      }, '系统检测已过截单时间，自动下架')
+    )
+  );
+  return expired.length;
+}
+
 export async function updateFeituanProjectCosts(input: {
   projectId: string;
   actorUid: string;
@@ -191,8 +211,13 @@ export async function listFeituanProjects(
 export async function listListedFeituanProjects(): Promise<ProjectRow[]> {
   const q = query(collection(getDb(), 'projects'), where('feituanStatus', '==', 'listed'));
   const snap = await getDocs(q);
+  const now = Date.now();
   return snap.docs
     .map((d) => ({ id: d.id, data: d.data() as ProjectDoc }))
+    .filter((row) => {
+      const closes = row.data.closesAt?.toDate?.();
+      return closes ? closes.getTime() > now : true;
+    })
     .sort((a, b) => {
       const ta = a.data.feituanReviewedAt?.toMillis?.() ?? 0;
       const tb = b.data.feituanReviewedAt?.toMillis?.() ?? 0;

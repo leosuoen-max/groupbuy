@@ -5,39 +5,58 @@ import { useAuthUser } from '../hooks/useAuthUser';
 import { getRegisteredUserPhoneMasked, isPlatformAdmin } from '../lib/registeredUserService';
 import { createSignupInvite } from '../lib/signupInviteService';
 import {
-  createShopByPlatformAdmin,
   listAllShopsForPlatform,
   setShopFeituanEnabledForPlatform,
   setShopActiveForPlatform,
   type ShopRow,
 } from '../lib/shopService';
 
-function randomBase36(len: number): string {
-  return Math.random()
-    .toString(36)
-    .replace(/[^a-z0-9]/g, '')
-    .slice(0, len);
-}
-
-function genShortSlug(): string {
-  const ts = Date.now().toString(36).slice(-4);
-  const rand = randomBase36(5).padEnd(5, 'x');
-  return `s${ts}${rand}`;
-}
-
-function fmtTs(t: { toDate?: () => Date } | null | undefined): string {
-  if (!t?.toDate) return '—';
+function fmtTsParts(t: { toDate?: () => Date } | null | undefined): {
+  date: string;
+  time: string;
+} {
+  if (!t?.toDate) return { date: '—', time: '' };
   try {
-    return t.toDate().toLocaleString('zh-CN', {
-      hour12: false,
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    const d = t.toDate();
+    return {
+      date: d.toLocaleDateString('zh-CN', {
+        year: '2-digit',
+        month: '2-digit',
+        day: '2-digit',
+      }),
+      time: d.toLocaleTimeString('zh-CN', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    };
   } catch {
-    return '—';
+    return { date: '—', time: '' };
   }
+}
+
+function StatusPill({ active }: { active: boolean }) {
+  return active ? (
+    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+      营业
+    </span>
+  ) : (
+    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+      停用
+    </span>
+  );
+}
+
+function FeituanPill({ enabled }: { enabled: boolean }) {
+  return enabled ? (
+    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-800">
+      已开通
+    </span>
+  ) : (
+    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
+      未开通
+    </span>
+  );
 }
 
 export default function PlatformShops() {
@@ -48,9 +67,6 @@ export default function PlatformShops() {
   const [ownerPhoneMasked, setOwnerPhoneMasked] = useState<Record<string, string | null>>({});
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [ownerUid, setOwnerUid] = useState('');
-  const [newName, setNewName] = useState('');
-  const [createMsg, setCreateMsg] = useState<string | null>(null);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
 
@@ -87,12 +103,9 @@ export default function PlatformShops() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
-      setAllowed(false);
-      setRows([]);
-      return;
-    }
-    void refresh();
+    if (!user) return;
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
   }, [authLoading, user, refresh]);
 
   const handleGenInviteLink = async () => {
@@ -113,52 +126,6 @@ export default function PlatformShops() {
       }
     } catch (e) {
       setInviteMsg(e instanceof Error ? e.message : '生成失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCreate = async () => {
-    if (!user) return;
-    const oid = ownerUid.trim();
-    const n = newName.trim();
-    if (!oid) {
-      setCreateMsg('请填写店主 Firebase UID（对方需先注册/登录过一次）。');
-      return;
-    }
-    if (!n) {
-      setCreateMsg('请填写商户名称。');
-      return;
-    }
-    setBusy(true);
-    setCreateMsg(null);
-    try {
-      let created = false;
-      for (let i = 0; i < 8; i++) {
-        const slug = genShortSlug();
-        try {
-          await createShopByPlatformAdmin(user.uid, oid, { name: n, slug });
-          created = true;
-          break;
-        } catch (err) {
-          if (!(err instanceof Error) || err.message !== 'SLUG_TAKEN') {
-            throw err;
-          }
-        }
-      }
-      if (!created) throw new Error('短链接生成失败，请重试');
-      setOwnerUid('');
-      setNewName('');
-      setCreateMsg('已创建商户。');
-      await refresh();
-    } catch (e) {
-      if (e instanceof Error && e.message === 'OWNER_ALREADY_HAS_SHOP') {
-        setCreateMsg('该 UID 已绑定过一个商户（一账号一店）。');
-      } else if (e instanceof Error && e.message === 'PLATFORM_ADMIN_REQUIRED') {
-        setCreateMsg('无平台管理员权限。');
-      } else {
-        setCreateMsg(e instanceof Error ? e.message : '创建失败');
-      }
     } finally {
       setBusy(false);
     }
@@ -192,9 +159,9 @@ export default function PlatformShops() {
     }
   };
 
-  if (authLoading || allowed === null) {
+  if (authLoading) {
     return (
-      <PageShell title="商户管理" subtitle="平台后台">
+      <PageShell title="商户管理" subtitle="平台后台" hideBack>
         <p className="text-sm text-gray-600">加载中…</p>
       </PageShell>
     );
@@ -202,7 +169,7 @@ export default function PlatformShops() {
 
   if (!user) {
     return (
-      <PageShell title="商户管理" subtitle="平台后台">
+      <PageShell title="商户管理" subtitle="平台后台" hideBack>
         <p className="mb-4 text-sm text-gray-700">请先登录后再访问。</p>
         <Link
           className="text-indigo-600 underline-offset-2 hover:underline"
@@ -214,9 +181,17 @@ export default function PlatformShops() {
     );
   }
 
+  if (allowed === null) {
+    return (
+      <PageShell title="商户管理" subtitle="平台后台" hideBack>
+        <p className="text-sm text-gray-600">加载中…</p>
+      </PageShell>
+    );
+  }
+
   if (!allowed) {
     return (
-      <PageShell title="商户管理" subtitle="平台后台">
+      <PageShell title="商户管理" subtitle="平台后台" hideBack>
         <p className="mb-3 text-sm text-gray-700">
           当前账号无权访问。请在 Firebase 控制台创建集合{' '}
           <code className="rounded bg-gray-100 px-1 text-xs">platform_admins</code> ，并以你的 UID
@@ -234,7 +209,7 @@ export default function PlatformShops() {
   }
 
   return (
-    <PageShell title="商户管理" subtitle="创建 / 列表 / 停用或启用">
+    <PageShell title="商户管理" subtitle="创建 / 列表 / 停用或启用" hideBack>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-gray-600">
           停用后顾客无法进店与下单；店主仍可在商户后台查看与处理历史数据。
@@ -297,149 +272,101 @@ export default function PlatformShops() {
         ) : null}
       </section>
 
-      <section className="mb-6 rounded-xl border border-gray-100 bg-gray-50 p-4">
-        <h2 className="mb-2 text-sm font-semibold text-gray-900">新建商户（UID）</h2>
-        <p className="mb-3 text-xs leading-relaxed text-gray-600">
-          若对方<strong>已有</strong> Firebase 账号：可复制其 UID 填入下方。若希望对方自助用手机号注册，优先使用上方「一次性注册链接」。
-        </p>
-        <label className="mb-2 block text-sm text-gray-700">
-          店主 UID
-          <input
-            className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 font-mono text-sm"
-            value={ownerUid}
-            onChange={(e) => setOwnerUid(e.target.value)}
-            placeholder="例如：AbC123…（Firebase 控制台 Authentication 可复制）"
-            disabled={busy}
-          />
-        </label>
-        <label className="mb-3 block text-sm text-gray-700">
-          商户名称（对内）
-          <input
-            className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="例如：某某团购组"
-            disabled={busy}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void handleCreate()}
-          className="h-10 w-full rounded-lg bg-emerald-600 text-sm font-semibold text-white disabled:bg-gray-300 sm:w-auto sm:px-6"
-        >
-          创建商户
-        </button>
-        {createMsg ? (
-          <p className="mt-2 text-xs text-amber-800" role="status">
-            {createMsg}
-          </p>
-        ) : null}
-      </section>
-
       {loadErr ? <p className="mb-3 text-sm text-red-600">{loadErr}</p> : null}
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-        <table className="min-w-full divide-y divide-gray-200 text-left text-xs">
-          <thead className="bg-gray-50 text-gray-700">
-            <tr>
-              <th className="px-3 py-2 font-semibold">名称</th>
-              <th className="px-3 py-2 font-semibold">slug / 后台</th>
-              <th className="px-3 py-2 font-semibold">店主 UID</th>
-              <th className="whitespace-nowrap px-3 py-2 font-semibold">手机（脱敏）</th>
-              <th className="whitespace-nowrap px-3 py-2 font-semibold">状态</th>
-              <th className="whitespace-nowrap px-3 py-2 font-semibold">饭团</th>
-              <th className="whitespace-nowrap px-3 py-2 font-semibold">创建</th>
-              <th className="px-3 py-2 font-semibold">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 text-gray-800">
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-gray-500">
-                  暂无商户。
-                </td>
-              </tr>
-            ) : (
-              rows.map((r) => {
-                const open = r.data.isActive !== false;
-                const feituan = r.data.feituanEnabled === true;
-                const dash = `/dashboard/${encodeURIComponent(r.data.slug)}`;
-                return (
-                  <tr key={r.id} className="hover:bg-gray-50/80">
-                    <td className="px-3 py-2 font-medium">{r.data.name}</td>
-                    <td className="px-3 py-2">
-                      <code className="rounded bg-gray-100 px-1">{r.data.slug}</code>
-                      <div className="mt-1">
-                        <Link
-                          to={dash}
-                          className="text-indigo-600 underline-offset-2 hover:underline"
-                        >
-                          打开后台
-                        </Link>
-                      </div>
-                    </td>
-                    <td className="max-w-[10rem] truncate px-3 py-2 font-mono text-[11px]" title={r.data.ownerId}>
-                      …{r.data.ownerId.slice(-8)}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-600" title="店主登录后写入登记；完整号码仅在 Firebase 控制台 Authentication">
-                      {ownerPhoneMasked[r.data.ownerId] ?? '—'}
-                    </td>
-                    <td className="px-3 py-2">
-                      {open ? (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-900">营业</span>
-                      ) : (
-                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-slate-800">停用</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {feituan ? (
-                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-orange-900">已开通</span>
-                      ) : (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">未开通</span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-600">
-                      {fmtTs(r.data.createdAt)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1.5">
-                      {open ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 disabled:opacity-50"
-                          onClick={() => void toggleActive(r, false)}
-                        >
-                          停用
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-900 disabled:opacity-50"
-                          onClick={() => void toggleActive(r, true)}
-                        >
-                          启用
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="rounded border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-900 disabled:opacity-50"
-                        onClick={() => void toggleFeituan(r, !feituan)}
+      {rows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500">
+          暂无商户。
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((r) => {
+            const open = r.data.isActive !== false;
+            const feituan = r.data.feituanEnabled === true;
+            const dash = `/dashboard/${encodeURIComponent(r.data.slug)}`;
+            const created = fmtTsParts(r.data.createdAt);
+            return (
+              <article
+                key={r.id}
+                className="rounded-2xl border border-gray-100 bg-white p-3 text-sm shadow-sm"
+              >
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="line-clamp-2 text-base font-bold leading-tight text-gray-950">
+                      {r.data.name}
+                    </h2>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                      <code className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-700">
+                        {r.data.slug}
+                      </code>
+                      <Link
+                        to={dash}
+                        className="font-medium text-indigo-600 underline-offset-2 hover:underline"
                       >
-                        {feituan ? '关闭饭团' : '开通饭团'}
-                      </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                        打开后台
+                      </Link>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <StatusPill active={open} />
+                    <FeituanPill enabled={feituan} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  <div>
+                    <p className="text-[11px] text-gray-400">店主 UID</p>
+                    <p className="font-mono text-[11px] text-gray-800" title={r.data.ownerId}>
+                      …{r.data.ownerId.slice(-8)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-400">手机</p>
+                    <p className="font-semibold text-gray-800">
+                      {ownerPhoneMasked[r.data.ownerId] ?? '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] text-gray-400">创建</p>
+                    <p className="font-semibold text-gray-800">{created.date}</p>
+                    {created.time ? <p className="text-[11px] text-gray-500">{created.time}</p> : null}
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {open ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 disabled:opacity-50"
+                      onClick={() => void toggleActive(r, false)}
+                    >
+                      停用
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-900 disabled:opacity-50"
+                      onClick={() => void toggleActive(r, true)}
+                    >
+                      启用
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-900 disabled:opacity-50"
+                    onClick={() => void toggleFeituan(r, !feituan)}
+                  >
+                    {feituan ? '关闭饭团' : '开通饭团'}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
 
       <div className="mt-6 space-y-2 text-xs text-gray-500">
         <p>

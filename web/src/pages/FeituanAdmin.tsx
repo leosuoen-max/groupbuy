@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
 import {
   approveFeituanProject,
   delistFeituanProject,
+  delistExpiredFeituanProjects,
   isFeituanAdmin,
   listFeituanProjects,
   rejectFeituanProject,
@@ -35,6 +35,20 @@ function statusLabel(s: ProjectRow['data']['feituanStatus']): string {
   return '未提交';
 }
 
+function statusChipClass(s: ProjectRow['data']['feituanStatus']): string {
+  if (s === 'pending') return 'bg-amber-100 text-amber-800';
+  if (s === 'listed') return 'bg-emerald-100 text-emerald-800';
+  if (s === 'rejected') return 'bg-red-100 text-red-700';
+  if (s === 'delisted') return 'bg-gray-100 text-gray-600';
+  return 'bg-gray-100 text-gray-600';
+}
+
+const quickLinkClass =
+  'rounded-2xl border border-orange-100 bg-white px-3 py-3 text-center text-xs font-bold text-gray-900 shadow-sm active:bg-orange-50';
+
+const actionButtonBase =
+  'rounded-xl px-3 py-2 text-xs font-bold disabled:opacity-50';
+
 async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRow | null>> {
   const shopIds = [...new Set(projects.map((project) => project.data.shopId))];
   const entries = await Promise.all(
@@ -62,6 +76,7 @@ export default function FeituanAdmin() {
         setRows([]);
         return;
       }
+      await delistExpiredFeituanProjects(user.uid);
       const projects = await listFeituanProjects(['pending', 'listed', 'rejected', 'delisted']);
       const shopsById = await loadShopsById(projects);
       const items = projects.map((project) => ({
@@ -139,116 +154,165 @@ export default function FeituanAdmin() {
 
   if (authLoading || allowed === null) {
     return (
-      <PageShell title="饭团管理" subtitle="加载中…">
+      <main className="min-h-svh bg-[#fffaf4] px-4 py-5">
+        <h1 className="text-xl font-black text-gray-950">饭团管理</h1>
         <p className="text-sm text-gray-600">请稍候…</p>
-      </PageShell>
+      </main>
     );
   }
 
   if (!user) {
     return (
-      <PageShell title="饭团管理" subtitle="未登录">
+      <main className="min-h-svh bg-[#fffaf4] px-4 py-5">
+        <h1 className="text-xl font-black text-gray-950">饭团管理</h1>
         <Link to="/login?returnTo=/admin/feituan" className="text-indigo-600">
           去登录
         </Link>
-      </PageShell>
+      </main>
     );
   }
 
   if (!allowed) {
     return (
-      <PageShell title="饭团管理" subtitle="无权限">
+      <main className="min-h-svh bg-[#fffaf4] px-4 py-5">
+        <h1 className="mb-3 text-xl font-black text-gray-950">饭团管理</h1>
         <p className="text-sm text-gray-700">
           当前账号无饭团管理员权限。可在 Firestore 创建{' '}
           <code className="rounded bg-gray-100 px-1 text-xs">feituan_admins</code>
           文档，或使用平台管理员账号访问。
         </p>
-      </PageShell>
+      </main>
     );
   }
 
   return (
-    <PageShell title="饭团管理" subtitle={`待审 ${pendingCount} 个`}>
-      <div className="mb-4 flex flex-wrap gap-2">
+    <main className="min-h-svh bg-[#fffaf4] px-4 pb-8 pt-5">
+      <header className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-[24px] font-black tracking-tight text-gray-950">饭团管理</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            待审 <span className="font-semibold text-orange-700">{pendingCount}</span> 个
+            · 共 {rows.length} 个项目
+          </p>
+        </div>
         <button
           type="button"
           disabled={loading}
           onClick={() => void refresh()}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
+          className="shrink-0 rounded-xl border border-orange-100 bg-white px-3 py-2 text-xs font-bold text-orange-800 shadow-sm disabled:opacity-50"
         >
           {loading ? '刷新中…' : '刷新'}
         </button>
+      </header>
+
+      <section className="mb-4 rounded-3xl border border-orange-100 bg-white/80 p-3 shadow-sm">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-gray-950">运营入口</h2>
+          <span className="text-xs text-gray-400">饭团后台</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Link
           to="/feituan"
-          className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
+          className={quickLinkClass}
         >
-          打开饭团主页
+          饭团主页
         </Link>
         <Link
           to="/admin/feituan/orders"
-          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900"
+          className={quickLinkClass}
         >
           饭团订单
         </Link>
         <Link
           to="/admin/feituan/reconciliation"
-          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-900"
+          className={quickLinkClass}
         >
           饭团对账
         </Link>
         <Link
           to="/admin/feituan/wallet"
-          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900"
+          className={quickLinkClass}
         >
           饭团钱包
         </Link>
         <Link
           to="/admin/feituan/delivery"
-          className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
+          className={quickLinkClass}
         >
           饭团配送
         </Link>
       </div>
+      </section>
+
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-base font-black text-gray-950">项目列表</h2>
+        <span className="text-xs text-gray-500">自动清理已截单项目</span>
+      </div>
       {rows.length === 0 ? (
-        <p className="text-sm text-gray-600">暂无饭团项目。</p>
+        <div className="rounded-3xl border border-dashed border-orange-200 bg-white px-4 py-10 text-center text-sm text-gray-600">
+          暂无饭团项目。
+        </div>
       ) : (
         <div className="space-y-3">
           {rows.map(({ project, shop }) => {
             const p = project.data;
             return (
-              <article key={project.id} className="rounded-xl border border-gray-100 bg-white p-4 text-sm shadow-sm">
-                <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="text-xs text-gray-500">{shop?.data.name ?? '未知店铺'}</p>
-                    <h2 className="font-semibold text-gray-900">{p.title || '未命名项目'}</h2>
-                    <p className="mt-1 text-xs text-gray-500">提交：{fmtTs(p.feituanSubmittedAt)}</p>
+              <article
+                key={project.id}
+                className="overflow-hidden rounded-3xl border border-orange-100 bg-white text-sm shadow-sm"
+              >
+                <div className="p-4">
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-medium text-orange-800">
+                        {shop?.data.name ?? '未知店铺'}
+                      </p>
+                      <h3 className="mt-0.5 line-clamp-2 text-[17px] font-black leading-tight text-gray-950">
+                        {p.title || '未命名项目'}
+                      </h3>
+                      <p className="mt-1 text-xs text-gray-500">
+                        提交 {fmtTs(p.feituanSubmittedAt)} · 审核 {fmtTs(p.feituanReviewedAt)}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${statusChipClass(p.feituanStatus)}`}
+                    >
+                      {statusLabel(p.feituanStatus)}
+                    </span>
                   </div>
-                  <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-900">
-                    {statusLabel(p.feituanStatus)}
-                  </span>
-                </div>
-                <div className="mb-3 grid grid-cols-2 gap-2 text-xs text-gray-600 sm:grid-cols-4">
-                  <div>商品：{p.products?.length ?? 0}</div>
-                  <div>套餐：{p.bundleTools?.length ?? 0}</div>
-                  <div>状态：{p.status}</div>
-                  <div>饭团审核：{fmtTs(p.feituanReviewedAt)}</div>
-                </div>
-                <p className="mb-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-600">
-                  项目成本：{p.feituanCostConfirmedAt ? `已确认 ${fmtTs(p.feituanCostConfirmedAt)}` : '未确认'}
-                </p>
+                  <div className="mb-3 grid grid-cols-3 gap-2 rounded-2xl bg-orange-50/50 p-2 text-center text-xs text-gray-700">
+                    <div>
+                      <p className="font-black text-gray-950">{p.products?.length ?? 0}</p>
+                      <p>商品</p>
+                    </div>
+                    <div>
+                      <p className="font-black text-gray-950">{p.bundleTools?.length ?? 0}</p>
+                      <p>套餐</p>
+                    </div>
+                    <div>
+                      <p className="font-black text-gray-950">{p.status}</p>
+                      <p>状态</p>
+                    </div>
+                  </div>
+                  <p className="mb-2 rounded-2xl bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                    项目成本：
+                    {p.feituanCostConfirmedAt
+                      ? `已确认 ${fmtTs(p.feituanCostConfirmedAt)}`
+                      : '未确认'}
+                  </p>
                 {p.feituanRejectReason ? (
-                  <p className="mb-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">
+                    <p className="mb-2 rounded-2xl bg-red-50 px-3 py-2 text-xs text-red-700">
                     驳回原因：{p.feituanRejectReason}
                   </p>
                 ) : null}
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 border-t border-orange-50 pt-3">
                   {p.feituanStatus === 'pending' || p.feituanStatus === 'rejected' || p.feituanStatus === 'delisted' ? (
                     <button
                       type="button"
                       disabled={busyId === project.id}
                       onClick={() => void approve(project.id)}
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
+                        className={`${actionButtonBase} bg-emerald-600 text-white disabled:bg-gray-300`}
                     >
                       批准上架
                     </button>
@@ -258,7 +322,7 @@ export default function FeituanAdmin() {
                       type="button"
                       disabled={busyId === project.id}
                       onClick={() => void reject(project.id)}
-                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-50"
+                        className={`${actionButtonBase} border border-red-200 bg-red-50 text-red-700`}
                     >
                       驳回
                     </button>
@@ -268,7 +332,7 @@ export default function FeituanAdmin() {
                       type="button"
                       disabled={busyId === project.id}
                       onClick={() => void delist(project.id)}
-                      className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 disabled:opacity-50"
+                        className={`${actionButtonBase} border border-amber-200 bg-amber-50 text-amber-900`}
                     >
                       下架
                     </button>
@@ -276,29 +340,30 @@ export default function FeituanAdmin() {
                   {p.feituanStatus === 'listed' ? (
                     <Link
                       to={`/feituan/projects/${encodeURIComponent(project.id)}`}
-                      className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-900"
+                        className={`${actionButtonBase} border border-orange-200 bg-orange-50 text-orange-900`}
                     >
                       查看饭团页
                     </Link>
                   ) : null}
                   <Link
                     to={`/admin/feituan/costs/${encodeURIComponent(project.id)}`}
-                    className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-900"
+                      className={`${actionButtonBase} border border-indigo-200 bg-indigo-50 text-indigo-900`}
                   >
                     成本确认/更新
                   </Link>
                   <Link
                     to={`/admin/feituan/project-delivery/${encodeURIComponent(project.id)}`}
-                    className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-900"
+                      className={`${actionButtonBase} border border-orange-200 bg-orange-50 text-orange-900`}
                   >
                     配送
                   </Link>
+                </div>
                 </div>
               </article>
             );
           })}
         </div>
       )}
-    </PageShell>
+    </main>
   );
 }
