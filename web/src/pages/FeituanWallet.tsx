@@ -32,6 +32,20 @@ function requestStatusLabel(status: string): string {
   return status;
 }
 
+function requestStatusClass(status: string): string {
+  if (status === 'pending') return 'bg-amber-100 text-amber-900';
+  if (status === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (status === 'rejected') return 'bg-red-100 text-red-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
+function ledgerTypeLabel(type: string): string {
+  if (type === 'topup') return '充值入账';
+  if (type === 'order_payment') return '订单抵扣';
+  if (type === 'adjustment') return '人工调整';
+  return type;
+}
+
 export default function FeituanWallet() {
   const { user, loading: authLoading } = useAuthUser();
   const [account, setAccount] = useState<FeituanWalletAccountRow | null>(null);
@@ -62,11 +76,14 @@ export default function FeituanWallet() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user?.phoneNumber) {
-      setLoading(false);
-      return;
-    }
-    void refresh();
+    const timer = window.setTimeout(() => {
+      if (!user?.phoneNumber) {
+        setLoading(false);
+        return;
+      }
+      void refresh();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [authLoading, refresh, user?.phoneNumber]);
 
   const periodTotals = useMemo(() => {
@@ -77,6 +94,7 @@ export default function FeituanWallet() {
       .reduce((s, row) => s + Math.abs(Number(row.data.delta ?? 0)), 0);
     return { topupPay, topupBonus, spent };
   }, [ledger]);
+  const pendingRequests = requests.filter((row) => row.data.status === 'pending').length;
 
   if (authLoading || loading) {
     return (
@@ -130,6 +148,11 @@ export default function FeituanWallet() {
         >
           充值
         </Link>
+        {pendingRequests > 0 ? (
+          <p className="mt-2 rounded-lg bg-white/80 px-3 py-2 text-xs text-amber-900">
+            还有 {pendingRequests} 笔充值等待确认，管理员确认后会自动入账。
+          </p>
+        ) : null}
       </section>
 
       <section className="mb-4 rounded-xl border border-gray-100 bg-white p-3">
@@ -160,10 +183,24 @@ export default function FeituanWallet() {
                       赠送 {formatMYR(row.data.bonusAmount)} · {fmtTime(row.data.createdAt)}
                     </p>
                   </div>
-                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-700">
+                  <span className={`rounded-full px-2 py-0.5 ${requestStatusClass(row.data.status)}`}>
                     {requestStatusLabel(row.data.status)}
                   </span>
                 </div>
+                {row.data.rejectReason ? (
+                  <p className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-red-700">
+                    驳回原因：{row.data.rejectReason}
+                  </p>
+                ) : null}
+                {row.data.paymentScreenshots.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {row.data.paymentScreenshots.slice(0, 4).map((shot) => (
+                      <a key={shot.url} href={shot.url} target="_blank" rel="noreferrer">
+                        <img src={shot.url} alt="充值付款截图" className="h-12 w-12 rounded-md object-cover" />
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
@@ -183,9 +220,20 @@ export default function FeituanWallet() {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="font-semibold text-gray-900">
-                      {row.data.type === 'topup' ? '充值入账' : '订单抵扣'}
+                      {ledgerTypeLabel(row.data.type)}
                     </p>
                     <p className="mt-0.5 text-gray-500">{fmtTime(row.data.createdAt)}</p>
+                    {row.data.orderProjectId && row.data.orderNumber ? (
+                      <Link
+                        to={`/feituan/projects/${encodeURIComponent(row.data.orderProjectId)}/orders/${encodeURIComponent(row.data.orderNumber)}`}
+                        className="mt-1 inline-flex text-orange-600 underline-offset-2 hover:underline"
+                      >
+                        查看订单 #{row.data.orderNumber}
+                      </Link>
+                    ) : null}
+                    {row.data.note ? (
+                      <p className="mt-1 text-gray-500">{row.data.note}</p>
+                    ) : null}
                   </div>
                   <div className="text-right">
                     <p

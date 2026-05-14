@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
+import { useAuthUser } from '../../hooks/useAuthUser';
 import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { listOrdersByCustomer } from '../../lib/orderService';
+import { listFeituanOrdersForCustomer, listOrdersByCustomer } from '../../lib/orderService';
 import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
 import { buildPaymentGroups } from '../../lib/paymentGroups';
 import { listOrderCardPaymentApplications } from '../../lib/orderCardPaymentApplications';
+import { getWechatNotifyOAuthStateId } from '../../lib/wechatService';
 import {
   deriveDisplayOrderStatus,
   sumGroupAmountByStatus,
@@ -86,6 +88,7 @@ function uploadHint(o: OrderDoc): { text: string; className: string } | null {
 
 export default function MyOrders() {
   useWechatNotifySession();
+  const { user, loading: authLoading } = useAuthUser();
   const { shopSlug = '', projectId = '' } = useParams<{
     shopSlug?: string;
     projectId: string;
@@ -99,19 +102,27 @@ export default function MyOrders() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isFeituanOrders && authLoading) return;
     let cancelled = false;
     queueMicrotask(() => {
       const customerKey = getOrCreateCustomerKey();
       setLoading(true);
       setError(null);
-      void listOrdersByCustomer(projectId, customerKey)
+      const pending = isFeituanOrders
+        ? listFeituanOrdersForCustomer({
+            customerKey,
+            customerUserId: user?.phoneNumber ? user.uid : undefined,
+            wechatNotifyOAuthStateId: getWechatNotifyOAuthStateId(),
+          })
+        : listOrdersByCustomer(projectId, customerKey);
+      void pending
         .then((rows) => {
           if (cancelled) return;
           setOrders(
             rows
               .filter((row) =>
                 isFeituanOrders
-                  ? row.data.channel === 'feituan'
+                  ? row.data.channel === 'feituan' && row.data.projectId === projectId
                   : row.data.shopSlug === shopSlug
               )
               .map((row) => row.data)
@@ -129,7 +140,7 @@ export default function MyOrders() {
     return () => {
       cancelled = true;
     };
-  }, [isFeituanOrders, projectId, shopSlug]);
+  }, [authLoading, isFeituanOrders, projectId, shopSlug, user]);
 
   if (loading) {
     return (

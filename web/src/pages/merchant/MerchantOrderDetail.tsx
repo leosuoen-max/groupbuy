@@ -34,9 +34,11 @@ import {
   cardApplicationsForAppendBatch,
   listOrderCardPaymentApplications,
 } from '../../lib/orderCardPaymentApplications';
+import { listOrderFeituanWalletPaymentApplications } from '../../lib/orderFeituanWalletApplications';
 import type {
   OrderAppendBatchDoc,
   OrderCardPaymentDoc,
+  OrderFeituanWalletPaymentDoc,
   OrderDoc,
   OrderLineDoc,
 } from '../../types/firestore';
@@ -151,6 +153,27 @@ function CardPaymentBreakdown({
   );
 }
 
+function FeituanWalletPaymentBreakdown({
+  payment,
+  title = '本组为饭团钱包自动确认（无需截图）',
+}: {
+  payment: OrderFeituanWalletPaymentDoc;
+  title?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900">
+      <p className="font-semibold">{title}</p>
+      <p className="mt-1">钱包抵扣 {formatMYR(payment.deduct)}</p>
+      <p className="mt-0.5 text-orange-800">
+        钱包 #{payment.walletId.slice(0, 6)} · 用户 {payment.userId.slice(0, 8)}…
+      </p>
+      <p className="mt-0.5 text-orange-800">
+        时间：{payment.appliedAt?.toDate?.().toLocaleString() ?? '—'}
+      </p>
+    </div>
+  );
+}
+
 function ConfirmedAppendBatchCard({
   order,
   batch,
@@ -166,7 +189,9 @@ function ConfirmedAppendBatchCard({
 }) {
   const hasBatchProof = hasPaymentScreenshotForAppendBatch(paymentScreenshots, batch.id);
   const isCardAutoConfirmed = batch.confirmedByUserId === 'customer_card_auto';
+  const isWalletAutoConfirmed = batch.confirmedByUserId === 'feituan_wallet_auto';
   const allCardApps = listOrderCardPaymentApplications(order);
+  const allWalletApps = listOrderFeituanWalletPaymentApplications(order);
   let batchCardApps = cardApplicationsForAppendBatch(order, batch.id);
   if (
     batchCardApps.length === 0 &&
@@ -175,6 +200,9 @@ function ConfirmedAppendBatchCard({
   ) {
     batchCardApps = allCardApps;
   }
+  const batchWalletApps = allWalletApps.filter((app) =>
+    app.paymentGroupScope.confirmedAppendBatchIds.includes(batch.id)
+  );
   return (
     <div className="rounded-xl border border-gray-200 bg-white px-3 py-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -221,6 +249,20 @@ function ConfirmedAppendBatchCard({
                 title={
                   batchCardApps.length > 1
                     ? `本组卡支付自动确认（第 ${i + 1} 笔）`
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+        ) : isWalletAutoConfirmed && !hasBatchProof && batchWalletApps.length > 0 ? (
+          <div className="space-y-2">
+            {batchWalletApps.map((payment, i) => (
+              <FeituanWalletPaymentBreakdown
+                key={`${payment.appliedAt?.toMillis?.() ?? 0}-${i}`}
+                payment={payment}
+                title={
+                  batchWalletApps.length > 1
+                    ? `本组饭团钱包自动确认（第 ${i + 1} 笔）`
                     : undefined
                 }
               />
@@ -558,11 +600,18 @@ export default function MerchantOrderDetail({
   const firstPaymentAcknowledged = !!order.initialPaymentConfirmedAt;
 
   const cardAppsAll = listOrderCardPaymentApplications(order);
+  const feituanWalletAppsAll = listOrderFeituanWalletPaymentApplications(order);
   let initialSegmentCardApps = cardAppsAll.filter((a) =>
     Boolean(a.cardSettlementScope?.includesInitialSegment)
   );
   if (initialSegmentCardApps.length === 0 && cardAppsAll.length === 1) {
     initialSegmentCardApps = cardAppsAll;
+  }
+  let initialSegmentWalletApps = feituanWalletAppsAll.filter((a) =>
+    Boolean(a.paymentGroupScope?.includesInitialSegment)
+  );
+  if (initialSegmentWalletApps.length === 0 && feituanWalletAppsAll.length === 1) {
+    initialSegmentWalletApps = feituanWalletAppsAll;
   }
 
   const confirmedBatches = appendBatches
@@ -1061,6 +1110,22 @@ export default function MerchantOrderDetail({
                       />
                     ))}
                   </div>
+                ) : initialSegmentWalletApps.length > 0 &&
+                firstPaymentAcknowledged &&
+                !firstGroupHasProof ? (
+                  <div className="space-y-2">
+                    {initialSegmentWalletApps.map((payment, i) => (
+                      <FeituanWalletPaymentBreakdown
+                        key={`${payment.appliedAt?.toMillis?.() ?? 0}-${i}`}
+                        payment={payment}
+                        title={
+                          initialSegmentWalletApps.length > 1
+                            ? `本组饭团钱包自动确认（第 ${i + 1} 笔）`
+                            : undefined
+                        }
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <PaymentScreenshotsPanel
                     paymentScreenshots={order.paymentScreenshots}
@@ -1196,6 +1261,22 @@ export default function MerchantOrderDetail({
                       共抵扣 RM {Number(cp.totalDeducted ?? 0).toFixed(2)}
                     </li>
                   </ul>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {feituanWalletAppsAll.length > 0 ? (
+            <div className="mt-2 space-y-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900">
+              <p className="font-semibold">饭团钱包抵扣记录</p>
+              {feituanWalletAppsAll.map((payment, i) => (
+                <div
+                  key={`sum-feituan-wallet-${i}-${payment.appliedAt?.toMillis?.() ?? 0}`}
+                  className="flex flex-wrap justify-between gap-2"
+                >
+                  <span>
+                    第 {i + 1} 笔 · {payment.appliedAt?.toDate?.().toLocaleString() ?? '—'}
+                  </span>
+                  <span className="font-semibold">{formatMYR(payment.deduct)}</span>
                 </div>
               ))}
             </div>

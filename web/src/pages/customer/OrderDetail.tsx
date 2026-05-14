@@ -386,7 +386,7 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (!order?.shopSlug) {
-      setShopPaymentMethods([]);
+      queueMicrotask(() => setShopPaymentMethods([]));
       return;
     }
     let cancelled = false;
@@ -469,23 +469,26 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (!canCardPay || !order || !projectDoc) {
-      setCardPlan(null);
+      queueMicrotask(() => setCardPlan(null));
       return;
     }
     let cancelled = false;
-    setCardPlanLoading(true);
-    void planCardPayment(order, projectDoc, customerKey, {
-      customerUserId: user?.uid,
-    })
-      .then((plan) => {
-        if (!cancelled) setCardPlan(plan);
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setCardPlanLoading(true);
+      void planCardPayment(order, projectDoc, customerKey, {
+        customerUserId: user?.uid,
       })
-      .catch(() => {
-        if (!cancelled) setCardPlan(null);
-      })
-      .finally(() => {
-        if (!cancelled) setCardPlanLoading(false);
-      });
+        .then((plan) => {
+          if (!cancelled) setCardPlan(plan);
+        })
+        .catch(() => {
+          if (!cancelled) setCardPlan(null);
+        })
+        .finally(() => {
+          if (!cancelled) setCardPlanLoading(false);
+        });
+    });
     return () => {
       cancelled = true;
     };
@@ -493,20 +496,23 @@ export default function OrderDetail() {
 
   useEffect(() => {
     if (!canFeituanWalletPay || !order || authLoading || !user?.phoneNumber) {
-      setFeituanWalletPlan(null);
+      queueMicrotask(() => setFeituanWalletPlan(null));
       return;
     }
     let cancelled = false;
-    setFeituanWalletPlanLoading(true);
-    void planFeituanWalletPayment(order, user.uid)
-      .then((plan) => {
-        if (!cancelled) setFeituanWalletPlan(plan);
-      })
-      .catch(() => {
-        if (!cancelled) setFeituanWalletPlan(null);
-      })
-      .finally(() => {
-        if (!cancelled) setFeituanWalletPlanLoading(false);
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setFeituanWalletPlanLoading(true);
+      void planFeituanWalletPayment(order, user.uid)
+        .then((plan) => {
+          if (!cancelled) setFeituanWalletPlan(plan);
+        })
+        .catch(() => {
+          if (!cancelled) setFeituanWalletPlan(null);
+        })
+        .finally(() => {
+          if (!cancelled) setFeituanWalletPlanLoading(false);
+        });
       });
     return () => {
       cancelled = true;
@@ -548,10 +554,9 @@ export default function OrderDetail() {
     order,
     projectDoc,
     cardPlan,
-    orderRow?.id,
+    orderRow,
     customerKey,
-    user?.uid,
-    user?.phoneNumber,
+    user,
     applyOrderRow,
   ]);
 
@@ -580,11 +585,10 @@ export default function OrderDetail() {
     } finally {
       setFeituanWalletPaying(false);
     }
-  }, [applyOrderRow, customerKey, feituanWalletPlan, order, orderRow?.id, user?.uid]);
+  }, [applyOrderRow, customerKey, feituanWalletPlan, order, orderRow, user]);
 
   const canEditContact =
     !!order &&
-    order.channel !== 'feituan' &&
     projectOpen &&
     order.status !== 'cancelled' &&
     ['unpaid', 'pending', 'confirmed', 'partial_paid'].includes(order.status);

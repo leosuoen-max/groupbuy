@@ -42,6 +42,13 @@ function statusLabel(status: string): string {
   return status;
 }
 
+function statusClass(status: string): string {
+  if (status === 'pending') return 'bg-amber-100 text-amber-900';
+  if (status === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (status === 'rejected') return 'bg-red-100 text-red-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
 export default function FeituanWalletAdmin() {
   const { user, loading: authLoading } = useAuthUser();
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -56,6 +63,9 @@ export default function FeituanWalletAdmin() {
   const [selectedLedger, setSelectedLedger] = useState<FeituanWalletLedgerRow[]>([]);
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
+  const [requestFilter, setRequestFilter] = useState('pending');
+  const [requestSearch, setRequestSearch] = useState('');
+  const [accountSearch, setAccountSearch] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [uploadingMethodId, setUploadingMethodId] = useState<string | null>(null);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -87,17 +97,20 @@ export default function FeituanWalletAdmin() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) {
-      setAllowed(false);
-      setLoading(false);
-      return;
-    }
-    void refresh();
+    const timer = window.setTimeout(() => {
+      if (!user) {
+        setAllowed(false);
+        setLoading(false);
+        return;
+      }
+      void refresh();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [authLoading, refresh, user]);
 
   useEffect(() => {
     if (!selectedUserId) {
-      setSelectedLedger([]);
+      queueMicrotask(() => setSelectedLedger([]));
       return;
     }
     let cancelled = false;
@@ -201,6 +214,34 @@ export default function FeituanWalletAdmin() {
   const totalBonus = accounts.reduce((sum, row) => sum + Number(row.data.totalBonusAmount ?? 0), 0);
   const totalSpent = accounts.reduce((sum, row) => sum + Number(row.data.totalSpentAmount ?? 0), 0);
   const selectedAccount = accounts.find((row) => row.id === selectedUserId) ?? null;
+  const filteredRequests = [...requests]
+    .filter((row) => (requestFilter === 'all' ? true : row.data.status === requestFilter))
+    .filter((row) => {
+      const kw = requestSearch.trim().toLowerCase();
+      if (!kw) return true;
+      return [
+        row.id,
+        row.data.userId,
+        row.data.phoneMasked,
+        row.data.phoneE164,
+        row.data.rejectReason,
+      ]
+        .filter(Boolean)
+        .some((x) => String(x).toLowerCase().includes(kw));
+    })
+    .sort((a, b) => {
+      const ap = a.data.status === 'pending' ? 1 : 0;
+      const bp = b.data.status === 'pending' ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.data.createdAt?.toMillis?.() ?? 0) - (a.data.createdAt?.toMillis?.() ?? 0);
+    });
+  const filteredAccounts = accounts.filter((row) => {
+    const kw = accountSearch.trim().toLowerCase();
+    if (!kw) return true;
+    return [row.id, row.data.userId, row.data.phoneMasked, row.data.phoneE164]
+      .filter(Boolean)
+      .some((x) => String(x).toLowerCase().includes(kw));
+  });
   const rangeStartMs = rangeStart ? new Date(`${rangeStart}T00:00:00`).getTime() : 0;
   const rangeEndMs = rangeEnd ? new Date(`${rangeEnd}T23:59:59.999`).getTime() : Number.MAX_SAFE_INTEGER;
   const ledgerAsc = [...selectedLedger].sort(
@@ -441,20 +482,58 @@ export default function FeituanWalletAdmin() {
       </section>
 
       <section className="mb-5">
-        <h2 className="mb-2 text-sm font-semibold text-gray-900">充值申请</h2>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-900">充值申请</h2>
+          <span className="text-xs text-gray-500">当前显示 {filteredRequests.length} 笔</span>
+        </div>
+        <div className="mb-3 space-y-2 rounded-xl border border-gray-100 bg-white p-3">
+          <div className="grid grid-cols-4 gap-1.5">
+            {[
+              ['pending', '待确认'],
+              ['all', '全部'],
+              ['confirmed', '已入账'],
+              ['rejected', '已驳回'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setRequestFilter(id)}
+                className={`rounded-lg px-2 py-2 text-xs font-semibold ${
+                  requestFilter === id ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <input
+            value={requestSearch}
+            onChange={(e) => setRequestSearch(e.target.value)}
+            className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm"
+            placeholder="搜索手机号、用户 ID、驳回原因"
+          />
+        </div>
         <div className="space-y-2">
-          {requests.map((row) => (
+          {filteredRequests.map((row) => (
             <article key={row.id} className="rounded-xl border border-gray-100 bg-white p-3 text-xs">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
-                  <p className="font-semibold text-gray-900">
-                    {row.data.phoneMasked ?? row.data.userId} · {statusLabel(row.data.status)}
+                  <p className="flex flex-wrap items-center gap-2 font-semibold text-gray-900">
+                    <span>{row.data.phoneMasked ?? row.data.userId}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusClass(row.data.status)}`}>
+                      {statusLabel(row.data.status)}
+                    </span>
                   </p>
                   <p className="mt-1 text-gray-600">
                     实付 {formatMYR(row.data.payAmount)} · 赠送 {formatMYR(row.data.bonusAmount)} · 入账{' '}
                     {formatMYR(row.data.creditAmount)} · {fmtTime(row.data.createdAt)}
                   </p>
                   <p className="mt-1 text-gray-500">截图 {row.data.paymentScreenshots.length} 张</p>
+                  {row.data.rejectReason ? (
+                    <p className="mt-1 rounded-lg bg-red-50 px-2 py-1 text-red-700">
+                      驳回原因：{row.data.rejectReason}
+                    </p>
+                  ) : null}
                 </div>
                 {row.data.status === 'pending' ? (
                   <div className="flex gap-2">
@@ -481,20 +560,33 @@ export default function FeituanWalletAdmin() {
                 <div className="mt-2 flex flex-wrap gap-2">
                   {row.data.paymentScreenshots.map((shot) => (
                     <a key={shot.url} href={shot.url} target="_blank" rel="noreferrer">
-                      <img src={shot.url} alt="" className="h-14 w-14 rounded-md object-cover" />
+                      <img src={shot.url} alt="充值付款截图" className="h-20 w-20 rounded-md object-cover" />
                     </a>
                   ))}
                 </div>
               ) : null}
             </article>
           ))}
+          {filteredRequests.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500">
+              当前筛选下没有充值申请。
+            </p>
+          ) : null}
         </div>
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-gray-900">用户钱包汇总</h2>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-gray-900">用户钱包汇总</h2>
+          <input
+            value={accountSearch}
+            onChange={(e) => setAccountSearch(e.target.value)}
+            className="h-9 min-w-0 flex-1 rounded-lg border border-gray-200 px-3 text-sm sm:max-w-xs"
+            placeholder="搜索手机号或用户 ID"
+          />
+        </div>
         <div className="space-y-2">
-          {accounts.map((row) => (
+          {filteredAccounts.map((row) => (
             <article key={row.id} className="rounded-xl border border-gray-100 bg-white p-3 text-xs">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
@@ -519,6 +611,11 @@ export default function FeituanWalletAdmin() {
               </button>
             </article>
           ))}
+          {filteredAccounts.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500">
+              未找到匹配的钱包账户。
+            </p>
+          ) : null}
         </div>
       </section>
 
