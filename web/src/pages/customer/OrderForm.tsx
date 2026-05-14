@@ -14,6 +14,7 @@ import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
 import { withTimeout } from '../../lib/withTimeout';
+import { getWechatNotifyOAuthStateId } from '../../lib/wechatService';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
 
@@ -358,6 +359,7 @@ export default function OrderForm() {
           isFeituanOrder && user?.phoneNumber
             ? `****${user.phoneNumber.replace(/\D/g, '').slice(-4)}`
             : undefined,
+        wechatNotifyOAuthStateId: getWechatNotifyOAuthStateId(),
         customerName: name.trim(),
         customerPhone: phone.trim(),
         customerAddress: addrOut,

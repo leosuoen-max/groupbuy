@@ -58,6 +58,14 @@ function makeState() {
   return crypto.randomBytes(18).toString('base64url');
 }
 
+function appendQuery(path, params) {
+  const url = new URL(String(path || '/'), 'https://local.invalid');
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value != null && value !== '') url.searchParams.set(key, String(value));
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 function escapeHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -290,6 +298,7 @@ exports.wechatOAuthStart = onRequest(
     const origin = getAppOrigin();
     const state = makeState();
     const returnTo = safeReturnTo(req.query.returnTo, '/account');
+    const mode = String(req.query.mode || '').trim() === 'session' ? 'session' : 'account_bind';
     const scope = String(req.query.scope || 'snsapi_base').trim() === 'snsapi_userinfo'
       ? 'snsapi_userinfo'
       : 'snsapi_base';
@@ -297,8 +306,10 @@ exports.wechatOAuthStart = onRequest(
     await admin.firestore().collection('wechat_oauth_states').doc(state).set({
       state,
       returnTo,
+      mode,
       scope,
       status: 'started',
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 500),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
@@ -350,6 +361,7 @@ exports.wechatOAuthCallback = onRequest(
     }
     const stateData = stateSnap.data() || {};
     const returnTo = safeReturnTo(stateData.returnTo, '/account');
+    const isSessionMode = stateData.mode === 'session';
 
     try {
       const tokenUrl =
@@ -372,7 +384,12 @@ exports.wechatOAuthCallback = onRequest(
           },
           { merge: true }
         );
-        res.redirect(302, `${origin}/account?wechat=failed&reason=wechat&returnTo=${encodeURIComponent(returnTo)}`);
+        res.redirect(
+          302,
+          isSessionMode
+            ? `${origin}${appendQuery(returnTo, { wechat: 'session_failed' })}`
+            : `${origin}/account?wechat=failed&reason=wechat&returnTo=${encodeURIComponent(returnTo)}`
+        );
         return;
       }
 
@@ -388,6 +405,17 @@ exports.wechatOAuthCallback = onRequest(
         { merge: true }
       );
 
+      if (isSessionMode) {
+        res.redirect(
+          302,
+          `${origin}${appendQuery(returnTo, {
+            wechat: 'session',
+            wechatSessionId: state,
+          })}`
+        );
+        return;
+      }
+
       res.redirect(
         302,
         `${origin}/account?wechat=authorized&wechatBindCode=${encodeURIComponent(state)}&returnTo=${encodeURIComponent(returnTo)}`
@@ -402,7 +430,12 @@ exports.wechatOAuthCallback = onRequest(
         },
         { merge: true }
       );
-      res.redirect(302, `${origin}/account?wechat=failed&reason=exception&returnTo=${encodeURIComponent(returnTo)}`);
+      res.redirect(
+        302,
+        isSessionMode
+          ? `${origin}${appendQuery(returnTo, { wechat: 'session_failed' })}`
+          : `${origin}/account?wechat=failed&reason=exception&returnTo=${encodeURIComponent(returnTo)}`
+      );
     }
   }
 );

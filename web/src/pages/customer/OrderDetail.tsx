@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
@@ -210,6 +211,7 @@ function buildDeliveryUpdateFromDraft(
 }
 
 export default function OrderDetail() {
+  useWechatNotifySession();
   const { user, loading: authLoading } = useAuthUser();
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
     shopSlug?: string;

@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { PageShell } from '../../components/PageShell';
-import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
-import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
-import { formatMYR } from '../../lib/formatMYR';
-import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
-import { listOrdersByCustomer } from '../../lib/orderService';
-import { orderHasPaymentScreenshots } from '../../lib/paymentScreenshotHelpers';
-import { buildPaymentGroups } from '../../lib/paymentGroups';
-import { listOrderCardPaymentApplications } from '../../lib/orderCardPaymentApplications';
-import {
-  deriveDisplayOrderStatus,
-  sumGroupAmountByStatus,
-} from '../../lib/paymentGroupView';
-import type { OrderDoc, OrderStatus } from '../../types/firestore';
+import { Link } from 'react-router-dom';
+import { PageShell } from '../components/PageShell';
+import { useAuthUser } from '../hooks/useAuthUser';
+import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
+import { getOrCreateCustomerKey } from '../lib/customerIdentity';
+import { toLoadErrorMessage } from '../lib/firebaseErrorMessage';
+import { formatMYR } from '../lib/formatMYR';
+import { buildPaymentGroups } from '../lib/paymentGroups';
+import { deriveDisplayOrderStatus, sumGroupAmountByStatus } from '../lib/paymentGroupView';
+import { orderHasPaymentScreenshots } from '../lib/paymentScreenshotHelpers';
+import { listFeituanOrdersForCustomer, type OrderRow } from '../lib/orderService';
+import { getWechatNotifyOAuthStateId } from '../lib/wechatService';
+import type { OrderDoc, OrderStatus } from '../types/firestore';
 
 function summarizeLines(o: OrderDoc): string {
   return o.lines.map((l) => `${l.name}×${l.quantity}`).join(' + ');
@@ -84,56 +82,42 @@ function uploadHint(o: OrderDoc): { text: string; className: string } | null {
   return null;
 }
 
-export default function MyOrders() {
+export default function FeituanMyOrders() {
   useWechatNotifySession();
-  const { shopSlug = '', projectId = '' } = useParams<{
-    shopSlug?: string;
-    projectId: string;
-  }>();
-  const isFeituanOrders = !shopSlug;
-  const base = isFeituanOrders
-    ? `/feituan/projects/${encodeURIComponent(projectId)}`
-    : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
-  const [orders, setOrders] = useState<OrderDoc[]>([]);
+  const { user, loading: authLoading } = useAuthUser();
+  const [rows, setRows] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
     let cancelled = false;
     queueMicrotask(() => {
-      const customerKey = getOrCreateCustomerKey();
       setLoading(true);
       setError(null);
-      void listOrdersByCustomer(projectId, customerKey)
-        .then((rows) => {
-          if (cancelled) return;
-          setOrders(
-            rows
-              .filter((row) =>
-                isFeituanOrders
-                  ? row.data.channel === 'feituan'
-                  : row.data.shopSlug === shopSlug
-              )
-              .map((row) => row.data)
-          );
+      void listFeituanOrdersForCustomer({
+        customerKey: getOrCreateCustomerKey(),
+        customerUserId: user?.phoneNumber ? user.uid : undefined,
+        wechatNotifyOAuthStateId: getWechatNotifyOAuthStateId(),
+      })
+        .then((nextRows) => {
+          if (!cancelled) setRows(nextRows);
         })
         .catch((err: unknown) => {
-          if (cancelled) return;
-          setError(toLoadErrorMessage(err, '加载订单失败，请重试。'));
+          if (!cancelled) setError(toLoadErrorMessage(err, '加载饭团订单失败，请重试。'));
         })
         .finally(() => {
-          if (cancelled) return;
-          setLoading(false);
+          if (!cancelled) setLoading(false);
         });
     });
     return () => {
       cancelled = true;
     };
-  }, [isFeituanOrders, projectId, shopSlug]);
+  }, [authLoading, user]);
 
   if (loading) {
     return (
-      <PageShell title="我的订单" subtitle="加载中">
+      <PageShell title="我的饭团订单" subtitle="加载中">
         <p className="text-sm text-gray-600">正在读取订单…</p>
       </PageShell>
     );
@@ -141,30 +125,36 @@ export default function MyOrders() {
 
   if (error) {
     return (
-      <PageShell title="我的订单" subtitle="加载失败">
+      <PageShell title="我的饭团订单" subtitle="加载失败">
         <p className="text-sm text-red-600">{error}</p>
       </PageShell>
     );
   }
 
   return (
-    <PageShell title="我的订单" subtitle={orders.length ? `共 ${orders.length} 单` : '暂无订单'}>
-      {orders.length === 0 ? (
+    <PageShell title="我的饭团订单" subtitle={rows.length ? `共 ${rows.length} 单` : '暂无订单'}>
+      {rows.length === 0 ? (
         <div className="space-y-3 text-sm text-gray-600">
-          <p>还没有订单，先下一单吧。</p>
+          <p>还没有饭团订单。微信里从服务号进入饭团下单后，这里会显示你的订单。</p>
           <Link
-            className="inline-flex h-11 items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white"
-            to={base}
+            className="inline-flex h-11 items-center justify-center rounded-xl bg-orange-600 px-4 text-sm font-semibold text-white"
+            to="/feituan"
           >
-            去选菜下单
+            去大马饭团
           </Link>
         </div>
       ) : (
         <div className="space-y-3">
           <ul className="space-y-3">
-            {orders.map((o) => {
+            {rows.map(({ id, data: o }) => {
               const t = o.createdAt?.toDate?.() ?? new Date();
-              const hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+              const dateText = t.toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              });
               const st = deriveDisplayOrderStatus(o);
               const groups = buildPaymentGroups(o);
               const confirmedAmount = sumGroupAmountByStatus(groups, 'confirmed');
@@ -172,63 +162,38 @@ export default function MyOrders() {
               const styles = statusCard[st] ?? statusCard.unpaid;
               const upload = uploadHint(o);
               return (
-                <li
-                  key={`${o.orderNumber}-${t.getTime()}`}
-                  className={cardClasses(st)}
-                >
+                <li key={id} className={cardClasses(st)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold text-gray-900">
                           订单 #{o.orderNumber}{' '}
-                          <span className="font-normal text-gray-500">{hm}</span>
+                          <span className="font-normal text-gray-500">{dateText}</span>
                         </div>
-                        <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.pill}`}
-                        >
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${styles.pill}`}>
                           {statusLabel[st] ?? st}
                         </span>
                         {upload ? (
-                          <span
-                            className={`text-[11px] font-medium ${upload.className}`}
-                          >
+                          <span className={`text-[11px] font-medium ${upload.className}`}>
                             {upload.text}
                           </span>
                         ) : null}
-                        {listOrderCardPaymentApplications(o).length > 0 ? (
-                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
-                            卡支付
-                          </span>
-                        ) : null}
                       </div>
-                      <p className="mt-1 line-clamp-2 text-xs text-gray-600">
-                        {summarizeLines(o)}
+                      <p className="mt-1 text-xs font-medium text-gray-700">
+                        {o.projectTitle || '饭团项目'}
                       </p>
+                      <p className="mt-1 line-clamp-2 text-xs text-gray-600">{summarizeLines(o)}</p>
                       <p className="mt-1 text-sm font-medium text-gray-900">
                         总计 {formatMYR(o.totalAmount)}
                       </p>
-                      {(confirmedAmount > 0 || unpaidAmount > 0) &&
-                      o.status !== 'cancelled' ? (
+                      {(confirmedAmount > 0 || unpaidAmount > 0) && o.status !== 'cancelled' ? (
                         <p className="mt-0.5 text-[11px] text-gray-600">
                           已付 {formatMYR(confirmedAmount)} · 待付 {formatMYR(unpaidAmount)}
                         </p>
                       ) : null}
-                      {o.status === 'unpaid' && o.timedPromoPaymentDueAt ? (
-                        <p className="mt-0.5 text-[11px] text-amber-700">
-                          含限时优惠，请在30分钟内付款（截止{' '}
-                          {o.timedPromoPaymentDueAt.toDate().toLocaleString('zh-CN', {
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: false,
-                          })}
-                          ）
-                        </p>
-                      ) : null}
                     </div>
                     <Link
-                      to={`${base}/orders/${encodeURIComponent(o.orderNumber)}`}
+                      to={`/feituan/projects/${encodeURIComponent(o.projectId)}/orders/${encodeURIComponent(o.orderNumber)}`}
                       className="shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white"
                     >
                       查看详情
@@ -239,10 +204,10 @@ export default function MyOrders() {
             })}
           </ul>
           <Link
-            to={base}
+            to="/feituan"
             className="flex h-11 w-full items-center justify-center rounded-xl border border-dashed border-gray-300 text-sm font-medium text-gray-800"
           >
-            + 下新订单
+            + 继续逛饭团
           </Link>
         </div>
       )}

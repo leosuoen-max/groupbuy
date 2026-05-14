@@ -65,6 +65,7 @@ export type CreateOrderInput = {
   customerKey: string;
   customerUserId?: string;
   customerPhoneMasked?: string | null;
+  wechatNotifyOAuthStateId?: string | null;
   customerName: string;
   customerPhone: string;
   customerAddress: string;
@@ -311,6 +312,12 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       customerKey: input.customerKey,
       ...(input.customerUserId ? { customerUserId: input.customerUserId } : {}),
       ...(input.customerPhoneMasked ? { customerPhoneMasked: input.customerPhoneMasked } : {}),
+      ...(input.wechatNotifyOAuthStateId?.trim()
+        ? {
+            wechatNotifyOAuthStateId: input.wechatNotifyOAuthStateId.trim(),
+            wechatNotifyAttachedAt: Timestamp.now(),
+          }
+        : {}),
       customerName: input.customerName,
       customerPhone: input.customerPhone,
       customerAddress: input.customerAddress,
@@ -433,6 +440,46 @@ export async function listOrdersByCustomer(projectId: string, customerKey: strin
       });
     }
   }
+}
+
+export async function listFeituanOrdersForCustomer(input: {
+  customerKey: string;
+  customerUserId?: string;
+  wechatNotifyOAuthStateId?: string | null;
+}): Promise<OrderRow[]> {
+  const db = getDb();
+  const seen = new Map<string, OrderRow>();
+
+  async function addRowsBy(field: string, value: string | null | undefined) {
+    const v = value?.trim();
+    if (!v) return;
+    const snap = await getDocs(query(collection(db, 'orders'), where(field, '==', v)));
+    for (const d of snap.docs) {
+      const data = d.data() as OrderDoc;
+      if (data.channel !== 'feituan') continue;
+      seen.set(d.id, { id: d.id, data });
+    }
+  }
+
+  await Promise.all([
+    addRowsBy('customerKey', input.customerKey),
+    addRowsBy('customerUserId', input.customerUserId),
+    addRowsBy('wechatNotifyOAuthStateId', input.wechatNotifyOAuthStateId),
+  ]);
+
+  const rows = [...seen.values()].sort((a, b) => {
+    const ta = a.data.createdAt?.toMillis?.() ?? 0;
+    const tb = b.data.createdAt?.toMillis?.() ?? 0;
+    return tb - ta;
+  });
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const orderRef = doc(db, 'orders', row.id);
+      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+    })
+  );
+  return rows;
 }
 
 async function md5DuplicateInShopOtherOrders(

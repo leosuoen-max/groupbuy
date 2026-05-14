@@ -609,6 +609,9 @@ export type OrderDoc = {
   /** 手机号验证用户；饭团钱包抵扣时必须写入/校验 */
   customerUserId?: string;
   customerPhoneMasked?: string | null;
+  /** 微信内静默 OAuth 通知会话；后端发送订单通知时用它解析 openid */
+  wechatNotifyOAuthStateId?: string;
+  wechatNotifyAttachedAt?: Timestamp;
   customerName: string;
   customerPhone: string;
   customerAddress: string;

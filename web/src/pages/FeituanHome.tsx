@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
+import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
 import { getShopById, type ShopRow } from '../lib/shopService';
@@ -25,6 +26,7 @@ async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRo
 }
 
 export default function FeituanHome() {
+  useWechatNotifySession();
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [rows, setRows] = useState<Array<{ project: ProjectRow; shop: ShopRow | null }>>([]);
@@ -61,6 +63,12 @@ export default function FeituanHome() {
           className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-900"
         >
           饭团钱包
+        </Link>
+        <Link
+          to="/feituan/my-orders"
+          className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm font-medium text-orange-900"
+        >
+          我的订单
         </Link>
         <Link
           to="/feituan/account"

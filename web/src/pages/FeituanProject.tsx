@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
+import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { getProject, type ProjectRow } from '../lib/projectService';
 import { getShopById, type ShopRow } from '../lib/shopService';
 import { formatMYR } from '../lib/formatMYR';
@@ -115,6 +116,7 @@ function getSeriesRequiredCount(
 }
 
 export default function FeituanProject() {
+  useWechatNotifySession();
   const { projectId = '' } = useParams<{ projectId: string }>();
   const [searchParams] = useSearchParams();
   const appendOrderNumber = searchParams.get('appendOrder')?.trim() ?? '';
