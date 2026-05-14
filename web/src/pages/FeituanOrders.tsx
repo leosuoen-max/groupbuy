@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
+import { EmptyStateCard } from '../components/ui/EmptyStateCard';
+import { StatusChip } from '../components/ui/StatusChip';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { isFeituanAdmin } from '../lib/feituanService';
 import { formatMYR } from '../lib/formatMYR';
-import {
-  listFeituanOrders,
-  merchantConfirmPaymentGroup,
-  type OrderRow,
-} from '../lib/orderService';
+import { listFeituanOrders, type OrderRow } from '../lib/orderService';
 import { buildPaymentGroups, type PaymentGroup } from '../lib/paymentGroups';
 import { deriveDisplayOrderStatus } from '../lib/paymentGroupView';
+import {
+  orderHasPaymentProof,
+  orderHasPaymentScreenshots,
+} from '../lib/paymentScreenshotHelpers';
 import type { OrderStatus } from '../types/firestore';
 
 type TabId = 'all' | 'unpaid' | 'open' | 'done' | 'cancelled';
@@ -33,18 +35,11 @@ function tabMatches(view: FeituanOrderView, tab: TabId): boolean {
   return true;
 }
 
-function statusTone(s: OrderStatus): string {
-  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
-  if (s === 'pending') return 'bg-indigo-100 text-indigo-900';
-  if (s === 'unpaid' || s === 'partial_paid') return 'bg-amber-100 text-amber-900';
-  return 'bg-gray-200 text-gray-700';
-}
-
-function groupStatusLabel(s: PaymentGroup['status']): string {
-  if (s === 'unpaid') return '待付款';
-  if (s === 'pending') return '待确认';
-  if (s === 'confirmed') return '已确认';
-  return s;
+function toChipTone(s: OrderStatus): 'confirmed' | 'pending' | 'unpaid' | 'cancelled' {
+  if (s === 'confirmed') return 'confirmed';
+  if (s === 'pending') return 'pending';
+  if (s === 'unpaid' || s === 'partial_paid') return 'unpaid';
+  return 'cancelled';
 }
 
 function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
@@ -72,7 +67,6 @@ export default function FeituanOrders() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('all');
   const [keyword, setKeyword] = useState('');
 
@@ -190,20 +184,6 @@ export default function FeituanOrders() {
     [orderViews]
   );
 
-  const confirm = async (row: OrderRow, groupId: string) => {
-    if (!user) return;
-    setBusyId(`${row.id}:${groupId}`);
-    setErr(null);
-    try {
-      await merchantConfirmPaymentGroup(row.id, groupId, user.uid);
-      await refresh();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '确认失败');
-    } finally {
-      setBusyId(null);
-    }
-  };
-
   if (authLoading || loading) {
     return (
       <PageShell title="饭团订单" subtitle="加载中">
@@ -251,57 +231,71 @@ export default function FeituanOrders() {
       title="饭团订单"
       subtitle={`全部 ${counts.all} · 待确认 ${counts.pending} · 待付款 ${counts.unpaid}`}
     >
-      <div className="mb-4 flex flex-wrap gap-2">
+      {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
+
+      <section className="mb-3 space-y-3 rounded-xl border border-gray-100 bg-white p-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="block text-sm text-gray-700">
+            筛选项目
+            <select
+              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              value={projectFilter}
+              onChange={(e) => {
+                const next = new URLSearchParams(searchParams);
+                if (e.target.value) next.set('project', e.target.value);
+                else next.delete('project');
+                setSearchParams(next);
+              }}
+            >
+              <option value="">全部项目</option>
+              {projectOptions.map(([id, title]) => (
+                <option key={id} value={id}>
+                  {title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm text-gray-700">
+            搜索订单 / 顾客 / 电话 / 地址
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              placeholder="例如：订单号、顾客名、手机号后四位"
+            />
+          </label>
+        </div>
+      </section>
+
+      <p className="mb-3 rounded-lg border border-orange-100 bg-orange-50 px-3 py-2 text-xs leading-relaxed text-orange-950">
+        <strong>说明：</strong>
+        本页仅列出<strong>饭团订单</strong>。同一订单可同时包含待确认、待付款、已确认支付组，
+        因此会同时计入多个标签；列表按待确认优先、待付款其次排序。
+      </p>
+      <p className="mb-3 text-xs text-gray-500">
+        复杂核对请进入详情页处理。顾客上传截图后如列表未更新，请点击
+        <strong className="font-medium text-gray-700">刷新列表</strong>
+        或切换应用再回来。
+      </p>
+
+      <div className="mb-3 flex flex-wrap gap-2">
         <button
           type="button"
           disabled={loading}
           onClick={() => void refresh()}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-800 disabled:opacity-50"
+          className="inline-flex h-9 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:opacity-50"
         >
-          {loading ? '刷新中…' : '刷新'}
+          {loading ? '刷新中…' : '刷新列表'}
         </button>
         <Link
           to="/admin/feituan"
-          className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-900"
+          className="inline-flex h-9 items-center rounded-lg border border-orange-200 bg-orange-50 px-3 text-sm font-medium text-orange-900"
         >
           返回饭团管理
         </Link>
       </div>
-      {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
 
-      <section className="mb-3 space-y-3 rounded-xl border border-gray-100 bg-white p-3">
-        <label className="block text-sm text-gray-700">
-          筛选项目
-          <select
-            className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-            value={projectFilter}
-            onChange={(e) => {
-              const next = new URLSearchParams(searchParams);
-              if (e.target.value) next.set('project', e.target.value);
-              else next.delete('project');
-              setSearchParams(next);
-            }}
-          >
-            <option value="">全部项目</option>
-            {projectOptions.map(([id, title]) => (
-              <option key={id} value={id}>
-                {title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="block text-sm text-gray-700">
-          搜索订单 / 顾客 / 电话 / 地址
-          <input
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-            placeholder="例如：订单号、顾客名、手机号后四位"
-          />
-        </label>
-      </section>
-
-      <div className="mb-3 grid grid-cols-5 gap-1.5 rounded-xl border border-gray-100 bg-white p-1">
+      <div className="mb-4 flex flex-wrap gap-1 rounded-xl border border-gray-100 bg-gray-50 p-1.5">
         {tabs.map((x) => {
           const active = tab === x.id;
           return (
@@ -309,128 +303,124 @@ export default function FeituanOrders() {
               key={x.id}
               type="button"
               onClick={() => setTab(x.id)}
-              className={`rounded-lg px-1 py-2 text-xs font-semibold ${
-                active ? 'bg-orange-500 text-white' : 'text-gray-600 active:bg-orange-50'
+              className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+                active ? 'bg-gray-900 text-white shadow-sm' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              <span className="block">{x.label}</span>
-              <span className={active ? 'text-white/80' : 'text-gray-400'}>{x.count}</span>
+              {x.label}
+              <span className="ml-1 tabular-nums opacity-80">({x.count})</span>
             </button>
           );
         })}
       </div>
 
       {orderViews.length === 0 ? (
-        <p className="text-sm text-gray-600">暂无饭团订单。</p>
+        <EmptyStateCard title="暂无饭团订单" hint="顾客在饭团项目下单后，这里会显示订单。" />
       ) : filteredViews.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500">
-          当前筛选下没有订单。
-        </p>
+        <EmptyStateCard title="暂无订单" hint="可切换其他标签、调整项目筛选或清空搜索词。" />
       ) : (
-        <div className="space-y-3">
+        <ul className="divide-y divide-gray-100 rounded-xl border border-gray-100 bg-white">
           {filteredViews.map(({ row, groups, displayStatus }) => {
             const o = row.data;
             const pendingGroups = groups.filter((g) => g.status === 'pending').length;
             const unpaidGroups = groups.filter((g) => g.status === 'unpaid').length;
-            const proofCount = groups.reduce((sum, g) => sum + g.proofs.length, 0);
+            const confirmedGroups = groups.filter((g) => g.status === 'confirmed').length;
+            const autoGroups = groups.filter((g) => g.hasCardAuto).length;
+            const proofEntries = groups.flatMap((g) => g.proofs);
+            const thumbUrl = proofEntries.find((p) => p.url)?.url ?? null;
+            const hasShot = orderHasPaymentScreenshots(o.paymentScreenshots);
+            const hasProofNoImage = !hasShot && orderHasPaymentProof(o.paymentScreenshots);
+            const detailUrl = `/admin/feituan/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`;
+            const customerUrl = `/feituan/projects/${encodeURIComponent(o.projectId)}/orders/${encodeURIComponent(o.orderNumber)}`;
             return (
-              <article
-                key={row.id}
-                className={`rounded-xl border border-gray-100 bg-white p-4 text-sm shadow-sm ${
-                  pendingGroups > 0 ? 'border-l-4 border-l-indigo-500' : ''
-                }`}
-              >
-                <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <h2 className="font-semibold text-gray-900">
-                      #{o.orderNumber} · {o.projectTitle}
-                    </h2>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {o.customerName} · {o.customerPhone} · {fmtTime(o.createdAt)}
-                    </p>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {o.customerAddress}
-                    </p>
+              <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-3 text-sm">
+                <div className="flex min-w-0 flex-1 gap-3">
+                  {thumbUrl ? (
+                    <img
+                      src={thumbUrl}
+                      alt=""
+                      className="h-14 w-14 shrink-0 rounded-lg border border-gray-100 object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-[10px] leading-tight text-gray-400">
+                      无
+                      <br />
+                      凭证
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium text-gray-900">
+                      #{o.orderNumber}{' '}
+                      <span className="font-normal text-gray-600">{o.customerName}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                      <span className="truncate">{o.projectTitle}</span>
+                      <StatusChip
+                        tone={toChipTone(displayStatus)}
+                        label={statusLabel(displayStatus)}
+                      />
+                      {hasShot ? (
+                        <span className="font-medium text-emerald-700">已传凭证</span>
+                      ) : null}
+                      {hasProofNoImage ? (
+                        <span className="font-medium text-amber-700">免凭证</span>
+                      ) : null}
+                      {autoGroups > 0 ? (
+                        <span className="font-medium text-emerald-700">卡/钱包自动确认</span>
+                      ) : null}
+                      {!hasShot && !hasProofNoImage && autoGroups === 0 ? (
+                        <span className="text-gray-400">未传图</span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {fmtTime(o.createdAt)} · {o.customerPhone} · {o.deliveryPointSnapshot?.name ?? '未填写配送'}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      支付组 {groups.length} 组 · 待确认 {pendingGroups} · 待付款 {unpaidGroups} · 已确认 {confirmedGroups}
+                      {autoGroups > 0 ? ` · 自动确认 ${autoGroups}` : ''}
+                    </div>
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone(displayStatus)}`}>
-                    {statusLabel(displayStatus)}
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <span className="font-medium tabular-nums text-gray-900">
+                    {formatMYR(o.totalAmount)}
                   </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 sm:grid-cols-4">
-                  <div>金额：{formatMYR(o.totalAmount)}</div>
-                  <div>待付：{formatMYR(o.pendingAmount ?? 0)}</div>
-                  <div>配送：{o.deliveryPointSnapshot?.name ?? '未填写'}</div>
-                  <div>
-                    支付组：{groups.length} · 待确认 {pendingGroups} · 待付 {unpaidGroups}
-                  </div>
-                </div>
-                {proofCount > 0 ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-emerald-700">
-                    <span>付款凭证 {proofCount} 张</span>
-                    {groups
-                      .flatMap((g) => g.proofs)
-                      .filter((p): p is typeof p & { url: string } => Boolean(p.url))
-                      .slice(0, 3)
-                      .map((p, i) => (
-                        <a
-                          key={`${p.url}-${i}`}
-                          href={p.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="h-10 w-10 overflow-hidden rounded-lg border border-emerald-100 bg-white"
-                        >
-                          <img src={p.url} alt="付款凭证" className="h-full w-full object-cover" />
-                        </a>
-                      ))}
-                  </div>
-                ) : null}
-                <div className="mt-3 space-y-2 rounded-xl border border-gray-100 bg-gray-50 p-2">
-                  {groups.map((g, index) => {
-                    const busyKey = `${row.id}:${g.id}`;
-                    return (
-                      <div
-                        key={g.id}
-                        className="rounded-lg border border-gray-100 bg-white px-3 py-2"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-semibold text-gray-900">
-                              支付组 {index + 1} · {groupStatusLabel(g.status)}
-                            </p>
-                            <p className="mt-0.5 text-xs text-gray-500">
-                              {formatMYR(g.subtotal)} · {g.lines.length} 项
-                              {g.proofs.length > 0 ? ` · 凭证 ${g.proofs.length} 张` : ''}
-                              {g.hasCardAuto ? ' · 卡/钱包自动确认' : ''}
-                            </p>
-                          </div>
-                          {g.status === 'pending' ? (
-                            <button
-                              type="button"
-                              disabled={busyId === busyKey}
-                              onClick={() => void confirm(row, g.id)}
-                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
-                            >
-                              {busyId === busyKey ? '确认中…' : '确认本组收款'}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="text-xs text-gray-500">
+                    待付 {formatMYR(o.pendingAmount ?? 0)}
+                  </span>
                   <Link
-                    to={`/admin/feituan/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`}
-                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700"
+                    to={detailUrl}
+                    className="text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
                   >
-                    查看订单详情
+                    查看并处理
+                  </Link>
+                  <Link
+                    to={customerUrl}
+                    className="text-xs font-medium text-gray-500 underline-offset-2 hover:underline"
+                  >
+                    顾客视图
                   </Link>
                 </div>
-              </article>
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
+
+      <div className="mt-6 flex flex-wrap gap-2">
+        <Link
+          to="/admin/feituan/reconciliation"
+          className="inline-flex h-10 items-center rounded-xl bg-gray-900 px-4 text-sm font-semibold text-white"
+        >
+          饭团对账
+        </Link>
+        <Link
+          to="/admin/feituan"
+          className="inline-flex h-10 items-center rounded-xl border border-gray-200 px-4 text-sm font-medium text-gray-800"
+        >
+          ← 返回饭团管理
+        </Link>
+      </div>
     </PageShell>
   );
 }
