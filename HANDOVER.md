@@ -115,3 +115,49 @@
 ---
 
 *若与代码不一致，以仓库内代码与 `docs/` 为准；本文件应在里程碑或架构变更后人工更新。*
+
+---
+
+## 六、饭团相关进展（约 2026-05，给下一任）
+
+本节为**阶段性交接摘要**；支付组口径仍以 **`docs/CONSTITUTION_支付组.md`**、代码与 **`web/src/lib/paymentGroups.ts`** 为准。后端统一查询、索引与运营能力见 **`docs/14-饭团订单支付后端后续.md`**（刻意未在本轮实现）。
+
+### 本轮已落地（摘要）
+
+- **顾客侧**：饭团订单列表/详情与身份查询对齐（`customerKey` / `customerUserId` / 微信会话等，以代码为准）；饭团钱包顾客端与管理员端有过 UI 增强。
+- **饭团后台订单列表**：`FeituanOrders` 向商户 `OrderManagement` 靠齐（筛选、标签、空状态、排序、入口）；列表**不做**支付组确认，确认进详情。
+- **商户/饭团后台订单详情**：`MerchantOrderDetail` 支付组展示与确认统一走 **`buildPaymentGroups`**，与「宪法」一致。
+- **饭团对账页**：`FeituanReconciliation` 扩展为金额对账 / 生产统计 / 成本利润（复用 `reconciliationSummary` / `reconciliationProfit` 等），含筛选、复制、CSV；时间筛选含凭证与钱包/次卡自动确认时间（见该页说明文案）。
+- **饭团顾客项目页**：`FeituanProject` 顾客模式复用商户端 `ShopHeader`、`ShopProjectStatusCard`、`ShopContentBlocks`、`ProductCard` 等布局；头图**隐藏**分享/更多；套餐保留长方形「选择/收起」、搭配项配图且压低高度；主题色与商户一致为**绿色行动色**（`#08c279` 等）。
+- **饭团首页**：`FeituanHome` 保留暖色与橙色品牌点缀，主要行动提示与点击态偏**绿色**，减轻首页进详情页的色差冲击。
+- **饭团管理**：项目卡片可「查看项目」；路由 **`/admin/feituan/project/:projectId`** 为管理员只读预览（`FeituanProject` 的 `adminPreview`），审批前可看全量内容。
+
+### 主要涉及文件（入口）
+
+| 区域 | 路径 |
+|------|------|
+| 饭团顾客项目页 | `web/src/pages/FeituanProject.tsx` |
+| 饭团首页 | `web/src/pages/FeituanHome.tsx` |
+| 复用顾客端组件 | `web/src/components/customer/ShopHeader.tsx`、`ShopProjectStatusCard.tsx`、`ProductCard.tsx` |
+| 饭团后台订单列表 | `web/src/pages/FeituanOrders.tsx` |
+| 饭团对账 | `web/src/pages/FeituanReconciliation.tsx` |
+| 饭团管理 + 预览路由 | `web/src/pages/FeituanAdmin.tsx`、`web/src/appRoutes.tsx` |
+| 支付组 / 对账计算 | `web/src/lib/paymentGroups.ts`、`reconciliationGroups.ts`、`reconciliationSummary.ts`、`reconciliationProfit.ts` 等 |
+
+### 刻意未做 / 延后
+
+- **第二步**：饭团后台与商户侧「统一后端查询、索引、统计、权限审计」等——见 **`docs/14-饭团订单支付后端后续.md`**，**未**在本轮实现。
+- **「驳回某组支付」**：产品决定不做（凭证支付过渡方案）。
+- **HANDOVER 第二节**：未逐句合并进上文「一句话」摘要；若你希望总览永远最新，可择机把本节要点**压缩进第二节**并删掉本节重复句。
+
+### 与线上一场可能不一致的仓库内容（一般不用为对齐而改代码）
+
+- **`docs/13-微信服务号接入.md`** 等文档中的 **示例域名**（如 `*.web.app`）可能不等于你们当前生产域名；以**实际部署与公众号菜单**为准，文档按需人工更新即可。
+- **`web/src/data/mockShopHome.ts`** 等 mock 仅演示；真数据来自 Firestore。
+- **`firebase-debug.log`**（若本机存在）：勿提交；可团队约定加入 `.gitignore`。
+
+### 下一任建议起手顺序
+
+1. 读 **`docs/11`** 与 **`docs/14`**，确认本轮是否已覆盖你们当前优先级。
+2. 改饭团订单/对账前，先确认 **`buildPaymentGroups`** 与相关 lib 测试（若有）。
+3. 改 **`ShopHeader` / `ProductCard` / `ShopProjectStatusCard`** 时顺带打开商户 **`ShopHome`** 回归，避免共享组件误伤商户端。
