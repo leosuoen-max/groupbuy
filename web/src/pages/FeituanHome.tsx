@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { ShopShareSheet } from '../components/customer/ShopShareSheet';
+import { FeituanHomeBottomNav } from '../components/feituan/FeituanHomeBottomNav';
+import { FeituanHomePageHeader } from '../components/feituan/FeituanHomePageHeader';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { useWechatShareCard } from '../hooks/useWechatShareCard';
 import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
+import { getFeituanHomeShareUrl } from '../lib/shareLink';
 import { getShopById, type ShopRow } from '../lib/shopService';
 import {
   buildFeituanHomeShareCard,
@@ -84,12 +88,12 @@ function ProjectTimingBadge({ project }: { project: ProjectRow }) {
       {close ? (
         <p>
           截单：
-          <span style={{ color: C.warning }}>{close}</span>
+          <span style={{ color: C.brandViolet }}>{close}</span>
         </p>
       ) : null}
       <p>
         送达：
-        <span style={{ color: C.warning }}>{delivery}</span>
+        <span style={{ color: C.brandViolet }}>{delivery}</span>
       </p>
     </TimingBadgeBox>
   );
@@ -103,58 +107,13 @@ async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRo
   return new Map(entries);
 }
 
-function FeituanBottomNav() {
-  const { pathname } = useLocation();
-  const items = [
-    { to: '/feituan/wallet', label: '饭团钱包', match: (p: string) => p.startsWith('/feituan/wallet') },
-    { to: '/feituan/my-orders', label: '我的订单', match: (p: string) => p.startsWith('/feituan/my-orders') },
-    {
-      to: '/feituan/account',
-      label: '账号中心',
-      match: (p: string) => p === '/feituan/account' || p.startsWith('/feituan/account/'),
-    },
-  ] as const;
-
-  return (
-    <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur"
-      style={{ borderColor: C.primaryBorder, boxShadow: C.navShadow }}
-    >
-      <div
-        className="mx-auto grid max-w-xl grid-cols-3 overflow-hidden rounded-2xl border bg-white"
-        style={{ borderColor: C.primaryBorder }}
-      >
-        {items.map((item, index) => {
-          const active = item.match(pathname);
-          return (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={`py-2.5 text-center text-xs ${index < items.length - 1 ? 'border-r' : ''}`}
-              style={{
-                borderColor: C.primaryBorder,
-                color: active ? C.primary : C.textMain,
-                fontWeight: active ? 700 : 600,
-                backgroundColor: active ? C.primaryLight : C.card,
-                borderTopWidth: active ? 3 : 0,
-                borderTopStyle: 'solid',
-                borderTopColor: active ? C.primary : 'transparent',
-              }}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </div>
-    </nav>
-  );
-}
-
 export default function FeituanHome() {
   useWechatNotifySession();
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [rows, setRows] = useState<Array<{ project: ProjectRow; shop: ShopRow | null }>>([]);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [shareSheetCopied, setShareSheetCopied] = useState(false);
   const shareCard = useMemo(
     () =>
       rows.length > 0
@@ -163,6 +122,33 @@ export default function FeituanHome() {
     [rows]
   );
   const wechatShareDebug = useWechatShareCard(shareCard);
+  const shareUrl = shareCard?.link?.trim() || getFeituanHomeShareUrl();
+  const shareHeadline = shareCard?.title?.trim() || '大马饭团 · 今日团';
+
+  const handleShareSheetCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareSheetCopied(true);
+      window.setTimeout(() => setShareSheetCopied(false), 1600);
+    } catch {
+      window.prompt('复制链接：', shareUrl);
+    }
+  }, [shareUrl]);
+
+  const handleShareSheetSystemShare = useCallback(async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: shareHeadline,
+          text: shareCard?.desc,
+          url: shareUrl,
+        });
+        setShareSheetOpen(false);
+      }
+    } catch {
+      /* 用户取消系统分享 */
+    }
+  }, [shareCard?.desc, shareHeadline, shareUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,15 +177,12 @@ export default function FeituanHome() {
   const listedText = rows.length > 0 ? `正在开团 · ${rows.length} 个饭团项目` : '正在开团';
 
   return (
-    <main className="min-h-svh px-4 pb-28 pt-5" style={{ backgroundColor: C.primaryBg }}>
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-base font-bold" style={{ color: C.textMain }}>
+    <main className="min-h-svh" style={{ backgroundColor: C.primaryBg }}>
+      <FeituanHomePageHeader onShare={() => setShareSheetOpen(true)} />
+      <div className="px-4 pt-1">
+        <h2 className="mb-3 text-base font-bold leading-tight" style={{ color: C.textMain }}>
           {listedText}
         </h2>
-        <span className="text-xs font-bold" style={{ color: C.primary }}>
-          点卡片进入下单
-        </span>
-      </div>
 
       {loading ? <p className="text-sm" style={{ color: C.textSub }}>加载中…</p> : null}
       {err ? <p className="mb-3 text-sm text-red-600">{err}</p> : null}
@@ -274,7 +257,17 @@ export default function FeituanHome() {
           {JSON.stringify(wechatShareDebug, null, 2)}
         </pre>
       ) : null}
-      <FeituanBottomNav />
+      </div>
+      <FeituanHomeBottomNav />
+      <ShopShareSheet
+        open={shareSheetOpen}
+        onClose={() => setShareSheetOpen(false)}
+        headline={shareHeadline}
+        copied={shareSheetCopied}
+        onCopyLink={() => void handleShareSheetCopyLink()}
+        showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
+        onSystemShare={() => void handleShareSheetSystemShare()}
+      />
     </main>
   );
 }

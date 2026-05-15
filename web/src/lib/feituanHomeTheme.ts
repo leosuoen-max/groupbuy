@@ -1,7 +1,9 @@
 /**
- * 大马饭团顾客首页：绿色品牌主色 + 橙色仅作截单/提醒点缀。
+ * 大马饭团顾客首页：绿色品牌主色；logo 紫用于截单/送达强调。
  */
 export const FEITUAN_HOME = {
+  /** logo「大马饭团」字色 */
+  brandViolet: '#7B3FE8',
   primary: '#0F8F5F',
   primaryBright: '#00A86B',
   primaryLight: '#E6F8EF',
@@ -20,6 +22,12 @@ export const FEITUAN_HOME = {
   cardShadow: '0 4px 14px rgba(15, 143, 95, 0.08)',
   navShadow: '0 -8px 24px rgba(15, 143, 95, 0.08)',
 } as const;
+
+/** 品牌 logo：将 PNG 放到 `web/public/feituan-logo.png`，构建后路径为 `/feituan-logo.png` */
+export const FEITUAN_BRAND_LOGO_URL = '/feituan-logo.png';
+
+/** 饭团首页顶栏设计稿（含 logo、标语与背景） */
+export const FEITUAN_TOPBAR_URL = '/feituan-topbar.png';
 
 /** Tailwind 类名（完整字符串，供 JIT 扫描） */
 export const FEITUAN_TW = {

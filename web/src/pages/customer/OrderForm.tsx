@@ -18,12 +18,14 @@ import {
   getWechatNotifyOAuthStateId,
   sendOrderSubmittedWechatNotification,
 } from '../../lib/wechatService';
-import { FEITUAN_TW, feituanOrShopGreen } from '../../lib/feituanHomeTheme';
+import { FEITUAN_HOME, FEITUAN_TW, feituanOrShopGreen } from '../../lib/feituanHomeTheme';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
 
 type Step = 1 | 2 | 3;
 const LOAD_TIMEOUT_MS = 12_000;
+
+const FEITUAN_MANUAL_DELIVERY_LABEL = '按地址安排（待联系）';
 
 function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
   if (project.status === 'draft') return false;
@@ -96,8 +98,9 @@ export default function OrderForm() {
   }, [projectId]);
 
   useEffect(() => {
-    if (step !== 2) setDeliveryDetailModalId(null);
-  }, [step]);
+    const deliveryUiStep = isFeituanOrder ? 1 : 2;
+    if (step !== deliveryUiStep) setDeliveryDetailModalId(null);
+  }, [isFeituanOrder, step]);
 
   useEffect(() => {
     if (!deliveryDetailModalId) return;
@@ -279,9 +282,13 @@ export default function OrderForm() {
 
   const deliveryLabel = useMemo(() => {
     if (!deliveryId) return '';
-    if (deliveryId === OTHER_DELIVERY_ID) return '以上都不对（其他）';
-    return points.find((p) => p.id === deliveryId)?.name ?? '';
-  }, [deliveryId, points]);
+    if (deliveryId === OTHER_DELIVERY_ID) {
+      return isFeituanOrder ? FEITUAN_MANUAL_DELIVERY_LABEL : '以上都不对（其他）';
+    }
+    const p = points.find((x) => x.id === deliveryId);
+    if (!p) return '';
+    return p.code?.trim() ? `${p.name}（${p.code.trim()}）` : p.name;
+  }, [deliveryId, isFeituanOrder, points]);
 
   const deliverySnapshot = useMemo(() => {
     if (!deliveryId || deliveryId === OTHER_DELIVERY_ID) return { name: '', detail: undefined as string | undefined };
@@ -298,7 +305,16 @@ export default function OrderForm() {
     return points.find((x) => x.id === deliveryDetailModalId) ?? null;
   }, [deliveryDetailModalId, points]);
 
+  /** 饭团：地址驱动，始终根据地址列出匹配配送点 */
+  const matchedPoints = useMemo(() => {
+    if (!isFeituanOrder) return null;
+    const line = address.trim();
+    if (line.length < 2 || points.length === 0) return [];
+    return suggestDeliveryPointsFromAddress(line, points);
+  }, [address, isFeituanOrder, points]);
+
   const suggestedPoints = useMemo(() => {
+    if (isFeituanOrder) return null;
     if (deliveryId !== OTHER_DELIVERY_ID) return null;
     const line = address.trim();
     if (line.length < 2) return null;
@@ -307,11 +323,16 @@ export default function OrderForm() {
       (point) => !dismissed.has(point.id)
     );
     return candidates.length > 0 ? candidates : null;
-  }, [deliveryId, address, points, dismissedSuggestionIds]);
+  }, [deliveryId, address, isFeituanOrder, points, dismissedSuggestionIds]);
 
   const resolvedCustomerAddress = useMemo(() => {
+    const main = address.trim();
+    if (isFeituanOrder) {
+      if (deliveryId === OTHER_DELIVERY_ID) return main;
+      if (deliveryId && deliveryId !== OTHER_DELIVERY_ID) return main;
+      return '';
+    }
     if (deliveryId === OTHER_DELIVERY_ID) {
-      const main = address.trim();
       const sup = addressSupplement.trim();
       if (!main && !sup) return '';
       if (main && sup) return `${main}\n补充：${sup}`;
@@ -325,31 +346,39 @@ export default function OrderForm() {
       }
     }
     return '';
-  }, [address, addressSupplement, deliveryId, points]);
+  }, [address, addressSupplement, deliveryId, isFeituanOrder, points]);
 
-  const canGoStep2 =
+  const canGoShopInfoStep =
     canPlaceOrder && name.trim().length > 0 && phone.trim().length > 0;
 
+  const canGoFeituanFill =
+    canPlaceOrder &&
+    name.trim().length > 0 &&
+    address.trim().length > 0 &&
+    deliveryId.length > 0;
+
   const otherNeedsResolve =
+    !isFeituanOrder &&
     deliveryId === OTHER_DELIVERY_ID &&
     suggestedPoints !== null &&
     suggestedPoints.length > 0;
 
-  const canGoStep3 =
+  const canGoShopDeliveryStep =
     canPlaceOrder &&
     deliveryId.length > 0 &&
     (deliveryId === OTHER_DELIVERY_ID
       ? address.trim().length > 0 && !otherNeedsResolve
       : true);
+  const canSubmitOrder = isFeituanOrder ? canGoFeituanFill : canGoShopDeliveryStep;
 
   const handleSubmit = async () => {
     setSubmitError(null);
     setSubmitHint(null);
-    if (!canPlaceOrder || !canGoStep3 || submitting) return;
+    if (!canPlaceOrder || !canSubmitOrder || submitting) return;
     const isManualMatch = deliveryId === OTHER_DELIVERY_ID;
     const addrOut = resolvedCustomerAddress;
     if (!addrOut.trim()) {
-      setSubmitError('请填写或确认配送地址信息。');
+      setSubmitError(isFeituanOrder ? '请填写地址。' : '请填写或确认配送地址信息。');
       return;
     }
     const customerKey = getOrCreateCustomerKey();
@@ -372,7 +401,9 @@ export default function OrderForm() {
         customerNote: note.trim() || undefined,
         deliveryPointId: isManualMatch ? undefined : deliveryId,
         deliveryPointLabel: isManualMatch
-          ? `其他（将按地址手动匹配）：${addrOut}`
+          ? isFeituanOrder
+            ? `${FEITUAN_MANUAL_DELIVERY_LABEL}：${addrOut}`
+            : `其他（将按地址手动匹配）：${addrOut}`
           : deliveryLabel,
         deliverySnapshot:
           isManualMatch || !deliverySnapshot.name
@@ -474,26 +505,105 @@ export default function OrderForm() {
   ) : null;
 
   const activeStep: Step = canPlaceOrder ? step : 1;
+  const stepTotal = isFeituanOrder ? 2 : 3;
+  const onFeituanAddressChange = (value: string) => {
+    setAddress(value);
+    setDeliveryId('');
+    setDismissedSuggestionIds([]);
+  };
+
+  const feituanLabelCls = 'w-14 shrink-0 text-sm text-gray-600';
+  const feituanFieldWrapCls = 'min-w-0 flex-1';
+  const feituanRowInputCls = `block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[16px] text-gray-900 outline-none ${ft(
+    FEITUAN_TW.inputFocus,
+    'ring-emerald-500/30 focus:border-emerald-500 focus:ring-2'
+  )}`;
+
+  const renderDeliveryPointPicker = (list: MockDeliveryPoint[]) => (
+    <div className="grid grid-cols-2 gap-2">
+      {list.map((p) => {
+        const selected = deliveryId === p.id;
+        return (
+          <label
+            key={p.id}
+            className={`relative flex cursor-pointer flex-col rounded-xl border p-2.5 transition-colors ${
+              selected
+                ? ft(
+                    FEITUAN_TW.selectedSoft,
+                    'border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-500/35'
+                  )
+                : 'border-gray-100 bg-white hover:border-gray-200'
+            }`}
+          >
+            <input
+              type="radio"
+              name="delivery"
+              className="sr-only"
+              checked={selected}
+              onChange={() => setDeliveryId(p.id)}
+            />
+            <div className="flex items-start justify-between gap-1">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] leading-tight text-gray-500">
+                  编号{' '}
+                  <span className="font-medium text-gray-700">
+                    {(p.code && p.code.trim()) || '—'}
+                  </span>
+                </p>
+                <p className="mt-0.5 truncate text-sm font-medium text-gray-900">{p.name}</p>
+              </div>
+              <span
+                className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 ${
+                  selected
+                    ? ft(
+                        FEITUAN_TW.radioSelected,
+                        'border-emerald-600 bg-emerald-600 ring-2 ring-white ring-inset'
+                      )
+                    : 'border-gray-300 bg-white'
+                }`}
+                aria-hidden
+              />
+            </div>
+            <button
+              type="button"
+              className="mt-2 w-fit text-left text-xs font-medium text-indigo-600 underline-offset-2 hover:underline"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDeliveryDetailModalId(p.id);
+              }}
+            >
+              查看详情
+            </button>
+          </label>
+        );
+      })}
+    </div>
+  );
 
   return (
     <PageShell
       title="填写订单"
-      subtitle={`步骤 ${activeStep} / 3 · ${resolvedProjectTitle}`}
+      subtitle={`步骤 ${activeStep} / ${stepTotal} · ${resolvedProjectTitle}`}
     >
       {blockedHint}
 
       <div className="mb-4 flex gap-2 text-xs text-gray-500">
-        <span className={activeStep >= 1 ? 'font-semibold text-gray-900' : ''}>
-          ① 信息
-        </span>
-        <span>→</span>
-        <span className={activeStep >= 2 ? 'font-semibold text-gray-900' : ''}>
-          ② 配送
-        </span>
-        <span>→</span>
-        <span className={activeStep >= 3 ? 'font-semibold text-gray-900' : ''}>
-          ③ 确认
-        </span>
+        {isFeituanOrder ? (
+          <>
+            <span className={activeStep >= 1 ? 'font-semibold text-gray-900' : ''}>① 填写</span>
+            <span>→</span>
+            <span className={activeStep >= 2 ? 'font-semibold text-gray-900' : ''}>② 确认</span>
+          </>
+        ) : (
+          <>
+            <span className={activeStep >= 1 ? 'font-semibold text-gray-900' : ''}>① 信息</span>
+            <span>→</span>
+            <span className={activeStep >= 2 ? 'font-semibold text-gray-900' : ''}>② 配送</span>
+            <span>→</span>
+            <span className={activeStep >= 3 ? 'font-semibold text-gray-900' : ''}>③ 确认</span>
+          </>
+        )}
       </div>
 
       <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-700">
@@ -519,7 +629,232 @@ export default function OrderForm() {
         </div>
       </div>
 
-      {activeStep === 1 ? (
+      {activeStep === 1 && isFeituanOrder ? (
+        <div className="space-y-3">
+          <h2 className="text-base font-semibold text-gray-900">填写订单</h2>
+          <section
+            className="rounded-2xl border px-3.5 py-3.5 shadow-sm"
+            style={{ borderColor: FEITUAN_HOME.primaryBorder, backgroundColor: FEITUAN_HOME.card }}
+          >
+            <div className="space-y-3">
+              <label className="flex items-center gap-2">
+                <span className={feituanLabelCls}>姓名：</span>
+                <span className={feituanFieldWrapCls}>
+                  <input
+                    className={feituanRowInputCls}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoComplete="name"
+                placeholder="必填"
+                  />
+                </span>
+              </label>
+
+              <div>
+                <label className="flex items-center gap-2">
+                  <span className={feituanLabelCls}>电话：</span>
+                  <span className={feituanFieldWrapCls}>
+              <input
+                className={feituanRowInputCls}
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="建议填写"
+                    />
+                  </span>
+                </label>
+                <p className="ml-[4.5rem] mt-1.5 text-xs leading-relaxed text-gray-500">
+                  建议留下可接听的电话。若配送点无法匹配，我们将电话联系你安排取餐。
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2">
+                <span className={feituanLabelCls}>备注：</span>
+                <span className={feituanFieldWrapCls}>
+              <input
+                className={feituanRowInputCls}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="选填"
+                  />
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2">
+                <span className={`${feituanLabelCls} pt-2.5`}>地址：</span>
+                <span className={`${feituanFieldWrapCls} relative`}>
+                  <textarea
+                    className={`${feituanRowInputCls} min-h-[80px] resize-y pr-12`}
+                  value={address}
+                  onChange={(e) => onFeituanAddressChange(e.target.value)}
+                  autoComplete="street-address"
+                  placeholder="小区、大厦、片区等"
+                />
+                {address.trim() ? (
+                  <button
+                    type="button"
+                    className="absolute right-2 top-2 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600 shadow-sm"
+                    onClick={() => onFeituanAddressChange('')}
+                  >
+                    清空
+                  </button>
+                ) : null}
+                </span>
+              </label>
+            </div>
+          </section>
+
+          <section
+            className="rounded-2xl border px-3.5 py-3.5 shadow-sm"
+            style={{ borderColor: FEITUAN_HOME.primaryBorder, backgroundColor: FEITUAN_HOME.card }}
+          >
+            <p className="mb-2 text-sm font-semibold text-gray-900">配送点</p>
+            <div
+              className="min-h-[5.5rem] rounded-xl border border-dashed px-3 py-3"
+              style={{
+                borderColor: FEITUAN_HOME.primaryBorder,
+                backgroundColor: FEITUAN_HOME.primaryBg,
+              }}
+            >
+              {points.length === 0 ? (
+                <p className="text-center text-sm leading-relaxed text-gray-500">
+                  当前项目尚未配置配送点；请填写地址后选择下方「按地址安排」。
+                </p>
+              ) : address.trim().length < 2 ? (
+                <p className="text-center text-sm leading-relaxed text-gray-500">
+                  填写地址后，将在此显示可能匹配的配送点，请选择一项。
+                </p>
+              ) : matchedPoints && matchedPoints.length > 0 ? (
+                <div>
+                  <p className="mb-2 text-xs text-gray-600">可能匹配的配送点（请选择一项）</p>
+                  {renderDeliveryPointPicker(matchedPoints)}
+                </div>
+              ) : (
+                <p className="text-center text-sm leading-relaxed text-gray-600">
+                  暂未匹配到配送点。若下方没有你的取餐点，请选择「按地址安排」。
+                </p>
+              )}
+            </div>
+
+            <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+              <input
+                type="radio"
+                name="delivery"
+                className="mt-1 h-4 w-4 shrink-0"
+                checked={deliveryId === OTHER_DELIVERY_ID}
+                onChange={() => setDeliveryId(OTHER_DELIVERY_ID)}
+              />
+              <span className="min-w-0 flex-1 text-sm text-gray-900">
+                以上配送点都不对，请按我填写的地址安排
+                <span className="mt-1 block text-xs leading-relaxed text-amber-900">
+                  不指定标准配送点；我们将根据你填写的地址电话联系你确认取餐方式。请尽量留下可接听的电话。
+                </span>
+              </span>
+            </label>
+          </section>
+
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() =>
+                navigate(base, {
+                  state: {
+                    projectTitle: resolvedProjectTitle,
+                    cartDraft: returnCartDraft,
+                  },
+                })
+              }
+              className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-800"
+            >
+              再想想
+            </button>
+            <button
+              type="button"
+              className={primaryBtnCls}
+              disabled={!canGoFeituanFill}
+              onClick={() => setStep(2)}
+            >
+              下一步：确认订单
+            </button>
+          </div>
+
+          {deliveryDetailModalPoint ? (
+            <div
+              className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 sm:items-center sm:p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="feituan-delivery-detail-title"
+              onClick={() => setDeliveryDetailModalId(null)}
+            >
+              <div
+                className="max-h-[min(85vh,640px)] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:rounded-2xl sm:pb-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-3">
+                  <div className="min-w-0 flex-1">
+                    <h3
+                      id="feituan-delivery-detail-title"
+                      className="text-base font-semibold text-gray-900"
+                    >
+                      {deliveryDetailModalPoint.name}
+                    </h3>
+                    {deliveryDetailModalPoint.code?.trim() ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        编号 {deliveryDetailModalPoint.code.trim()}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex h-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                    aria-label="关闭"
+                    onClick={() => setDeliveryDetailModalId(null)}
+                  >
+                    <span className="text-xl leading-none" aria-hidden>
+                      ×
+                    </span>
+                  </button>
+                </div>
+                <div className="space-y-3 py-4 text-sm text-gray-700">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500">详细地址</p>
+                    <p className="mt-1 whitespace-pre-wrap break-words">
+                      {deliveryDetailModalPoint.detailAddress?.trim() || '暂无'}
+                    </p>
+                  </div>
+                  {deliveryDetailModalPoint.deliveryTime ? (
+                    <div>
+                      <p className="text-xs font-medium text-gray-500">配送时间</p>
+                      <p className="mt-1">{deliveryDetailModalPoint.deliveryTime}</p>
+                    </div>
+                  ) : null}
+                  {deliveryDetailModalPoint.imageUrl ? (
+                    <div>
+                      <p className="text-xs font-medium text-gray-500">示意图</p>
+                      <img
+                        src={deliveryDetailModalPoint.imageUrl}
+                        alt={`${deliveryDetailModalPoint.name} 配送点示意图`}
+                        className="mt-2 max-h-[min(40vh,280px)] w-full rounded-xl object-contain"
+                        loading="lazy"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  className="mb-1 flex h-11 w-full items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white hover:bg-gray-800 sm:hidden"
+                  onClick={() => setDeliveryDetailModalId(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {activeStep === 1 && !isFeituanOrder ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">填写信息</h2>
           {didPrefillFromLastOrder ? (
@@ -575,7 +910,7 @@ export default function OrderForm() {
             <button
               type="button"
               className={primaryBtnCls}
-              disabled={!canGoStep2}
+              disabled={!canGoShopInfoStep}
               onClick={() => setStep(2)}
             >
               下一步：配送
@@ -584,7 +919,7 @@ export default function OrderForm() {
         </div>
       ) : null}
 
-      {activeStep === 2 ? (
+      {activeStep === 2 && !isFeituanOrder ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">配送方式与地址</h2>
           <p className="text-sm text-gray-600">
@@ -822,7 +1157,7 @@ export default function OrderForm() {
             <button
               type="button"
               className={primaryBtnCls}
-              disabled={!canGoStep3}
+              disabled={!canGoShopDeliveryStep}
               onClick={() => setStep(3)}
             >
               下一步：确认
@@ -907,20 +1242,29 @@ export default function OrderForm() {
         </div>
       ) : null}
 
-      {activeStep === 3 ? (
+      {(isFeituanOrder ? activeStep === 2 : activeStep === 3) ? (
         <div className="space-y-4">
           <h2 className="text-base font-semibold text-gray-900">确认并提交</h2>
           <div className="rounded-xl border border-gray-100 bg-white px-3 py-3 text-sm text-gray-800">
             <div className="font-medium text-gray-900">顾客信息</div>
             <p className="mt-1">姓名：{name.trim()}</p>
-            <p>电话：{phone.trim()}</p>
+            <p>
+              电话：
+              {phone.trim() ? (
+                phone.trim()
+              ) : (
+                <span className="text-amber-800">未填写（建议返回补充，便于我们联系你）</span>
+              )}
+            </p>
             {note.trim() ? <p>备注：{note.trim()}</p> : <p>备注：（无）</p>}
             <div className="mt-3 font-medium text-gray-900">配送与地址</div>
             <p className="mt-1">方式：{deliveryLabel}</p>
-            <p className="mt-1 break-words">
-              地址与说明：
-              {resolvedCustomerAddress || '（将根据所选配送点自动生成）'}
-            </p>
+            <p className="mt-1 break-words">地址：{resolvedCustomerAddress || '—'}</p>
+            {isFeituanOrder && deliveryId === OTHER_DELIVERY_ID ? (
+              <p className="mt-2 text-xs text-gray-500">
+                未匹配到标准配送点；取餐安排以电话联系为准。
+              </p>
+            ) : null}
           </div>
           <p className="text-xs text-gray-500">提交后会写入数据库，并进行库存校验。</p>
           {submitError ? (
@@ -933,7 +1277,7 @@ export default function OrderForm() {
             <button
               type="button"
               className="inline-flex h-11 min-w-[5rem] items-center justify-center rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-800"
-              onClick={() => setStep(2)}
+              onClick={() => setStep(isFeituanOrder ? 1 : 2)}
               disabled={submitting || !canPlaceOrder}
             >
               上一步
@@ -942,7 +1286,7 @@ export default function OrderForm() {
               type="button"
               className={primaryBtnCls}
               onClick={handleSubmit}
-              disabled={submitting || !canPlaceOrder}
+              disabled={submitting || !canPlaceOrder || !canSubmitOrder}
             >
               {submitting ? '提交中…' : '提交订单'}
             </button>

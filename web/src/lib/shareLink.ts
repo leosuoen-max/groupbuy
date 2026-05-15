@@ -17,3 +17,10 @@ export function getProjectSharePageUrl(projectId: string): string {
   const path = `/share/${encodeURIComponent(projectId)}`;
   return origin ? `${origin}${path}` : path;
 }
+
+/** 饭团首页分享链接 */
+export function getFeituanHomeShareUrl(): string {
+  const origin = resolvePublicOrigin();
+  const path = '/feituan';
+  return origin ? `${origin}${path}` : path;
+}
