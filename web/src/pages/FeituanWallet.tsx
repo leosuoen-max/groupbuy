@@ -5,6 +5,7 @@ import { useAuthUser } from '../hooks/useAuthUser';
 import { formatMYR } from '../lib/formatMYR';
 import {
   ensureFeituanWalletAccount,
+  effectiveFeituanWalletTopupStatus,
   listFeituanWalletLedgerByUser,
   listFeituanWalletTopupRequestsByUser,
   type FeituanWalletAccountRow,
@@ -25,14 +26,18 @@ function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
 }
 
 function requestStatusLabel(status: string): string {
-  if (status === 'pending') return '待确认';
+  if (status === 'awaiting_payment') return '待付款';
+  if (status === 'pending_review') return '待核实';
+  if (status === 'pending') return '处理中';
   if (status === 'confirmed') return '已入账';
-  if (status === 'rejected') return '已驳回';
+  if (status === 'rejected') return '已终止';
   if (status === 'cancelled') return '已撤销';
   return status;
 }
 
 function requestStatusClass(status: string): string {
+  if (status === 'awaiting_payment') return 'bg-amber-100 text-amber-950';
+  if (status === 'pending_review') return 'bg-sky-100 text-sky-950';
   if (status === 'pending') return 'bg-amber-100 text-amber-900';
   if (status === 'confirmed') return 'bg-emerald-100 text-emerald-900';
   if (status === 'rejected') return 'bg-red-100 text-red-700';
@@ -94,7 +99,9 @@ export default function FeituanWallet() {
       .reduce((s, row) => s + Math.abs(Number(row.data.delta ?? 0)), 0);
     return { topupPay, topupBonus, spent };
   }, [ledger]);
-  const pendingRequests = requests.filter((row) => row.data.status === 'pending').length;
+  const pendingRequests = requests.filter(
+    (row) => effectiveFeituanWalletTopupStatus(row.data) === 'pending_review'
+  ).length;
 
   if (authLoading || loading) {
     return (
@@ -150,7 +157,7 @@ export default function FeituanWallet() {
         </Link>
         {pendingRequests > 0 ? (
           <p className="mt-2 rounded-lg bg-white/80 px-3 py-2 text-xs text-amber-900">
-            还有 {pendingRequests} 笔充值等待确认，管理员确认后会自动入账。
+            还有 {pendingRequests} 笔充值待核实，饭团管理员确认后会自动入账。
           </p>
         ) : null}
       </section>
@@ -172,7 +179,9 @@ export default function FeituanWallet() {
           </p>
         ) : (
           <div className="space-y-2">
-            {requests.slice(0, 8).map((row) => (
+            {requests.slice(0, 8).map((row) => {
+              const eff = effectiveFeituanWalletTopupStatus(row.data);
+              return (
               <div key={row.id} className="rounded-xl border border-gray-100 bg-white px-3 py-2 text-xs">
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -183,18 +192,23 @@ export default function FeituanWallet() {
                       赠送 {formatMYR(row.data.bonusAmount)} · {fmtTime(row.data.createdAt)}
                     </p>
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 ${requestStatusClass(row.data.status)}`}>
-                    {requestStatusLabel(row.data.status)}
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 ${requestStatusClass(eff)}`}>
+                    {requestStatusLabel(eff)}
                   </span>
                 </div>
                 {row.data.rejectReason ? (
                   <p className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-red-700">
-                    驳回原因：{row.data.rejectReason}
+                    终止说明：{row.data.rejectReason}
                   </p>
                 ) : null}
-                {row.data.paymentScreenshots.length > 0 ? (
+                {eff === 'awaiting_payment' && row.data.lastProofRejectedReason ? (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1 text-amber-900">
+                    上次驳回凭证：{row.data.lastProofRejectedReason}
+                  </p>
+                ) : null}
+                {(row.data.paymentScreenshots ?? []).length > 0 ? (
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {row.data.paymentScreenshots.slice(0, 4).map((shot) => (
+                    {(row.data.paymentScreenshots ?? []).slice(0, 4).map((shot) => (
                       <a key={shot.url} href={shot.url} target="_blank" rel="noreferrer">
                         <img src={shot.url} alt="充值付款截图" className="h-12 w-12 rounded-md object-cover" />
                       </a>
@@ -202,7 +216,8 @@ export default function FeituanWallet() {
                   </div>
                 ) : null}
               </div>
-            ))}
+            );
+            })}
           </div>
         )}
       </section>

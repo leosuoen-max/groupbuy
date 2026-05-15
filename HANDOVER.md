@@ -55,6 +55,7 @@
 | 3 | `HANDOVER.md` | **本文件**：仓库现状摘要（需随里程碑更新） |
 | 4 | `docs/08-第一版范围.md` | MVP 做/不做（产品目标） |
 | 5 | `docs/11-需求与实现对照.md` | **路由/数据源与 docs/08 对照（代码事实）** |
+| 5b | `docs/15-实现现状快照.md` | **叙事总览**：饭团/公众号/平台后台、与旧文档关系；细节仍以 `docs/11` + 代码为准 |
 | 6 | `docs/06-数据模型.md` | Firestore 集合与字段 |
 | 7 | `docs/03-顾客端功能.md` | 顾客端需求细节 |
 | 8 | `docs/04-商户后台功能.md` | 商户端需求细节 |
@@ -105,8 +106,8 @@
 ## 五、可选：交接用语（复制到新会话首条）
 
 ```
-请读 groupbuy 根目录的 HANDOVER.md、README.md、CURSOR_GUIDE.md、docs/11-需求与实现对照.md，再按需补读 docs/06、docs/03/04。
-当前前端在 web/；详细路由与实现差距以 docs/11 为准。
+请读 groupbuy 根目录的 HANDOVER.md、README.md、CURSOR_GUIDE.md、docs/11-需求与实现对照.md、docs/15-实现现状快照.md，再按需补读 docs/06、docs/03/04。
+当前前端在 web/；详细路由与实现差距以 docs/11 为准；产品形态增量以 docs/15 叙事为准。
 请结合 HANDOVER「三、建议的下一步」与本条任务描述继续。
 ```
 
@@ -128,16 +129,20 @@
 - **饭团后台订单列表**：`FeituanOrders` 向商户 `OrderManagement` 靠齐（筛选、标签、空状态、排序、入口）；列表**不做**支付组确认，确认进详情。
 - **商户/饭团后台订单详情**：`MerchantOrderDetail` 支付组展示与确认统一走 **`buildPaymentGroups`**，与「宪法」一致。
 - **饭团对账页**：`FeituanReconciliation` 扩展为金额对账 / 生产统计 / 成本利润（复用 `reconciliationSummary` / `reconciliationProfit` 等），含筛选、复制、CSV；时间筛选含凭证与钱包/次卡自动确认时间（见该页说明文案）。
-- **饭团顾客项目页**：`FeituanProject` 顾客模式复用商户端 `ShopHeader`、`ShopProjectStatusCard`、`ShopContentBlocks`、`ProductCard` 等布局；头图**隐藏**分享/更多；套餐保留长方形「选择/收起」、搭配项配图且压低高度；主题色与商户一致为**绿色行动色**（`#08c279` 等）。
-- **饭团首页**：`FeituanHome` 保留暖色与橙色品牌点缀，主要行动提示与点击态偏**绿色**，减轻首页进详情页的色差冲击。
+- **饭团顾客项目页**：`FeituanProject` 顾客模式复用商户端 `ShopHeader`、`ShopProjectStatusCard`、`ShopContentBlocks`、`ProductCard` 等布局；头图**隐藏**分享/更多；套餐保留长方形「选择/收起」、搭配项配图且压低高度；绿色统一走 **`web/src/lib/feituanHomeTheme.ts`**（主色 `#0F8F5F`，橙色 `#F97316` 仅截单/提醒）。
+- **饭团首页 / 订单**：`FeituanHome`、`FeituanMyOrders`、饭团路由下的 `OrderForm` / `OrderDetail` 与首页同一套绿色；底部导航按路由高亮。
+- **饭团钱包充值**：`awaiting_payment` → 上传凭证 → `pending_review` → 确认入账；后台可驳回凭证回到待付款；凭证面板 `variant="wallet_recharge"`；截图 MD5 重复/时间风险旗标（`feituanWalletTopupScreenshotFlags`）。
 - **饭团管理**：项目卡片可「查看项目」；路由 **`/admin/feituan/project/:projectId`** 为管理员只读预览（`FeituanProject` 的 `adminPreview`），审批前可看全量内容。
+- **商户侧**：`ProjectList` 支持从 **`/share/projectId`** 链接拷贝为草稿（标题后缀「（拷贝草稿）」）。
 
 ### 主要涉及文件（入口）
 
 | 区域 | 路径 |
 |------|------|
 | 饭团顾客项目页 | `web/src/pages/FeituanProject.tsx` |
-| 饭团首页 | `web/src/pages/FeituanHome.tsx` |
+| 饭团首页 + 主题常量 | `web/src/pages/FeituanHome.tsx`、`web/src/lib/feituanHomeTheme.ts` |
+| 饭团钱包 | `web/src/pages/FeituanWallet.tsx`、`FeituanWalletTopup.tsx`、`FeituanWalletAdmin.tsx`、`web/src/lib/feituanWalletService.ts` |
+| 叙事总览（与 docs/11 互补） | `docs/15-实现现状快照.md` |
 | 复用顾客端组件 | `web/src/components/customer/ShopHeader.tsx`、`ShopProjectStatusCard.tsx`、`ProductCard.tsx` |
 | 饭团后台订单列表 | `web/src/pages/FeituanOrders.tsx` |
 | 饭团对账 | `web/src/pages/FeituanReconciliation.tsx` |
@@ -156,8 +161,22 @@
 - **`web/src/data/mockShopHome.ts`** 等 mock 仅演示；真数据来自 Firestore。
 - **`firebase-debug.log`**（若本机存在）：勿提交；可团队约定加入 `.gitignore`。
 
+### 版本标签（Git）
+
+| 标签 | 含义 |
+|------|------|
+| `v1.2.0` | 服务号网页授权基础流程 |
+| **`v1.3.0`（候选，打 tag 前请先提交工作区）** | 饭团支付组/对账/订单列表、钱包充值核实全流程、首页·项目·订单品牌色统一、`docs/15` 快照 |
+
+打 tag 示例（在 `main` 已提交并推送后）：
+
+```bash
+git tag -a v1.3.0 -m "v1.3.0: 饭团支付与钱包、品牌色统一"
+git push origin v1.3.0
+```
+
 ### 下一任建议起手顺序
 
-1. 读 **`docs/11`** 与 **`docs/14`**，确认本轮是否已覆盖你们当前优先级。
+1. 读 **`docs/11`**、**`docs/15`** 与 **`docs/14`**，确认本轮是否已覆盖你们当前优先级。
 2. 改饭团订单/对账前，先确认 **`buildPaymentGroups`** 与相关 lib 测试（若有）。
 3. 改 **`ShopHeader` / `ProductCard` / `ShopProjectStatusCard`** 时顺带打开商户 **`ShopHome`** 回归，避免共享组件误伤商户端。

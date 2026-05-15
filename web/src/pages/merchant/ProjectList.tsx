@@ -327,14 +327,14 @@ export default function ProjectList() {
       <section className="mb-6 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
         <h2 className="mb-1 text-sm font-semibold text-gray-900">从链接拷贝为草稿</h2>
         <p className="mb-3 text-xs leading-relaxed text-gray-600">
-          粘贴任意<strong>顾客进店链接</strong>（本店或他店均可）。会在<strong>当前店铺</strong>下新建一条草稿，并带入文案、图片、商品与套餐等；若来源是<strong>他店</strong>，配送点与次卡抵扣需在本店重新配置。
+          粘贴任意<strong>顾客进店链接</strong>或<strong>分享页链接（/share/项目ID）</strong>（本店或他店均可）。会在<strong>当前店铺</strong>下新建一条草稿，并带入文案、图片、商品与套餐等；若来源是<strong>他店</strong>，配送点与次卡抵扣需在本店重新配置。
         </p>
         <textarea
           value={copyLinkInput}
           onChange={(e) => setCopyLinkInput(e.target.value)}
           rows={3}
           disabled={copyingFromLink || !shopId}
-          placeholder="例如：https://你的域名/shop/店铺slug/项目ID"
+          placeholder="例如：https://域名/share/项目ID 或 https://域名/shop/店铺slug/项目ID"
           className="mb-2 w-full resize-y rounded-lg border border-gray-200 bg-white p-2 font-mono text-[12px] text-gray-800 outline-none focus:border-indigo-300"
         />
         <button

@@ -15,6 +15,7 @@ import { getShopById, type ShopRow } from '../lib/shopService';
 import { buildWechatShareCardFromProject } from '../lib/wechatShareMeta';
 import { formatMYR } from '../lib/formatMYR';
 import { formatRemainingShort } from '../lib/countdown';
+import { FEITUAN_TW } from '../lib/feituanHomeTheme';
 import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../lib/shopTheme';
 import {
   customerAppendLinesToOrder,
@@ -530,7 +531,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
 
             {isAppendMode ? (
               <section className="px-4 pb-2 pt-1">
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900">
+                <div className={`rounded-2xl border px-3 py-2 text-xs ${FEITUAN_TW.panelLoose}`}>
                   <p className="font-semibold">
                     加购模式 · 订单 #{appendTarget?.data.orderNumber ?? appendOrderNumber}
                   </p>
@@ -799,7 +800,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
                                                 soldOut
                                                   ? 'border-gray-100 bg-gray-50 text-gray-400'
                                                   : checked
-                                                    ? 'border-emerald-400 bg-white text-emerald-950 ring-2 ring-emerald-200'
+                                                    ? FEITUAN_TW.selected
                                                     : 'border-gray-200 bg-white text-gray-800'
                                               }`}
                                               onClick={() =>
@@ -1296,16 +1297,16 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
               </div>
             )}
             {bundleCart.length > 0 ? (
-              <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
-                <div className="mb-1 text-xs font-semibold text-emerald-900">已选套餐</div>
+              <div className={`mt-3 rounded-xl border p-3 ${FEITUAN_TW.panel}`}>
+                <div className={`mb-1 text-xs font-semibold ${FEITUAN_TW.text}`}>已选套餐</div>
                 <div className="space-y-1">
                   {bundleCart.map((x, idx) => (
                     <div
                       key={`${x.bundleToolId}-${x.schemeId}-${idx}`}
                       className="flex items-center justify-between gap-2 text-xs"
                     >
-                      <span className="min-w-0 truncate text-emerald-900">{x.label}</span>
-                      <span className="shrink-0 text-emerald-900">
+                      <span className={`min-w-0 truncate ${FEITUAN_TW.text}`}>{x.label}</span>
+                      <span className={`shrink-0 ${FEITUAN_TW.text}`}>
                         x{x.quantity} · {formatMYR(x.quantity * x.unitPrice)}
                       </span>
                     </div>

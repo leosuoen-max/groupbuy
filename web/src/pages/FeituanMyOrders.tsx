@@ -11,6 +11,7 @@ import { deriveDisplayOrderStatus, sumGroupAmountByStatus } from '../lib/payment
 import { orderHasPaymentScreenshots } from '../lib/paymentScreenshotHelpers';
 import { listFeituanOrdersForCustomer, type OrderRow } from '../lib/orderService';
 import { getWechatNotifyOAuthStateId } from '../lib/wechatService';
+import { FEITUAN_TW } from '../lib/feituanHomeTheme';
 import type { OrderDoc, OrderStatus } from '../types/firestore';
 
 function summarizeLines(o: OrderDoc): string {
@@ -45,9 +46,9 @@ const statusCard: Record<
     pill: 'bg-orange-100 text-orange-900',
   },
   confirmed: {
-    border: 'border-l-emerald-500',
-    surface: 'bg-emerald-50/80',
-    pill: 'bg-emerald-100 text-emerald-900',
+    border: FEITUAN_TW.confirmedBorder,
+    surface: FEITUAN_TW.confirmedSurface,
+    pill: FEITUAN_TW.confirmedPill,
   },
   cancelled: {
     border: 'border-l-gray-400',
@@ -70,7 +71,7 @@ function uploadHint(o: OrderDoc): { text: string; className: string } | null {
   const displayStatus = deriveDisplayOrderStatus(o);
   if (o.status === 'cancelled') return null;
   if (hasShot) {
-    return { text: '已传付款截图', className: 'text-emerald-700' };
+    return { text: '已传付款截图', className: FEITUAN_TW.hint };
   }
   if (
     displayStatus === 'unpaid' ||

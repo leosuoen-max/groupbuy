@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { PaymentScreenshotsPanel } from '../components/merchant/PaymentScreenshotsPanel';
 import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { isFeituanAdmin } from '../lib/feituanService';
-import { formatMYR } from '../lib/formatMYR';
 import {
   confirmFeituanWalletTopupRequest,
+  effectiveFeituanWalletTopupStatus,
   listFeituanWalletAccounts,
   listFeituanWalletLedgerByUser,
   listFeituanWalletTopupRequests,
   getFeituanWalletSettings,
-  rejectFeituanWalletTopupRequest,
+  rejectFeituanWalletTopupProof,
   saveFeituanWalletSettings,
   uploadFeituanWalletPaymentMethodImage,
   type FeituanWalletAccountRow,
   type FeituanWalletLedgerRow,
   type FeituanWalletTopupRequestRow,
 } from '../lib/feituanWalletService';
-import type {
-  FeituanWalletPaymentMethodDoc,
-  FeituanWalletTopupTierDoc,
-} from '../types/firestore';
+import { formatMYR } from '../lib/formatMYR';
+import type { FeituanWalletPaymentMethodDoc, FeituanWalletTopupTierDoc } from '../types/firestore';
 
 function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
   const d = t?.toDate?.();
@@ -34,18 +33,28 @@ function fmtTime(t: { toDate?: () => Date } | null | undefined): string {
   });
 }
 
-function statusLabel(status: string): string {
-  if (status === 'pending') return '待确认';
-  if (status === 'confirmed') return '已入账';
-  if (status === 'rejected') return '已驳回';
-  if (status === 'cancelled') return '已撤销';
-  return status;
+type EffectiveTopup = ReturnType<typeof effectiveFeituanWalletTopupStatus>;
+
+function topupEffective(
+  doc: Parameters<typeof effectiveFeituanWalletTopupStatus>[0]
+): EffectiveTopup {
+  return effectiveFeituanWalletTopupStatus(doc);
 }
 
-function statusClass(status: string): string {
-  if (status === 'pending') return 'bg-amber-100 text-amber-900';
-  if (status === 'confirmed') return 'bg-emerald-100 text-emerald-900';
-  if (status === 'rejected') return 'bg-red-100 text-red-700';
+function topupStatusLabel(s: EffectiveTopup): string {
+  if (s === 'awaiting_payment') return '待付款';
+  if (s === 'pending_review') return '待核实';
+  if (s === 'confirmed') return '已入账';
+  if (s === 'rejected') return '已终止';
+  if (s === 'cancelled') return '已撤销';
+  return s;
+}
+
+function topupStatusClass(s: EffectiveTopup): string {
+  if (s === 'awaiting_payment') return 'bg-amber-100 text-amber-950';
+  if (s === 'pending_review') return 'bg-sky-100 text-sky-950';
+  if (s === 'confirmed') return 'bg-emerald-100 text-emerald-900';
+  if (s === 'rejected') return 'bg-red-100 text-red-700';
   return 'bg-gray-100 text-gray-700';
 }
 
@@ -63,7 +72,9 @@ export default function FeituanWalletAdmin() {
   const [selectedLedger, setSelectedLedger] = useState<FeituanWalletLedgerRow[]>([]);
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
-  const [requestFilter, setRequestFilter] = useState('pending');
+  const [requestFilter, setRequestFilter] = useState<
+    'pending_review' | 'awaiting_payment' | 'all' | 'confirmed' | 'closed'
+  >('pending_review');
   const [requestSearch, setRequestSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -156,14 +167,15 @@ export default function FeituanWalletAdmin() {
     }
   };
 
-  const rejectRequest = async (requestId: string) => {
+  const rejectProof = async (requestId: string) => {
     if (!user) return;
-    const reason = window.prompt('驳回原因（可留空）：', '') ?? '';
+    const reason =
+      window.prompt('驳回凭证原因（顾客将回到待付款并需重新上传；可留空）：', '') ?? '';
     setBusyId(requestId);
     setMsg(null);
     try {
-      await rejectFeituanWalletTopupRequest(requestId, user.uid, reason);
-      setMsg('已驳回');
+      await rejectFeituanWalletTopupProof(requestId, user.uid, reason);
+      setMsg('已驳回凭证，申请已回到待付款');
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '驳回失败');
@@ -208,14 +220,20 @@ export default function FeituanWalletAdmin() {
     );
   }
 
-  const pendingCount = requests.filter((row) => row.data.status === 'pending').length;
+  const pendingCount = requests.filter((row) => topupEffective(row.data) === 'pending_review')
+    .length;
   const totalBalance = accounts.reduce((sum, row) => sum + Number(row.data.balance ?? 0), 0);
   const totalPay = accounts.reduce((sum, row) => sum + Number(row.data.totalPayAmount ?? 0), 0);
   const totalBonus = accounts.reduce((sum, row) => sum + Number(row.data.totalBonusAmount ?? 0), 0);
   const totalSpent = accounts.reduce((sum, row) => sum + Number(row.data.totalSpentAmount ?? 0), 0);
   const selectedAccount = accounts.find((row) => row.id === selectedUserId) ?? null;
   const filteredRequests = [...requests]
-    .filter((row) => (requestFilter === 'all' ? true : row.data.status === requestFilter))
+    .filter((row) => {
+      const eff = topupEffective(row.data);
+      if (requestFilter === 'all') return true;
+      if (requestFilter === 'closed') return eff === 'rejected' || eff === 'cancelled';
+      return eff === requestFilter;
+    })
     .filter((row) => {
       const kw = requestSearch.trim().toLowerCase();
       if (!kw) return true;
@@ -225,14 +243,17 @@ export default function FeituanWalletAdmin() {
         row.data.phoneMasked,
         row.data.phoneE164,
         row.data.rejectReason,
+        row.data.lastProofRejectedReason,
       ]
         .filter(Boolean)
         .some((x) => String(x).toLowerCase().includes(kw));
     })
     .sort((a, b) => {
-      const ap = a.data.status === 'pending' ? 1 : 0;
-      const bp = b.data.status === 'pending' ? 1 : 0;
-      if (ap !== bp) return bp - ap;
+      const ea = topupEffective(a.data);
+      const eb = topupEffective(b.data);
+      const pri = (e: EffectiveTopup) =>
+        e === 'pending_review' ? 2 : e === 'awaiting_payment' ? 1 : 0;
+      if (pri(ea) !== pri(eb)) return pri(eb) - pri(ea);
       return (b.data.createdAt?.toMillis?.() ?? 0) - (a.data.createdAt?.toMillis?.() ?? 0);
     });
   const filteredAccounts = accounts.filter((row) => {
@@ -269,7 +290,7 @@ export default function FeituanWalletAdmin() {
   const endingBalance = openingBalance + periodCredit - periodSpent;
 
   return (
-    <PageShell title="饭团钱包" subtitle={`待确认充值 ${pendingCount} 笔`}>
+    <PageShell title="饭团钱包" subtitle={`待核实充值 ${pendingCount} 笔`}>
       <div className="mb-4 flex flex-wrap gap-2">
         <Link
           to="/admin/feituan"
@@ -316,7 +337,10 @@ export default function FeituanWalletAdmin() {
         <h2 className="mb-3 text-sm font-semibold text-gray-900">充值档位</h2>
         <div className="space-y-2">
           {tiers.map((tier, index) => (
-            <div key={tier.id} className="grid gap-2 rounded-lg border border-gray-100 p-2 md:grid-cols-5">
+            <div
+              key={tier.id}
+              className="grid gap-2 rounded-lg border border-gray-100 p-2"
+            >
               <input
                 value={tier.label ?? ''}
                 onChange={(e) =>
@@ -324,50 +348,57 @@ export default function FeituanWalletAdmin() {
                     rows.map((row, i) => (i === index ? { ...row, label: e.target.value } : row))
                   )
                 }
-                placeholder="标签"
-                className="rounded-lg border border-gray-200 px-2 py-1 text-sm"
+                placeholder="标签（选填）"
+                className="w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
               />
-              <input
-                value={tier.payAmount}
-                type="number"
-                onChange={(e) =>
-                  setTiers((rows) =>
-                    rows.map((row, i) => (i === index ? { ...row, payAmount: Number(e.target.value) } : row))
-                  )
-                }
-                placeholder="实付"
-                className="rounded-lg border border-gray-200 px-2 py-1 text-sm"
-              />
-              <input
-                value={tier.bonusAmount}
-                type="number"
-                onChange={(e) =>
-                  setTiers((rows) =>
-                    rows.map((row, i) => (i === index ? { ...row, bonusAmount: Number(e.target.value) } : row))
-                  )
-                }
-                placeholder="赠送"
-                className="rounded-lg border border-gray-200 px-2 py-1 text-sm"
-              />
-              <label className="flex items-center gap-2 text-xs text-gray-700">
+              <div className="grid grid-cols-2 gap-2">
                 <input
-                  type="checkbox"
-                  checked={tier.isActive !== false}
+                  value={tier.payAmount}
+                  type="number"
+                  inputMode="decimal"
                   onChange={(e) =>
                     setTiers((rows) =>
-                      rows.map((row, i) => (i === index ? { ...row, isActive: e.target.checked } : row))
+                      rows.map((row, i) => (i === index ? { ...row, payAmount: Number(e.target.value) } : row))
                     )
                   }
+                  placeholder="实付 RM"
+                  className="min-w-0 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
                 />
-                启用
-              </label>
-              <button
-                type="button"
-                onClick={() => setTiers((rows) => rows.filter((_, i) => i !== index))}
-                className="rounded-lg border border-red-100 bg-red-50 px-2 py-1 text-xs text-red-700"
-              >
-                删除
-              </button>
+                <input
+                  value={tier.bonusAmount}
+                  type="number"
+                  inputMode="decimal"
+                  onChange={(e) =>
+                    setTiers((rows) =>
+                      rows.map((row, i) => (i === index ? { ...row, bonusAmount: Number(e.target.value) } : row))
+                    )
+                  }
+                  placeholder="赠送 RM"
+                  className="min-w-0 rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-700">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300"
+                    checked={tier.isActive !== false}
+                    onChange={(e) =>
+                      setTiers((rows) =>
+                        rows.map((row, i) => (i === index ? { ...row, isActive: e.target.checked } : row))
+                      )
+                    }
+                  />
+                  启用
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setTiers((rows) => rows.filter((_, i) => i !== index))}
+                  className="shrink-0 rounded-lg border border-red-100 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700"
+                >
+                  删除
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -487,13 +518,16 @@ export default function FeituanWalletAdmin() {
           <span className="text-xs text-gray-500">当前显示 {filteredRequests.length} 笔</span>
         </div>
         <div className="mb-3 space-y-2 rounded-xl border border-gray-100 bg-white p-3">
-          <div className="grid grid-cols-4 gap-1.5">
-            {[
-              ['pending', '待确认'],
-              ['all', '全部'],
-              ['confirmed', '已入账'],
-              ['rejected', '已驳回'],
-            ].map(([id, label]) => (
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+            {(
+              [
+                ['pending_review', '待核实'],
+                ['awaiting_payment', '待付款'],
+                ['all', '全部'],
+                ['confirmed', '已入账'],
+                ['closed', '已关闭'],
+              ] as const
+            ).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -510,63 +544,100 @@ export default function FeituanWalletAdmin() {
             value={requestSearch}
             onChange={(e) => setRequestSearch(e.target.value)}
             className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm"
-            placeholder="搜索手机号、用户 ID、驳回原因"
+            placeholder="搜索手机号、用户 ID、驳回说明"
           />
         </div>
-        <div className="space-y-2">
-          {filteredRequests.map((row) => (
-            <article key={row.id} className="rounded-xl border border-gray-100 bg-white p-3 text-xs">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="flex flex-wrap items-center gap-2 font-semibold text-gray-900">
-                    <span>{row.data.phoneMasked ?? row.data.userId}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] ${statusClass(row.data.status)}`}>
-                      {statusLabel(row.data.status)}
-                    </span>
-                  </p>
-                  <p className="mt-1 text-gray-600">
-                    实付 {formatMYR(row.data.payAmount)} · 赠送 {formatMYR(row.data.bonusAmount)} · 入账{' '}
-                    {formatMYR(row.data.creditAmount)} · {fmtTime(row.data.createdAt)}
-                  </p>
-                  <p className="mt-1 text-gray-500">截图 {row.data.paymentScreenshots.length} 张</p>
-                  {row.data.rejectReason ? (
-                    <p className="mt-1 rounded-lg bg-red-50 px-2 py-1 text-red-700">
-                      驳回原因：{row.data.rejectReason}
+        <div className="space-y-3">
+          {filteredRequests.map((row) => {
+            const eff = topupEffective(row.data);
+            const shots = row.data.paymentScreenshots ?? [];
+            return (
+              <article
+                key={row.id}
+                className="rounded-xl border border-gray-200 bg-white p-3 text-xs shadow-sm"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-2 font-semibold text-gray-900">
+                      <span>{row.data.phoneMasked ?? row.data.userId}</span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] ${topupStatusClass(eff)}`}
+                      >
+                        {topupStatusLabel(eff)}
+                      </span>
                     </p>
-                  ) : null}
+                    <p className="mt-1 text-gray-600">
+                      实付 {formatMYR(row.data.payAmount)} · 赠送 {formatMYR(row.data.bonusAmount)} · 入账{' '}
+                      {formatMYR(row.data.creditAmount)} · {fmtTime(row.data.createdAt)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-gray-500">申请编号 {row.id}</p>
+                    {eff === 'awaiting_payment' ? (
+                      <p className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] leading-relaxed text-amber-950">
+                        待顾客上传付款截图后方可核实入账。
+                        {row.data.lastProofRejectedReason ? (
+                          <span className="mt-1 block text-amber-900">
+                            上次驳回：{row.data.lastProofRejectedReason}
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : null}
+                    {row.data.rejectReason && (eff === 'rejected' || eff === 'cancelled') ? (
+                      <p className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-red-700">
+                        终止说明：{row.data.rejectReason}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-                {row.data.status === 'pending' ? (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={busyId === row.id}
-                      onClick={() => void confirmRequest(row.id)}
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-                    >
-                      确认入账
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === row.id}
-                      onClick={() => void rejectRequest(row.id)}
-                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 disabled:opacity-60"
-                    >
-                      驳回
-                    </button>
+
+                {eff === 'pending_review' ? (
+                  <>
+                    <div className="mt-3 border-t border-gray-100 pt-3">
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                        付款凭证
+                      </p>
+                      <PaymentScreenshotsPanel
+                        paymentScreenshots={row.data.paymentScreenshots}
+                        variant="wallet_recharge"
+                      />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+                      <button
+                        type="button"
+                        disabled={busyId === row.id}
+                        onClick={() => void confirmRequest(row.id)}
+                        className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                      >
+                        {busyId === row.id ? '处理中…' : '确认入账'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === row.id}
+                        onClick={() => void rejectProof(row.id)}
+                        className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-950 disabled:opacity-60"
+                      >
+                        驳回凭证
+                      </button>
+                    </div>
+                  </>
+                ) : shots.length > 0 && eff === 'confirmed' ? (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <p className="mb-2 text-[11px] font-semibold text-gray-600">入账时凭证</p>
+                    <div className="flex flex-wrap gap-2">
+                      {shots.map((shot) => (
+                        <a key={shot.url} href={shot.url} target="_blank" rel="noreferrer">
+                          <img
+                            src={shot.url}
+                            alt="充值付款截图"
+                            className="h-20 w-20 rounded-md border border-gray-100 object-cover"
+                          />
+                        </a>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
-              </div>
-              {row.data.paymentScreenshots.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {row.data.paymentScreenshots.map((shot) => (
-                    <a key={shot.url} href={shot.url} target="_blank" rel="noreferrer">
-                      <img src={shot.url} alt="充值付款截图" className="h-20 w-20 rounded-md object-cover" />
-                    </a>
-                  ))}
-                </div>
-              ) : null}
-            </article>
-          ))}
+              </article>
+            );
+          })}
           {filteredRequests.length === 0 ? (
             <p className="rounded-xl border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500">
               当前筛选下没有充值申请。

@@ -18,6 +18,7 @@ import {
   getWechatNotifyOAuthStateId,
   sendOrderSubmittedWechatNotification,
 } from '../../lib/wechatService';
+import { FEITUAN_TW, feituanOrShopGreen } from '../../lib/feituanHomeTheme';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
 import type { ProjectDoc } from '../../types/firestore';
 
@@ -39,6 +40,8 @@ export default function OrderForm() {
     projectId: string;
   }>();
   const isFeituanOrder = !shopSlug;
+  const ft = (feituanCls: string, shopCls: string) =>
+    feituanOrShopGreen(isFeituanOrder, feituanCls, shopCls);
   const location = useLocation();
   const navigate = useNavigate();
   const incoming = (location.state ?? {}) as CartLocationState;
@@ -455,8 +458,14 @@ export default function OrderForm() {
     );
   }
 
-  const inputCls =
-    'mt-1 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-[16px] text-gray-900 outline-none ring-emerald-500/30 focus:border-emerald-500 focus:ring-2';
+  const inputCls = `mt-1 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-[16px] text-gray-900 outline-none ${ft(
+    FEITUAN_TW.inputFocus,
+    'ring-emerald-500/30 focus:border-emerald-500 focus:ring-2'
+  )}`;
+  const primaryBtnCls = ft(
+    'inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-[#0F8F5F] px-3 text-sm font-semibold text-white disabled:bg-gray-300',
+    'inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300'
+  );
 
   const blockedHint = !canPlaceOrder ? (
     <p className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -565,7 +574,7 @@ export default function OrderForm() {
             </button>
             <button
               type="button"
-              className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
+              className={primaryBtnCls}
               disabled={!canGoStep2}
               onClick={() => setStep(2)}
             >
@@ -601,7 +610,10 @@ export default function OrderForm() {
                       key={p.id}
                       className={`relative flex cursor-pointer flex-col rounded-xl border p-2.5 transition-colors ${
                         selected
-                          ? 'border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-500/35'
+                          ? ft(
+                              FEITUAN_TW.selectedSoft,
+                              'border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-500/35'
+                            )
                           : 'border-gray-100 bg-white hover:border-gray-200'
                       }`}
                     >
@@ -632,7 +644,10 @@ export default function OrderForm() {
                         <span
                           className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 ${
                             selected
-                              ? 'border-emerald-600 bg-emerald-600 ring-2 ring-white ring-inset'
+                              ? ft(
+                                  FEITUAN_TW.radioSelected,
+                                  'border-emerald-600 bg-emerald-600 ring-2 ring-white ring-inset'
+                                )
                               : 'border-gray-300 bg-white'
                           }`}
                           aria-hidden
@@ -806,7 +821,7 @@ export default function OrderForm() {
             </button>
             <button
               type="button"
-              className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
+              className={primaryBtnCls}
               disabled={!canGoStep3}
               onClick={() => setStep(3)}
             >
@@ -912,7 +927,7 @@ export default function OrderForm() {
             <p className="text-sm text-red-600">{submitError}</p>
           ) : null}
           {submitHint ? (
-            <p className="text-sm text-emerald-700">{submitHint}</p>
+            <p className={`text-sm ${ft(FEITUAN_TW.hint, 'text-emerald-700')}`}>{submitHint}</p>
           ) : null}
           <div className="flex flex-wrap gap-2">
             <button
@@ -925,7 +940,7 @@ export default function OrderForm() {
             </button>
             <button
               type="button"
-              className="inline-flex h-11 flex-1 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white disabled:bg-gray-300"
+              className={primaryBtnCls}
               onClick={handleSubmit}
               disabled={submitting || !canPlaceOrder}
             >

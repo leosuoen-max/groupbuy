@@ -8,6 +8,7 @@ import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import { listActiveFeituanDeliveryPointsForProject } from '../../lib/feituanDeliveryService';
+import { FEITUAN_TW, feituanOrShopGreen } from '../../lib/feituanHomeTheme';
 import {
   addressFieldPrefillForContactEdit,
   resolveCustomerAddressForChoice,
@@ -224,6 +225,8 @@ export default function OrderDetail() {
     orderId: string;
   }>();
   const isFeituanOrder = !shopSlug;
+  const ft = (feituanCls: string, shopCls: string) =>
+    feituanOrShopGreen(isFeituanOrder, feituanCls, shopCls);
   const base = isFeituanOrder
     ? `/feituan/projects/${encodeURIComponent(projectId)}`
     : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
@@ -906,7 +909,12 @@ export default function OrderDetail() {
           </p>
         ) : null}
 
-        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-emerald-900">
+        <div
+          className={`rounded-xl border px-3 py-3 ${ft(
+            FEITUAN_TW.panelHeader,
+            'border-emerald-100 bg-emerald-50 text-emerald-900'
+          )}`}
+        >
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
           <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
@@ -920,13 +928,18 @@ export default function OrderDetail() {
             </span>
           </p>
           {(confirmedAmount > 0 || unpaidAmount > 0) && order.status !== 'cancelled' ? (
-            <p className="mt-2 text-xs text-emerald-950">
+            <p className={`mt-2 text-xs ${ft(FEITUAN_TW.text, 'text-emerald-950')}`}>
               已付（商户已确认部分）：{formatMYR(confirmedAmount)} · 待付：{' '}
               <strong>{formatMYR(unpaidAmount)}</strong>
             </p>
           ) : null}
           {cardAppsAll.length > 0 ? (
-            <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5 text-[11px] text-emerald-900 ring-1 ring-emerald-200">
+            <div
+              className={`mt-2 rounded-lg px-2 py-1.5 ${ft(
+                FEITUAN_TW.subpanel,
+                'bg-white/80 text-[11px] text-emerald-900 ring-1 ring-emerald-200'
+              )}`}
+            >
               <span className="font-semibold">卡支付：</span>
               {cardPassUsesTotal > 0 ? (
                 <span className="ml-1">次卡 {cardPassUsesTotal} 次</span>
@@ -943,7 +956,12 @@ export default function OrderDetail() {
             </div>
           ) : null}
           {feituanWalletAppsAll.length > 0 ? (
-            <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5 text-[11px] text-emerald-900 ring-1 ring-emerald-200">
+            <div
+              className={`mt-2 rounded-lg px-2 py-1.5 ${ft(
+                FEITUAN_TW.subpanel,
+                'bg-white/80 text-[11px] text-emerald-900 ring-1 ring-emerald-200'
+              )}`}
+            >
               <span className="font-semibold">饭团钱包：</span>
               <span className="ml-1">
                 共抵扣 {formatMYR(feituanWalletDeductTotal)}
@@ -970,7 +988,10 @@ export default function OrderDetail() {
           <div>
             <Link
               to={`${base}?appendOrder=${encodeURIComponent(order.orderNumber)}`}
-              className="inline-flex h-11 w-full items-center justify-center rounded-xl border border-dashed border-emerald-400 bg-emerald-50/80 text-sm font-semibold text-emerald-900"
+              className={`inline-flex h-11 w-full items-center justify-center rounded-xl border text-sm font-semibold ${ft(
+                `${FEITUAN_TW.dashedBtn}`,
+                'border-dashed border-emerald-400 bg-emerald-50/80 text-emerald-900'
+              )}`}
             >
               ＋ 加菜 / 补购商品
             </Link>
@@ -998,7 +1019,7 @@ export default function OrderDetail() {
                   <span
                     className={`text-xs font-medium ${
                       g.status === 'confirmed'
-                        ? 'text-emerald-800'
+                        ? ft(FEITUAN_TW.statusConfirmed, 'text-emerald-800')
                         : g.status === 'pending'
                           ? 'text-sky-800'
                           : 'text-amber-900'
@@ -1203,7 +1224,7 @@ export default function OrderDetail() {
                 <p
                   className={
                     contactMsg === '已保存'
-                      ? 'text-xs text-emerald-700'
+                      ? `text-xs ${ft(FEITUAN_TW.hint, 'text-emerald-700')}`
                       : 'text-xs text-red-600'
                   }
                 >
@@ -1320,7 +1341,7 @@ export default function OrderDetail() {
                   type="button"
                   disabled={feituanWalletPaying}
                   onClick={() => void handleFeituanWalletPay()}
-                  className="inline-flex h-10 w-full items-center justify-center rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white disabled:opacity-60"
+                  className={`inline-flex h-10 w-full items-center justify-center rounded-xl px-4 text-sm font-semibold disabled:opacity-60 ${FEITUAN_TW.btn}`}
                 >
                   {feituanWalletPaying ? '处理中…' : '使用饭团钱包抵扣并确认'}
                 </button>

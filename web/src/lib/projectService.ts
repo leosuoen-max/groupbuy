@@ -15,7 +15,7 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { compressImageFileForUpload } from './imageCompress';
 import { getDb, getStorageClient } from './firebase';
-import { getShopBySlug } from './shopService';
+import { getShopById, getShopBySlug, type ShopRow } from './shopService';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
 export type ProjectRow = { id: string; data: ProjectDoc };
@@ -88,13 +88,15 @@ export async function createDraftProject(shopId: string): Promise<string> {
 }
 
 /**
- * 从顾客进店链接（或路径）解析出店铺 slug 与项目 ID。
- * 支持 `https://域名/shop/slug/projectId`、`/shop/slug/projectId/order` 等。
+ * 从顾客进店链接或分享页路径解析项目。
+ * - `https://域名/shop/slug/projectId`、`/shop/slug/projectId/order` 等
+ * - `https://域名/share/projectId`（与 `getProjectSharePageUrl` 一致）
  */
-export function parseShopProjectFromCustomerUrl(raw: string): {
-  shopSlug: string;
-  projectId: string;
-} | null {
+export type ParsedCustomerProjectLink =
+  | { kind: 'shop_home'; shopSlug: string; projectId: string }
+  | { kind: 'share'; projectId: string };
+
+export function parseCustomerProjectLink(raw: string): ParsedCustomerProjectLink | null {
   const t = raw.trim();
   if (!t) return null;
   let pathname = t;
@@ -105,16 +107,35 @@ export function parseShopProjectFromCustomerUrl(raw: string): {
       return null;
     }
   }
+  const shareM = pathname.match(/\/share\/([^/?]+)/);
+  if (shareM?.[1]) {
+    try {
+      return { kind: 'share', projectId: decodeURIComponent(shareM[1]) };
+    } catch {
+      return null;
+    }
+  }
   const m = pathname.match(/\/shop\/([^/]+)\/([^/]+)/);
   if (!m?.[1] || !m[2]) return null;
   try {
     return {
+      kind: 'shop_home',
       shopSlug: decodeURIComponent(m[1]),
       projectId: decodeURIComponent(m[2]),
     };
   } catch {
     return null;
   }
+}
+
+/** @deprecated 使用 {@link parseCustomerProjectLink} */
+export function parseShopProjectFromCustomerUrl(raw: string): {
+  shopSlug: string;
+  projectId: string;
+} | null {
+  const p = parseCustomerProjectLink(raw);
+  if (!p || p.kind !== 'shop_home') return null;
+  return { shopSlug: p.shopSlug, projectId: p.projectId };
 }
 
 function cloneProductsForCopy(
@@ -160,28 +181,42 @@ function resolveCopyClosesAt(src: Timestamp | undefined): Timestamp {
 }
 
 /**
- * 将「顾客进店链接」对应的项目整份拷贝为**当前店铺**下的新草稿（新文档 ID）。
+ * 将「顾客进店链接」或「/share/项目ID」对应的项目整份拷贝为**当前店铺**下的新草稿（新文档 ID）。
  * - 跨店拷贝时：清空 `deliveryPointIds`、去掉商品/套餐上的次卡模板抵扣配置（避免指向他店模板）。
  * - 同店拷贝：保留配送点与次卡适用模板。
- * - 统计字段归零；状态为 draft；标题后缀「（拷贝）」。
+ * - 统计字段归零；状态为 draft；标题后缀「（拷贝草稿）」（已带此后缀则不重复添加）。
  */
 export async function copyProjectFromCustomerLinkAsDraft(params: {
   linkOrPath: string;
   targetShopId: string;
 }): Promise<{ newProjectId: string }> {
-  const parsed = parseShopProjectFromCustomerUrl(params.linkOrPath);
+  const parsed = parseCustomerProjectLink(params.linkOrPath);
   if (!parsed) {
     throw new Error(
-      '无法识别链接：请粘贴完整顾客链接（需包含 /shop/店铺slug/项目ID）'
+      '无法识别链接：请粘贴完整顾客链接（/shop/店铺slug/项目ID）或分享页链接（/share/项目ID）'
     );
   }
-  const { shopSlug, projectId } = parsed;
-  const shopRow = await getShopBySlug(shopSlug);
-  if (!shopRow) throw new Error('链接中的店铺不存在或 slug 有误');
-  const projRow = await getProject(projectId);
-  if (!projRow) throw new Error('链接中的项目不存在或无权读取');
-  if (projRow.data.shopId !== shopRow.id) {
-    throw new Error('链接与项目数据不一致，请检查是否复制完整');
+
+  let shopRow: ShopRow;
+  let projRow: ProjectRow;
+
+  if (parsed.kind === 'share') {
+    const p = await getProject(parsed.projectId);
+    if (!p) throw new Error('链接中的项目不存在或无权读取');
+    projRow = p;
+    const srcShop = await getShopById(p.data.shopId);
+    if (!srcShop) throw new Error('来源店铺不存在');
+    shopRow = srcShop;
+  } else {
+    const s = await getShopBySlug(parsed.shopSlug);
+    if (!s) throw new Error('链接中的店铺不存在或 slug 有误');
+    shopRow = s;
+    const p = await getProject(parsed.projectId);
+    if (!p) throw new Error('链接中的项目不存在或无权读取');
+    projRow = p;
+    if (p.data.shopId !== s.id) {
+      throw new Error('链接与项目数据不一致，请检查是否复制完整');
+    }
   }
 
   const src = projRow.data;
@@ -189,7 +224,8 @@ export async function copyProjectFromCustomerLinkAsDraft(params: {
   const deliveryPointIds = stripCardTemplates ? [] : [...(src.deliveryPointIds ?? [])];
 
   const baseTitle = (src.title || '未命名项目').trim();
-  const title = baseTitle.endsWith('（拷贝）') ? baseTitle : `${baseTitle}（拷贝）`;
+  const suffix = '（拷贝草稿）';
+  const title = baseTitle.endsWith(suffix) ? baseTitle : `${baseTitle}${suffix}`;
 
   const def = defaultProjectPayload(params.targetShopId);
   const ff = src.formFields;

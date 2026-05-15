@@ -8,12 +8,14 @@ import { formatMYR } from '../lib/formatMYR';
 import {
   appendFeituanWalletTopupScreenshot,
   calculateFeituanWalletTopupPreview,
+  effectiveFeituanWalletTopupStatus,
   getFeituanWalletSettings,
   getFeituanWalletTopupRequest,
   submitFeituanWalletTopupRequest,
   uploadFeituanWalletPaymentImage,
   type FeituanWalletTopupRequestRow,
 } from '../lib/feituanWalletService';
+import { computeImageFileMd5Hex } from '../lib/paymentImageUpload';
 import type { FeituanWalletSettingsDoc } from '../types/firestore';
 
 export default function FeituanWalletTopup() {
@@ -89,12 +91,14 @@ export default function FeituanWalletTopup() {
     try {
       const toSend = await compressImageFileForUpload(file);
       const hex = await sha256HexOfFile(toSend);
+      const md5 = await computeImageFileMd5Hex(toSend);
       const url = await uploadFeituanWalletPaymentImage({
         userId: user.uid,
         requestId,
         file: toSend,
       });
       await appendFeituanWalletTopupScreenshot(requestId, user.uid, url, {
+        md5Hash: md5,
         contentSha256: hex,
       });
       await refreshRequest();
@@ -236,9 +240,9 @@ export default function FeituanWalletTopup() {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="mb-2 text-xs leading-relaxed text-indigo-900/80">
-                  请按应付金额转账，上传截图后等待饭团管理员确认入账。
+                  请按应付金额转账，上传截图后进入「待核实」，饭团管理员核对后再入账。
                 </p>
-                {request.data.status === 'pending' ? (
+                {request && effectiveFeituanWalletTopupStatus(request.data) === 'awaiting_payment' ? (
                   <button
                     type="button"
                     disabled={uploading}
@@ -247,11 +251,13 @@ export default function FeituanWalletTopup() {
                   >
                     {uploading ? '上传中…' : '选择图片上传'}
                   </button>
-                ) : (
+                ) : request ? (
                   <p className="rounded-lg bg-white px-3 py-2 text-xs text-gray-600">
-                    当前状态不可继续上传。
+                    {effectiveFeituanWalletTopupStatus(request.data) === 'pending_review'
+                      ? '已提交凭证，请等待饭团管理员核实。'
+                      : '当前状态不可继续上传。'}
                   </p>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
@@ -266,7 +272,7 @@ export default function FeituanWalletTopup() {
               e.currentTarget.value = '';
             }}
           />
-          {request.data.paymentScreenshots.length > 0 ? (
+          {request && (request.data.paymentScreenshots ?? []).length > 0 ? (
             <ul className="space-y-2">
               {request.data.paymentScreenshots.map((shot) => (
                 <li key={shot.url} className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-2">

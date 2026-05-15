@@ -235,7 +235,14 @@ export type FeituanWalletAppliedTierDoc = {
   count: number;
 };
 
+/**
+ * awaiting_payment：待付款（未上传或凭证被驳回后需重传）
+ * pending_review：待核实（已上传凭证，饭团管理员处理）
+ * pending：历史兼容，读时按有无凭证映射为 awaiting_payment / pending_review
+ */
 export type FeituanWalletTopupRequestStatus =
+  | 'awaiting_payment'
+  | 'pending_review'
   | 'pending'
   | 'confirmed'
   | 'rejected'
@@ -257,10 +264,20 @@ export type FeituanWalletTopupRequestDoc = {
   paymentScreenshots: {
     url: string;
     uploadedAt: Timestamp;
+    /** 与订单凭证一致：内容 MD5（用于跨申请重复识别） */
+    md5Hash?: string;
     contentSha256?: string;
+    /** 与订单凭证一致：绿/黄/红辅助标记 */
+    flag?: 'green' | 'yellow' | 'red';
+    flagReason?: string;
   }[];
   status: FeituanWalletTopupRequestStatus;
+  /** 终局驳回（整笔申请不再收款） */
   rejectReason?: string;
+  /** 最近一次「驳回凭证」说明（顾客端可见） */
+  lastProofRejectedReason?: string;
+  lastProofRejectedAt?: Timestamp;
+  lastProofRejectedBy?: string;
   confirmedAt?: Timestamp;
   confirmedByUserId?: string;
   ledgerId?: string;

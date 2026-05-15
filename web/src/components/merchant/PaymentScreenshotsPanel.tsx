@@ -68,9 +68,14 @@ type Props = {
   untaggedNotBeforeMillis?: number;
   emptyHint?: string;
   emptyAction?: ReactNode;
+  /**
+   * default：订单支付组语境（分区、加购批次等）。
+   * wallet_recharge：饭团钱包单次充值，无加购/批次；加购请走新订单，不在此展示。
+   */
+  variant?: 'default' | 'wallet_recharge';
 };
 
-/** 商户核对付款凭证（大图 + 可选三色标记；可按 appendBatchId 分区） */
+/** 商户核对付款凭证（大图 + 可选三色标记）。订单侧可按 appendBatchId 分区；钱包充值请传 variant=wallet_recharge。 */
 export function PaymentScreenshotsPanel({
   paymentScreenshots,
   appendBatchIdFilter,
@@ -79,6 +84,7 @@ export function PaymentScreenshotsPanel({
   untaggedNotBeforeMillis,
   emptyHint,
   emptyAction,
+  variant = 'default',
 }: Props) {
   const parsed = parseScreenshotEntries(paymentScreenshots);
   const filtered = filterByAppendBatch(
@@ -91,13 +97,19 @@ export function PaymentScreenshotsPanel({
   const withUrl = filtered.filter((p) => p.url);
   const waivedNoShot = filtered.filter((p) => !p.url && p.waivedNoScreenshot);
 
+  const emptyTitle =
+    variant === 'wallet_recharge' ? '暂无付款截图' : '暂无对应付款截图';
+  const defaultEmptyHint =
+    variant === 'wallet_recharge'
+      ? '顾客上传转账截图后即进入「待核实」，请核对金额后再确认入账。'
+      : '顾客上传打款凭证后，请在此对照金额与时间；确认无误后再确认收款。';
+
   if (withUrl.length === 0 && waivedNoShot.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-amber-200 bg-amber-50/60 px-3 py-3 text-sm text-amber-950">
-        <p className="font-semibold">暂无对应付款截图</p>
+        <p className="font-semibold">{emptyTitle}</p>
         <p className="mt-1 text-xs leading-relaxed text-amber-900">
-          {emptyHint ??
-            '顾客上传打款凭证后，请在此对照金额与时间；确认无误后再确认收款。'}
+          {emptyHint ?? defaultEmptyHint}
         </p>
         {emptyAction ? <div className="mt-3">{emptyAction}</div> : null}
       </div>
@@ -106,7 +118,11 @@ export function PaymentScreenshotsPanel({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-gray-600">以下为该分区内的凭证（含无图免提交通道）。</p>
+      <p className="text-xs text-gray-600">
+        {variant === 'wallet_recharge'
+          ? '以下为本次充值的付款截图（单笔入账，无加购批次）。'
+          : '以下为该分区内的凭证（含无图免提交通道）。'}
+      </p>
       {waivedNoShot.map((shot, i) => (
         <div
           key={`${shot.id ?? 'waive'}-waive-${i}`}

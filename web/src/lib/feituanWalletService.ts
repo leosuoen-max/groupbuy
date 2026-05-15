@@ -11,6 +11,10 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
+import {
+  orderHasPaymentScreenshots,
+  withDefaultScreenshotFlagIfUrl,
+} from './paymentScreenshotHelpers';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import type { User } from 'firebase/auth';
 import { getDb, getStorageClient } from './firebase';
@@ -37,6 +41,70 @@ const REQUESTS_COLL = 'feituan_wallet_topup_requests';
 const LEDGER_COLL = 'feituan_wallet_ledger';
 
 const ROUND2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+/** 与 Firestore 写入值一致；旧数据 `pending` 按有无凭证拆成待付款 / 待核实 */
+export function effectiveFeituanWalletTopupStatus(
+  doc: FeituanWalletTopupRequestDoc
+): 'awaiting_payment' | 'pending_review' | 'confirmed' | 'rejected' | 'cancelled' {
+  const s = doc.status;
+  if (s === 'confirmed' || s === 'rejected' || s === 'cancelled') return s;
+  if (s === 'pending_review' || s === 'awaiting_payment') return s;
+  if (s === 'pending') {
+    return orderHasPaymentScreenshots(doc.paymentScreenshots)
+      ? 'pending_review'
+      : 'awaiting_payment';
+  }
+  return 'awaiting_payment';
+}
+
+/** 与订单顾客上传凭证三色规则对齐（跨申请 / 本申请 / 与申请创建时间） */
+export function computeWalletTopupScreenshotRiskFlags(input: {
+  md5Hex: string;
+  createdAtMillis: number;
+  uploadMillis: number;
+  dupOtherRequests: boolean;
+  dupSameRequest: boolean;
+}): { flag: 'green' | 'yellow' | 'red'; flagReason?: string } {
+  const md5 = input.md5Hex.trim();
+  if (md5 && input.dupOtherRequests) {
+    return { flag: 'red', flagReason: 'MD5 与其他充值申请截图重复' };
+  }
+  if (md5 && input.dupSameRequest) {
+    return {
+      flag: 'yellow',
+      flagReason: '本申请已存在相同内容的截图（MD5 一致），请核对是否重复使用凭证',
+    };
+  }
+  if (input.uploadMillis < input.createdAtMillis) {
+    return { flag: 'yellow', flagReason: '截图上传时间早于申请创建时间' };
+  }
+  return { flag: 'green' };
+}
+
+function shotMd5FromUnknown(s: unknown): string | null {
+  if (!s || typeof s !== 'object') return null;
+  const h = (s as Record<string, unknown>).md5Hash;
+  return typeof h === 'string' && h.trim() ? h.trim() : null;
+}
+
+async function md5DuplicateInOtherWalletTopups(
+  excludeRequestId: string,
+  md5: string
+): Promise<boolean> {
+  const m = md5.trim();
+  if (!m) return false;
+  const snap = await getDocs(collection(getDb(), REQUESTS_COLL));
+  for (const d of snap.docs) {
+    if (d.id === excludeRequestId) continue;
+    const data = d.data() as FeituanWalletTopupRequestDoc;
+    const shots = data.paymentScreenshots;
+    if (!Array.isArray(shots)) continue;
+    for (const s of shots) {
+      if (shotMd5FromUnknown(s) === m) return true;
+    }
+  }
+  return false;
+}
 
 export type FeituanWalletAccountRow = {
   id: string;
@@ -281,7 +349,7 @@ export async function submitFeituanWalletTopupRequest(
     appliedTiers: preview.appliedTiers,
     tierSnapshot: cleanTiers(settings.topupTiers),
     paymentScreenshots: [],
-    status: 'pending',
+    status: 'awaiting_payment',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   } satisfies Omit<FeituanWalletTopupRequestDoc, 'createdAt' | 'updatedAt'> & {
@@ -313,24 +381,55 @@ export async function appendFeituanWalletTopupScreenshot(
   requestId: string,
   userId: string,
   url: string,
-  opts?: { contentSha256?: string }
+  opts?: { md5Hash?: string; contentSha256?: string }
 ): Promise<void> {
+  const md5 = (opts?.md5Hash ?? '').trim();
+  const dupOther = md5 ? await md5DuplicateInOtherWalletTopups(requestId, md5) : false;
+
   const refDoc = doc(getDb(), REQUESTS_COLL, requestId);
   await runTransaction(getDb(), async (tx) => {
     const snap = await tx.get(refDoc);
     if (!snap.exists()) throw new Error('充值申请不存在');
     const cur = snap.data() as FeituanWalletTopupRequestDoc;
     if (cur.userId !== userId) throw new Error('无权修改此申请');
-    if (cur.status !== 'pending') throw new Error('该申请已不可修改');
+    const eff = effectiveFeituanWalletTopupStatus(cur);
+    if (eff !== 'awaiting_payment') {
+      throw new Error('当前状态不可上传付款截图（待核实请等待管理员处理，或联系饭团）');
+    }
+
+    const existingShots = Array.isArray(cur.paymentScreenshots) ? cur.paymentScreenshots : [];
+    const dupSameRequest =
+      !!md5 &&
+      existingShots.some((s) => {
+        return shotMd5FromUnknown(s) === md5;
+      });
+
+    const uploadedAt = Timestamp.now();
+    const uploadMs = uploadedAt.toMillis();
+    const createdMs = cur.createdAt?.toMillis?.() ?? 0;
+
+    const risk = computeWalletTopupScreenshotRiskFlags({
+      md5Hex: md5,
+      createdAtMillis: createdMs,
+      uploadMillis: uploadMs,
+      dupOtherRequests: dupOther,
+      dupSameRequest,
+    });
+
+    const entryRaw: Record<string, unknown> = {
+      id: globalThis.crypto.randomUUID(),
+      url,
+      uploadedAt,
+      ...(md5 ? { md5Hash: md5 } : {}),
+      ...(opts?.contentSha256 ? { contentSha256: opts.contentSha256 } : {}),
+      flag: risk.flag,
+    };
+    if (risk.flagReason) entryRaw.flagReason = risk.flagReason;
+
+    const entry = withDefaultScreenshotFlagIfUrl(entryRaw);
     tx.update(refDoc, {
-      paymentScreenshots: [
-        ...(cur.paymentScreenshots ?? []),
-        {
-          url,
-          uploadedAt: Timestamp.now(),
-          ...(opts?.contentSha256 ? { contentSha256: opts.contentSha256 } : {}),
-        },
-      ],
+      paymentScreenshots: [...existingShots, entry],
+      status: 'pending_review',
       updatedAt: serverTimestamp(),
     });
   });
@@ -416,9 +515,12 @@ export async function confirmFeituanWalletTopupRequest(
     const reqSnap = await tx.get(reqRef);
     if (!reqSnap.exists()) throw new Error('充值申请不存在');
     const req = reqSnap.data() as FeituanWalletTopupRequestDoc;
-    if (req.status !== 'pending') throw new Error('该申请已处理');
-    if (!Array.isArray(req.paymentScreenshots) || req.paymentScreenshots.length === 0) {
-      throw new Error('该申请尚未上传付款截图');
+    const eff = effectiveFeituanWalletTopupStatus(req);
+    if (eff !== 'pending_review') {
+      throw new Error('仅「待核实」且已上传凭证的充值可申请确认入账');
+    }
+    if (!orderHasPaymentScreenshots(req.paymentScreenshots)) {
+      throw new Error('尚未上传付款截图');
     }
     const walletRef = doc(db, ACCOUNTS_COLL, req.walletId);
     const walletSnap = await tx.get(walletRef);
@@ -436,6 +538,7 @@ export async function confirmFeituanWalletTopupRequest(
       totalCreditAmount: ROUND2(Number(wallet.totalCreditAmount ?? 0) + creditAmount),
       updatedAt: serverTimestamp(),
     });
+    const note = `饭团钱包充值：实付 RM ${ROUND2(req.payAmount).toFixed(2)}，赠送 RM ${ROUND2(req.bonusAmount).toFixed(2)}`;
     tx.set(ledgerRef, {
       userId: req.userId,
       walletId: req.walletId,
@@ -447,7 +550,7 @@ export async function confirmFeituanWalletTopupRequest(
       bonusAmount: ROUND2(req.bonusAmount),
       creditAmount,
       topupRequestId: requestId,
-      note: `饭团钱包充值：实付 RM ${ROUND2(req.payAmount).toFixed(2)}，赠送 RM ${ROUND2(req.bonusAmount).toFixed(2)}`,
+      note,
       createdAt: serverTimestamp(),
     } satisfies Omit<FeituanWalletLedgerDoc, 'createdAt'> & {
       createdAt: ReturnType<typeof serverTimestamp>;
@@ -462,6 +565,39 @@ export async function confirmFeituanWalletTopupRequest(
   });
 }
 
+/** 驳回凭证：回到待付款，清空截图（旧凭证作废），顾客需重新上传 */
+export async function rejectFeituanWalletTopupProof(
+  requestId: string,
+  actorUid: string,
+  reason?: string
+): Promise<void> {
+  if (!(await isFeituanAdmin(actorUid))) throw new Error('需要饭团管理员权限');
+  const db = getDb();
+  const refDoc = doc(db, REQUESTS_COLL, requestId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(refDoc);
+    if (!snap.exists()) throw new Error('充值申请不存在');
+    const cur = snap.data() as FeituanWalletTopupRequestDoc;
+    const eff = effectiveFeituanWalletTopupStatus(cur);
+    if (eff !== 'pending_review') {
+      throw new Error('仅「待核实」状态可驳回凭证');
+    }
+    if (!orderHasPaymentScreenshots(cur.paymentScreenshots)) {
+      throw new Error('当前无有效凭证');
+    }
+    const trimmed = (reason ?? '').trim();
+    tx.update(refDoc, {
+      status: 'awaiting_payment',
+      paymentScreenshots: [],
+      lastProofRejectedReason: trimmed || null,
+      lastProofRejectedAt: serverTimestamp(),
+      lastProofRejectedBy: actorUid,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/** 终局驳回：整笔充值申请不再收款（与「驳回凭证」不同） */
 export async function rejectFeituanWalletTopupRequest(
   requestId: string,
   actorUid: string,
