@@ -10,8 +10,6 @@ export type ShopShareSheetProps = {
   /** 浏览器支持 Web Share API 时显示 */
   showSystemShare: boolean;
   onSystemShare: () => void;
-  /** 微信内粘贴链接常无卡片，提示用右上角分享 */
-  wechatPasteHint?: string;
 };
 
 export function ShopShareSheet({
@@ -22,7 +20,6 @@ export function ShopShareSheet({
   onCopyLink,
   showSystemShare,
   onSystemShare,
-  wechatPasteHint,
 }: ShopShareSheetProps) {
   if (!open) return null;
 
@@ -44,11 +41,6 @@ export function ShopShareSheet({
           分享
         </div>
         <p className="mb-3 line-clamp-2 px-1 text-center text-xs text-gray-500">{headline}</p>
-        {wechatPasteHint ? (
-          <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-left text-xs leading-relaxed text-amber-900">
-            {wechatPasteHint}
-          </p>
-        ) : null}
         <div className="space-y-2">
           <button
             type="button"

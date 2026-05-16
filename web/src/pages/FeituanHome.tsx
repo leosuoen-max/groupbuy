@@ -9,7 +9,6 @@ import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
 import { getFeituanHomeShareUrl } from '../lib/shareLink';
-import { isWechatBrowser } from '../lib/wechatService';
 import { getShopById, type ShopRow } from '../lib/shopService';
 import {
   buildFeituanHomeShareCard,
@@ -139,11 +138,12 @@ export default function FeituanHome() {
       ),
     [rows]
   );
-  const {
-    debug: wechatShareDebug,
-    ready: wechatShareReady,
-    setupError: wechatShareSetupError,
-  } = useWechatShareCard(shareCard);
+  const shouldDebugWechatShare =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('debugWechatShare') === '1';
+  const { debug: wechatShareDebug } = useWechatShareCard(
+    shouldDebugWechatShare ? shareCard : null
+  );
   const shareUrl = shareCard?.link?.trim() || getFeituanHomeShareUrl();
   const shareHeadline = shareCard?.title?.trim() || '大马饭团 · 今日团';
 
@@ -305,13 +305,6 @@ export default function FeituanHome() {
         onCopyLink={() => void handleShareSheetCopyLink()}
         showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
         onSystemShare={() => void handleShareSheetSystemShare()}
-        wechatPasteHint={
-          isWechatBrowser()
-            ? wechatShareReady
-              ? '微信内打开饭团页后：点右上角「…」→「发送给朋友」。从公众号菜单进、再分享，和点链接进 H5 再分享，机制不同；请在本页用三点分享。'
-              : `微信分享未就绪：${formatWechatShareSetupError(wechatShareSetupError)}。调试：?debugWechatShare=1`
-            : undefined
-        }
       />
     </main>
   );

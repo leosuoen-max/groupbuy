@@ -106,9 +106,9 @@
 ## 五、可选：交接用语（复制到新会话首条）
 
 ```
-请读 groupbuy 根目录的 HANDOVER.md、README.md、CURSOR_GUIDE.md、docs/11-需求与实现对照.md、docs/15-实现现状快照.md，再按需补读 docs/06、docs/03/04。
+请读 groupbuy 根目录的 HANDOVER.md（尤其「七、外链分享与微信」若动分享/公众号预览）、README.md、CURSOR_GUIDE.md、docs/11-需求与实现对照.md、docs/15-实现现状快照.md，再按需补读 docs/06、docs/13（微信）。
 当前前端在 web/；详细路由与实现差距以 docs/11 为准；产品形态增量以 docs/15 叙事为准。
-请结合 HANDOVER「三、建议的下一步」与本条任务描述继续。
+微信带图分享走公众号三点；外链/WhatsApp 用 /share/* + OG。请结合 HANDOVER「三、建议的下一步」与本条任务描述继续。
 ```
 
 （把路径换成本机实际路径；任务描述写清要做的具体事。）
@@ -166,17 +166,90 @@
 | 标签 | 含义 |
 |------|------|
 | `v1.2.0` | 服务号网页授权基础流程 |
-| **`v1.3.0`（候选，打 tag 前请先提交工作区）** | 饭团支付组/对账/订单列表、钱包充值核实全流程、首页·项目·订单品牌色统一、`docs/15` 快照 |
+| `v1.3.0` | 饭团支付组/对账/订单列表、钱包充值核实全流程、首页·项目·订单品牌色统一、`docs/15` 快照 |
+| **`v1.4.0`** | 外链分享 OG（`/share/*`）、饭团聚合落地页、微信 JS-SDK 尝试与文档；见下文 **「七、外链分享与微信」** |
 
-打 tag 示例（在 `main` 已提交并推送后）：
+### v1.4.0 后补丁（2026-05-16）
 
-```bash
-git tag -a v1.3.0 -m "v1.3.0: 饭团支付与钱包、品牌色统一"
-git push origin v1.3.0
-```
+- 饭团分享弹层已去掉「微信分享未就绪 / IP 白名单」黄条；非 `?debugWechatShare=1` 不初始化 JS-SDK。微信带图仍走公众号三点 + `/share/*` OG。
 
 ### 下一任建议起手顺序
 
 1. 读 **`docs/11`**、**`docs/15`** 与 **`docs/14`**，确认本轮是否已覆盖你们当前优先级。
 2. 改饭团订单/对账前，先确认 **`buildPaymentGroups`** 与相关 lib 测试（若有）。
 3. 改 **`ShopHeader` / `ProductCard` / `ShopProjectStatusCard`** 时顺带打开商户 **`ShopHome`** 回归，避免共享组件误伤商户端。
+
+---
+
+## 七、外链分享与微信（v1.4.0，2026-05）
+
+### 产品结论（已定，勿反复踩坑）
+
+| 场景 | 做法 | 结果 |
+|------|------|------|
+| **WhatsApp / 粘贴链接** | 用 **`/share/feituan?cv=4`** 或 **`/share/:projectId`**，等预览出来再发 | ✅ 正常（爬虫读 OG） |
+| **公众号菜单进 → 右上角三点分享** | 走微信 **链接预览**，不经过我们服务器 `access_token` | ✅ 有标题+图（用户已验证） |
+| **点链接进 H5 饭团页 → 右上角三点** | 需 **JS-SDK + IP 白名单**；Firebase Functions 出口 IP **不固定** | ❌ 已放弃作主路径；弹层内微信报错提示已去掉 |
+| **饭团页内「分享」按钮** | 仅 **复制链接** / 系统分享；微信带图靠公众号 | 保留按钮，无微信 SDK 提示 |
+
+刷新外链预览缓存：递增 **`FEITUAN_HOME_SHARE_QUERY`**（当前 **`cv=4`**），须 **`web/src/lib/shareLink.ts`** 与 **`functions/index.js`** 顶部的常量 **同步**。
+
+### 架构要点
+
+1. **Hosting**：`firebase.json` 将 **`/share/**`** 重写到 Cloud Function **`shareRedirect`**（`us-central1`）。
+2. **`shareRedirect`**（`functions/index.js`）  
+   - 普通项目：`/share/:projectId` → 读 Firestore，返回 HTML + `og:*`，`location.replace` 到 shop/饭团项目页。  
+   - 饭团首页：保留字 **`feituan`** → 聚合上架项目，**`og:image` 优先首项目菜品图**，否则 **`/feituan-logo.png`**。  
+   - 曾加静态 `web/public/share/feituan/index.html`，后删除，改回动态 Function。
+3. **SPA 壳子**：`web/vite.config.ts` 构建时注入默认 OG（绝对 URL，默认 origin `https://groupbuy-app-24c46.web.app`），减轻直链 `/feituan` 无 meta 问题。
+4. **前端复制链接**：`getFeituanHomeShareUrl()` → `/share/feituan?cv=4`；商户项目用 `getProjectSharePageUrl()`。
+
+### 微信 JS-SDK（已实现但生产未依赖）
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/hooks/useWechatShareCard.ts` | 签名、`wx.config`、新旧分享 API、`WeixinJSBridge`；`trigger` 时再 `updateAppMessageShareData` |
+| `web/src/lib/wechatShareMeta.ts` | `buildFeituanHomeShareCard`、`toWechatJsSdkShareCard`（缩略图强制 **`/feituan-share-thumb.jpg` ~22KB**） |
+| `functions/index.js` → `wechatJsSdkSignature` | POST `/api/wechat/js-sdk-signature` |
+| `docs/13-微信服务号接入.md` | **IP 白名单**、`JS 接口安全域名`、OAuth 等 |
+
+**`40164`（IP not in whitelist）**：Cloud Functions 调 `access_token` 被拒。白名单在 mp.weixin.qq.com → 基本配置 → IP 白名单；**IP 会变**，逐个加不可靠，长期需 **VPC + Cloud NAT 固定出口 IP**（GCP 运维，非业务代码）。
+
+**调试**：`https://…/feituan?debugWechatShare=1` 才加载 SDK 与底部 JSON；`appMessageSetStatus` 里 `retCode:-1` 在 iOS 上常见，不代表公众号分享路径有问题。
+
+### 主要文件清单（改分享相关时先看这些）
+
+| 路径 | 说明 |
+|------|------|
+| `functions/index.js` | `shareRedirect`、`FEITUAN_HOME_SHARE_QUERY`、`sendOgSharePage`、`wechatJsSdkSignature` |
+| `firebase.json` | `/share/**` → `shareRedirect` |
+| `web/src/lib/shareLink.ts` | 对外分享 URL、`cv` 常量 |
+| `web/src/lib/wechatShareMeta.ts` | 分享卡文案/图 |
+| `web/src/hooks/useWechatShareCard.ts` | 微信内 H5 分享（调试/备用） |
+| `web/src/pages/FeituanHome.tsx` | 分享弹层、调试面板 |
+| `web/src/components/customer/ShopShareSheet.tsx` | 复制链接 UI |
+| `web/src/pages/customer/ShopHome.tsx`、`FeituanProject.tsx` | 项目页 `useWechatShareCard`（仅 debug 或备用） |
+| `web/vite.config.ts` | 构建注入默认 `og:image` |
+| `web/public/feituan-share-thumb.jpg` | 微信 SDK 用小图（勿用 80KB `feituan-logo.png` 作 SDK 缩略图） |
+| `web/public/feituan-logo.png` | OG 回退 / 公众号预览常用 |
+| `docs/13-微信服务号接入.md` | 运维配置说明 |
+
+### 自测命令
+
+```bash
+# 饭团分享落地页 OG
+curl -sS "https://groupbuy-app-24c46.web.app/share/feituan?cv=4" | head -n 25
+
+# JS-SDK 签名是否仍 40164
+curl -sS -X POST "https://groupbuy-app-24c46.web.app/api/wechat/js-sdk-signature" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://groupbuy-app-24c46.web.app/feituan"}'
+```
+
+部署：`npm run deploy`（根目录，build web + hosting + functions）。
+
+### 下一任若继续分享功能
+
+1. **不要**再指望 H5 内三点分享，除非已配 **固定出口 IP** 或接受运维成本。  
+2. WhatsApp/粘贴：改 OG 后递增 **`cv`** 并 deploy **functions + hosting**。  
+3. 若恢复微信弹层提示，先解决 IP，再测 `legacyAppMessageSetStatus` 是否 `success`。
