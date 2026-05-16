@@ -252,6 +252,15 @@ export default function FeituanHome() {
           );
         })}
       </div>
+      {/* 底板延伸：与 main 同色，仅增高可滚区域，避让右下角悬浮按钮 */}
+      <div
+        aria-hidden
+        className="mt-6 shrink-0"
+        style={{
+          minHeight:
+            'max(calc(9.5rem * 2 / 3), calc(7.75rem * 2 / 3 + env(safe-area-inset-bottom, 0px)))',
+        }}
+      />
       {wechatShareDebug ? (
         <pre className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
           {JSON.stringify(wechatShareDebug, null, 2)}

@@ -11,6 +11,7 @@ import {
   upsertFeituanDeliveryPoint,
   type FeituanDeliverySetRow,
 } from '../lib/feituanDeliveryService';
+import { uploadDeliveryPointImage } from '../lib/deliveryPointService';
 import { isFeituanAdmin } from '../lib/feituanService';
 import type { FeituanDeliveryPointDoc } from '../types/firestore';
 
@@ -55,6 +56,9 @@ export default function FeituanDelivery() {
   const [setName, setSetName] = useState('');
   const [setDesc, setSetDesc] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [uploadingDpImageForSetId, setUploadingDpImageForSetId] = useState<
+    string | null
+  >(null);
   const [pointDrafts, setPointDrafts] = useState<Record<string, PointDraft>>({});
 
   const refresh = useCallback(async () => {
@@ -178,6 +182,24 @@ export default function FeituanDelivery() {
       setErr(e instanceof Error ? e.message : '删除配送点失败');
     } finally {
       setBusy(null);
+    }
+  };
+
+  const handlePointImagePick = async (setId: string, file: File | null) => {
+    if (!user || !file) return;
+    setUploadingDpImageForSetId(setId);
+    setErr(null);
+    try {
+      const url = await uploadDeliveryPointImage(user.uid, file);
+      setPointDrafts((prev) => {
+        const draft = prev[setId] ?? emptyPoint;
+        return { ...prev, [setId]: { ...draft, imageUrl: url } };
+      });
+      setMsg('图片已上传，保存配送点后生效');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '图片上传失败');
+    } finally {
+      setUploadingDpImageForSetId(null);
     }
   };
 
@@ -367,7 +389,7 @@ export default function FeituanDelivery() {
                       placeholder="简称"
                     />
                     <input
-                      className={input}
+                      className={`${input} md:col-span-2`}
                       value={draft.detailAddress}
                       onChange={(e) =>
                         setPointDrafts((prev) => ({
@@ -377,17 +399,67 @@ export default function FeituanDelivery() {
                       }
                       placeholder="详细地址（可选）"
                     />
-                    <input
-                      className={input}
-                      value={draft.imageUrl}
-                      onChange={(e) =>
-                        setPointDrafts((prev) => ({
-                          ...prev,
-                          [row.id]: { ...draft, imageUrl: e.target.value },
-                        }))
-                      }
-                      placeholder="图片 URL（可选）"
-                    />
+                    <div className="md:col-span-2">
+                      <label className="block text-[11px] font-medium uppercase tracking-wide text-gray-600">
+                        示意图（可选）
+                      </label>
+                      <div className="mt-1 flex flex-wrap items-start gap-3">
+                        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-white">
+                          {draft.imageUrl ? (
+                            <img
+                              src={draft.imageUrl}
+                              alt="配送点示意图"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center px-1 text-center text-[10px] leading-tight text-gray-400">
+                              暂无图片
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="block w-full text-sm text-gray-700 file:mr-2 file:rounded-md file:border-0 file:bg-orange-50 file:px-2 file:py-1 file:text-xs file:font-semibold file:text-orange-900"
+                            disabled={uploadingDpImageForSetId === row.id}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0] ?? null;
+                              void handlePointImagePick(row.id, f);
+                              e.currentTarget.value = '';
+                            }}
+                          />
+                          {uploadingDpImageForSetId === row.id ? (
+                            <p className="text-xs text-gray-500">上传中…</p>
+                          ) : null}
+                          <input
+                            className={input}
+                            value={draft.imageUrl}
+                            onChange={(e) =>
+                              setPointDrafts((prev) => ({
+                                ...prev,
+                                [row.id]: { ...draft, imageUrl: e.target.value },
+                              }))
+                            }
+                            placeholder="图片 URL（可选，或由上方上传自动填入）"
+                          />
+                          {draft.imageUrl ? (
+                            <button
+                              type="button"
+                              className="text-xs font-medium text-red-700"
+                              onClick={() =>
+                                setPointDrafts((prev) => ({
+                                  ...prev,
+                                  [row.id]: { ...draft, imageUrl: '' },
+                                }))
+                              }
+                            >
+                              清除示意图
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-3">
                     <label className="inline-flex items-center gap-2 text-xs text-gray-700">

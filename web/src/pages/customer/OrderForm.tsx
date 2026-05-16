@@ -9,7 +9,12 @@ import { formatMYR } from '../../lib/formatMYR';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
 import { listActiveFeituanDeliveryPointsForProject } from '../../lib/feituanDeliveryService';
-import { createOrder, CreateOrderError, listOrdersByCustomer } from '../../lib/orderService';
+import {
+  createOrder,
+  CreateOrderError,
+  listFeituanOrdersForCustomer,
+  listOrdersByCustomer,
+} from '../../lib/orderService';
 import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
@@ -20,12 +25,82 @@ import {
 } from '../../lib/wechatService';
 import { FEITUAN_HOME, FEITUAN_TW, feituanOrShopGreen } from '../../lib/feituanHomeTheme';
 import type { CartLocationState, MockDeliveryPoint, OrderLine } from '../../types/orderDraft';
-import type { ProjectDoc } from '../../types/firestore';
+import type { OrderDoc, ProjectDoc } from '../../types/firestore';
 
 type Step = 1 | 2 | 3;
 const LOAD_TIMEOUT_MS = 12_000;
 
-const FEITUAN_MANUAL_DELIVERY_LABEL = '按地址安排（待联系）';
+const FEITUAN_MANUAL_DELIVERY_TITLE = '未指定配送点，请按我填写的地址安排配送。';
+const FEITUAN_MANUAL_DELIVERY_SUB =
+  '未指定配送点;我们将根据你填写的地址电话联系你确认取餐方式。请留下可接听的电话。';
+
+function normalizeAddrForCompare(s: string): string {
+  return s.trim().replace(/\s+/g, ' ');
+}
+
+function normalizeDeliveryMatchKey(s: string): string {
+  return s.replace(/\s+/g, '').toLowerCase();
+}
+
+/** 将历史订单的配送选择映射到当前项目配送点 id（跨项目时按快照名称对齐） */
+function mapHistoryOrderToCurrentDeliveryId(
+  d: OrderDoc,
+  points: MockDeliveryPoint[]
+): string {
+  if (d.isManualMatch || !d.deliveryPointId) {
+    return OTHER_DELIVERY_ID;
+  }
+  if (points.some((p) => p.id === d.deliveryPointId)) {
+    return d.deliveryPointId;
+  }
+  const snapName = d.deliveryPointSnapshot?.name?.trim();
+  if (snapName && points.length > 0) {
+    const n = normalizeDeliveryMatchKey(snapName);
+    const byName = points.find((p) => normalizeDeliveryMatchKey(p.name) === n);
+    if (byName) return byName.id;
+    const byCode = points.find(
+      (p) => p.code?.trim() && normalizeDeliveryMatchKey(p.code.trim()) === n
+    );
+    if (byCode) return byCode.id;
+    const loose = points.find((p) => {
+      const pn = normalizeDeliveryMatchKey(p.name);
+      return pn.includes(n) || n.includes(pn);
+    });
+    if (loose) return loose.id;
+  }
+  return OTHER_DELIVERY_ID;
+}
+
+function feituanComparableLastOrder(
+  d: OrderDoc | null,
+  currentProjectId: string,
+  currentAddress: string
+): boolean {
+  if (!d) return false;
+  if (d.projectId === currentProjectId) return true;
+  const a = normalizeAddrForCompare(d.customerAddress ?? '');
+  const b = normalizeAddrForCompare(currentAddress);
+  return a.length >= 2 && b.length >= 2 && a === b;
+}
+
+/** 饭团：按地址得到系统推荐配送 id（首项或「未指定」） */
+function feituanRecommendDeliveryIdForAddress(
+  addr: string,
+  points: MockDeliveryPoint[]
+): string {
+  const line = addr.trim();
+  if (line.length < 2) return '';
+  if (points.length === 0) return OTHER_DELIVERY_ID;
+  const m = suggestDeliveryPointsFromAddress(line, points);
+  return m.length > 0 ? m[0].id : OTHER_DELIVERY_ID;
+}
+
+function feituanDeliveryChoiceLabel(id: string, points: MockDeliveryPoint[]): string {
+  if (id === OTHER_DELIVERY_ID) return '未指定配送点（按地址联系安排）';
+  const p = points.find((x) => x.id === id);
+  if (!p) return '配送点';
+  return p.code?.trim() ? `${p.name}（${p.code.trim()}）` : p.name;
+}
 
 function projectAllowsCustomerOrder(project: ProjectDoc): boolean {
   if (project.status === 'draft') return false;
@@ -82,6 +157,8 @@ export default function OrderForm() {
   const [deliveryDetailModalId, setDeliveryDetailModalId] = useState<string | null>(
     null
   );
+  const feituanDeliveryOverrideRef = useRef(false);
+  const feituanAutoAddressKeyRef = useRef('');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitHint, setSubmitHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -90,11 +167,14 @@ export default function OrderForm() {
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectDoc | null>(null);
   const [points, setPoints] = useState<MockDeliveryPoint[]>([]);
+  /** 饭团：用于与当前推荐配送对比的「最近一单」快照（预填来源） */
+  const [feituanCompareOrder, setFeituanCompareOrder] = useState<OrderDoc | null>(null);
   const contactPrefilledRef = useRef(false);
   const [didPrefillFromLastOrder, setDidPrefillFromLastOrder] = useState(false);
 
   useEffect(() => {
     contactPrefilledRef.current = false;
+    setFeituanCompareOrder(null);
   }, [projectId]);
 
   useEffect(() => {
@@ -226,12 +306,48 @@ export default function OrderForm() {
     };
   }, [isFeituanOrder, projectId, shopSlug]);
 
-  /** 第二次及以后下单：姓名/电话；配送点与地址在第二步按上一笔订单预填（可改；备注不预填） */
+  /** 第二次及以后下单：按上一笔订单预填（可改；备注不预填）。饭团入口跨项目共用 customerKey。 */
   useEffect(() => {
     if (!project || booting || bootErr || contactPrefilledRef.current) return;
     const pid = decodeURIComponent(projectId);
     let cancelled = false;
-    void listOrdersByCustomer(pid, getOrCreateCustomerKey())
+
+    const applyFromOrder = (d: OrderDoc) => {
+      if (cancelled || contactPrefilledRef.current) return;
+      contactPrefilledRef.current = true;
+      setDidPrefillFromLastOrder(true);
+      setName((n) => (n.trim() !== '' ? n : d.customerName?.trim() ?? ''));
+      setPhone((p) => (p.trim() !== '' ? p : d.customerPhone?.trim() ?? ''));
+
+      const addr = d.customerAddress?.trim() ?? '';
+      if (isFeituanOrder) {
+        setFeituanCompareOrder(d);
+        setAddress((a) => (a.trim() !== '' ? a : addr));
+        setDismissedSuggestionIds([]);
+        return;
+      }
+      const nextDeliveryId = (() => {
+        const pointOk =
+          Boolean(d.deliveryPointId) &&
+          !d.isManualMatch &&
+          points.some((p) => p.id === d.deliveryPointId);
+        return pointOk && d.deliveryPointId ? d.deliveryPointId : OTHER_DELIVERY_ID;
+      })();
+
+      setDeliveryId(nextDeliveryId);
+      setAddress((a) => (a.trim() !== '' ? a : addr));
+      setDismissedSuggestionIds([]);
+    };
+
+    const promise = isFeituanOrder
+      ? listFeituanOrdersForCustomer({
+          customerKey: getOrCreateCustomerKey(),
+          customerUserId: user?.phoneNumber ? user.uid : undefined,
+          wechatNotifyOAuthStateId: getWechatNotifyOAuthStateId(),
+        })
+      : listOrdersByCustomer(pid, getOrCreateCustomerKey());
+
+    void promise
       .then((rows) => {
         if (cancelled || contactPrefilledRef.current) return;
         const usable = rows
@@ -243,26 +359,7 @@ export default function OrderForm() {
           );
         const prev = usable[0];
         if (!prev) return;
-        contactPrefilledRef.current = true;
-        const d = prev.data;
-        setDidPrefillFromLastOrder(true);
-        setName((n) => (n.trim() !== '' ? n : d.customerName?.trim() ?? ''));
-        setPhone((p) => (p.trim() !== '' ? p : d.customerPhone?.trim() ?? ''));
-
-        const addr = d.customerAddress?.trim() ?? '';
-        const pointOk =
-          Boolean(d.deliveryPointId) &&
-          !d.isManualMatch &&
-          points.some((p) => p.id === d.deliveryPointId);
-
-        if (pointOk && d.deliveryPointId) {
-          setDeliveryId(d.deliveryPointId);
-          setAddress((a) => (a.trim() !== '' ? a : addr));
-        } else {
-          setDeliveryId(OTHER_DELIVERY_ID);
-          setAddress((a) => (a.trim() !== '' ? a : addr));
-        }
-        setDismissedSuggestionIds([]);
+        applyFromOrder(prev.data);
       })
       .catch(() => {
         /* 静默失败，仍可手动填写 */
@@ -270,7 +367,7 @@ export default function OrderForm() {
     return () => {
       cancelled = true;
     };
-  }, [project, booting, bootErr, projectId, points]);
+  }, [project, booting, bootErr, projectId, points, isFeituanOrder, user?.phoneNumber, user?.uid]);
 
   const resolvedProjectTitle = project?.title?.trim() || projectTitleState;
   const canPlaceOrder = project ? projectAllowsCustomerOrder(project) : false;
@@ -283,7 +380,7 @@ export default function OrderForm() {
   const deliveryLabel = useMemo(() => {
     if (!deliveryId) return '';
     if (deliveryId === OTHER_DELIVERY_ID) {
-      return isFeituanOrder ? FEITUAN_MANUAL_DELIVERY_LABEL : '以上都不对（其他）';
+      return isFeituanOrder ? FEITUAN_MANUAL_DELIVERY_TITLE : '以上都不对（其他）';
     }
     const p = points.find((x) => x.id === deliveryId);
     if (!p) return '';
@@ -312,6 +409,105 @@ export default function OrderForm() {
     if (line.length < 2 || points.length === 0) return [];
     return suggestDeliveryPointsFromAddress(line, points);
   }, [address, isFeituanOrder, points]);
+
+  const currentProjectIdDecoded = useMemo(
+    () => decodeURIComponent(projectId),
+    [projectId]
+  );
+
+  const feituanComparableToLastOrder = useMemo(
+    () =>
+      Boolean(
+        isFeituanOrder &&
+          feituanComparableLastOrder(
+            feituanCompareOrder,
+            currentProjectIdDecoded,
+            address
+          )
+      ),
+    [isFeituanOrder, feituanCompareOrder, currentProjectIdDecoded, address]
+  );
+
+  const feituanLastMappedDeliveryId = useMemo(() => {
+    if (!isFeituanOrder || !feituanCompareOrder) return null;
+    return mapHistoryOrderToCurrentDeliveryId(feituanCompareOrder, points);
+  }, [isFeituanOrder, feituanCompareOrder, points]);
+
+  const feituanLastDeliveryDisplayLabel = useMemo(() => {
+    if (feituanLastMappedDeliveryId == null) return '';
+    return feituanDeliveryChoiceLabel(feituanLastMappedDeliveryId, points);
+  }, [feituanLastMappedDeliveryId, points]);
+
+  const feituanRecommendedDeliveryId = useMemo(
+    () => (isFeituanOrder ? feituanRecommendDeliveryIdForAddress(address, points) : ''),
+    [isFeituanOrder, address, points]
+  );
+
+  const feituanRecommendedDisplayLabel = useMemo(
+    () =>
+      feituanRecommendedDeliveryId
+        ? feituanDeliveryChoiceLabel(feituanRecommendedDeliveryId, points)
+        : '',
+    [feituanRecommendedDeliveryId, points]
+  );
+
+  /** 地址与预填来源上一单快照一致（用户未改地址），才做「与上一单配送」对比 */
+  const feituanAddrUnchangedVsLastOrderSnapshot = useMemo(
+    () => {
+      if (!isFeituanOrder || !feituanCompareOrder) return false;
+      const cur = normalizeAddrForCompare(address);
+      const prev = normalizeAddrForCompare(feituanCompareOrder.customerAddress ?? '');
+      return cur.length >= 2 && prev.length >= 2 && cur === prev;
+    },
+    [isFeituanOrder, feituanCompareOrder, address]
+  );
+
+  const feituanDeliveryConflictVersusLast = useMemo(
+    () =>
+      Boolean(
+        isFeituanOrder &&
+          feituanCompareOrder &&
+          feituanComparableToLastOrder &&
+          feituanAddrUnchangedVsLastOrderSnapshot &&
+          address.trim().length >= 2 &&
+          feituanLastMappedDeliveryId != null &&
+          feituanRecommendedDeliveryId !== '' &&
+          feituanRecommendedDeliveryId !== feituanLastMappedDeliveryId
+      ),
+    [
+      isFeituanOrder,
+      feituanCompareOrder,
+      feituanComparableToLastOrder,
+      feituanAddrUnchangedVsLastOrderSnapshot,
+      address,
+      feituanLastMappedDeliveryId,
+      feituanRecommendedDeliveryId,
+    ]
+  );
+
+  /** 饭团：地址不少于 2 字后自动选首个匹配配送点；无匹配或项目无配送点则选「未指定配送点」。用户改选手动项后不再覆盖，直至地址变更。 */
+  useEffect(() => {
+    if (!isFeituanOrder || booting || !project) return;
+    const line = address.trim();
+    if (line.length < 2) {
+      feituanDeliveryOverrideRef.current = false;
+      feituanAutoAddressKeyRef.current = '';
+      setDeliveryId('');
+      return;
+    }
+    if (feituanAutoAddressKeyRef.current !== line) {
+      feituanAutoAddressKeyRef.current = line;
+      feituanDeliveryOverrideRef.current = false;
+    }
+    if (feituanDeliveryOverrideRef.current) return;
+
+    if (points.length === 0) {
+      setDeliveryId(OTHER_DELIVERY_ID);
+      return;
+    }
+    const m = suggestDeliveryPointsFromAddress(line, points);
+    setDeliveryId(m.length > 0 ? m[0].id : OTHER_DELIVERY_ID);
+  }, [isFeituanOrder, booting, project, address, points]);
 
   const suggestedPoints = useMemo(() => {
     if (isFeituanOrder) return null;
@@ -402,7 +598,7 @@ export default function OrderForm() {
         deliveryPointId: isManualMatch ? undefined : deliveryId,
         deliveryPointLabel: isManualMatch
           ? isFeituanOrder
-            ? `${FEITUAN_MANUAL_DELIVERY_LABEL}：${addrOut}`
+            ? `${FEITUAN_MANUAL_DELIVERY_TITLE} ${FEITUAN_MANUAL_DELIVERY_SUB} ${addrOut}`
             : `其他（将按地址手动匹配）：${addrOut}`
           : deliveryLabel,
         deliverySnapshot:
@@ -508,7 +704,6 @@ export default function OrderForm() {
   const stepTotal = isFeituanOrder ? 2 : 3;
   const onFeituanAddressChange = (value: string) => {
     setAddress(value);
-    setDeliveryId('');
     setDismissedSuggestionIds([]);
   };
 
@@ -539,8 +734,12 @@ export default function OrderForm() {
               type="radio"
               name="delivery"
               className="sr-only"
+              value={p.id}
               checked={selected}
-              onChange={() => setDeliveryId(p.id)}
+              onChange={() => {
+                feituanDeliveryOverrideRef.current = true;
+                setDeliveryId(p.id);
+              }}
             />
             <div className="flex items-start justify-between gap-1">
               <div className="min-w-0 flex-1">
@@ -710,6 +909,67 @@ export default function OrderForm() {
             style={{ borderColor: FEITUAN_HOME.primaryBorder, backgroundColor: FEITUAN_HOME.card }}
           >
             <p className="mb-2 text-sm font-semibold text-gray-900">配送点</p>
+            {feituanDeliveryConflictVersusLast ? (
+              <div className="mb-2 space-y-2">
+                <div
+                  className="rounded-xl border-2 px-3 py-2.5"
+                  style={{
+                    borderColor: FEITUAN_HOME.warningBorder,
+                    backgroundColor: FEITUAN_HOME.warningLight,
+                  }}
+                >
+                  <p className="text-sm font-bold leading-snug" style={{ color: '#9a3412' }}>
+                    匹配结果与上一单不同，请确认选择
+                  </p>
+                  <p className="mt-1.5 text-xs leading-relaxed" style={{ color: '#7c2d12' }}>
+                    当前地址与上一单一致，但按最新配送点资料匹配的结果与上一单所选不一致。已默认「系统推荐」；请对比后点选其一，也可在下方列表中另选。
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      feituanDeliveryOverrideRef.current = true;
+                      setDeliveryId(feituanRecommendedDeliveryId);
+                    }}
+                    className={`rounded-xl border px-2.5 py-2.5 text-left transition ${
+                      deliveryId === feituanRecommendedDeliveryId
+                        ? 'border-amber-600 bg-amber-100 ring-2 ring-amber-500/35'
+                        : 'border-gray-200 bg-white active:bg-gray-50'
+                    }`}
+                  >
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-amber-900">
+                      系统推荐
+                    </p>
+                    <p className="mt-1 line-clamp-3 text-xs font-medium leading-snug text-gray-900">
+                      {feituanRecommendedDisplayLabel}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      feituanDeliveryOverrideRef.current = true;
+                      if (feituanLastMappedDeliveryId != null) {
+                        setDeliveryId(feituanLastMappedDeliveryId);
+                      }
+                    }}
+                    className={`rounded-xl border px-2.5 py-2.5 text-left transition ${
+                      feituanLastMappedDeliveryId != null &&
+                      deliveryId === feituanLastMappedDeliveryId
+                        ? 'border-amber-600 bg-amber-100 ring-2 ring-amber-500/35'
+                        : 'border-gray-200 bg-white active:bg-gray-50'
+                    }`}
+                  >
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-amber-900">
+                      上一单所用
+                    </p>
+                    <p className="mt-1 line-clamp-3 text-xs font-medium leading-snug text-gray-900">
+                      {feituanLastDeliveryDisplayLabel}
+                    </p>
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <div
               className="min-h-[5.5rem] rounded-xl border border-dashed px-3 py-3"
               style={{
@@ -719,36 +979,46 @@ export default function OrderForm() {
             >
               {points.length === 0 ? (
                 <p className="text-center text-sm leading-relaxed text-gray-500">
-                  当前项目尚未配置配送点；请填写地址后选择下方「按地址安排」。
+                  当前项目尚未配置配送点。填写地址不少于 2 个字后，将自动选择「未指定配送点」。
                 </p>
               ) : address.trim().length < 2 ? (
                 <p className="text-center text-sm leading-relaxed text-gray-500">
-                  填写地址后，将在此显示可能匹配的配送点，请选择一项。
+                  填写地址不少于 2 个字后，将在此显示可能匹配的配送点，并自动选中第一项；若无匹配则自动选择「未指定配送点」。
                 </p>
               ) : matchedPoints && matchedPoints.length > 0 ? (
                 <div>
-                  <p className="mb-2 text-xs text-gray-600">可能匹配的配送点（请选择一项）</p>
+                  <p className="mb-2 text-xs text-gray-600">可能匹配的配送点（可改选）</p>
                   {renderDeliveryPointPicker(matchedPoints)}
                 </div>
               ) : (
                 <p className="text-center text-sm leading-relaxed text-gray-600">
-                  暂未匹配到配送点。若下方没有你的取餐点，请选择「按地址安排」。
+                  暂未匹配到配送点；已自动选择「未指定配送点」。
                 </p>
               )}
             </div>
 
-            <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+            <label
+              className={`mt-3 flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50/70 p-3 ${
+                address.trim().length < 2 ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'
+              }`}
+            >
               <input
                 type="radio"
                 name="delivery"
                 className="mt-1 h-4 w-4 shrink-0"
+                value={OTHER_DELIVERY_ID}
+                disabled={address.trim().length < 2}
                 checked={deliveryId === OTHER_DELIVERY_ID}
-                onChange={() => setDeliveryId(OTHER_DELIVERY_ID)}
+                onChange={() => {
+                  if (address.trim().length < 2) return;
+                  feituanDeliveryOverrideRef.current = true;
+                  setDeliveryId(OTHER_DELIVERY_ID);
+                }}
               />
               <span className="min-w-0 flex-1 text-sm text-gray-900">
-                以上配送点都不对，请按我填写的地址安排
+                {FEITUAN_MANUAL_DELIVERY_TITLE}
                 <span className="mt-1 block text-xs leading-relaxed text-amber-900">
-                  不指定标准配送点；我们将根据你填写的地址电话联系你确认取餐方式。请尽量留下可接听的电话。
+                  {FEITUAN_MANUAL_DELIVERY_SUB}
                 </span>
               </span>
             </label>
@@ -1261,9 +1531,7 @@ export default function OrderForm() {
             <p className="mt-1">方式：{deliveryLabel}</p>
             <p className="mt-1 break-words">地址：{resolvedCustomerAddress || '—'}</p>
             {isFeituanOrder && deliveryId === OTHER_DELIVERY_ID ? (
-              <p className="mt-2 text-xs text-gray-500">
-                未匹配到标准配送点；取餐安排以电话联系为准。
-              </p>
+              <p className="mt-2 text-xs text-gray-500">{FEITUAN_MANUAL_DELIVERY_SUB}</p>
             ) : null}
           </div>
           <p className="text-xs text-gray-500">提交后会写入数据库，并进行库存校验。</p>
