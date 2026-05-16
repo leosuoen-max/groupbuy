@@ -1,7 +1,8 @@
 /**
- * WhatsApp 链接预览（Open Graph）：仅处理 GET /share/:projectId（Hosting 重写）。
- * 不尝试清洗商户编辑标记或与标题去重（易 brittle，已放弃）；摘要为 textContent 转纯文本。
- * 真人浏览器用 JS 跳转团购页；勿用 meta refresh，以免爬虫跟丢 og:image。
+ * WhatsApp 链接预览（Open Graph）：处理 GET /share/:path（Hosting 重写）。
+ * - `/share/:projectId`：读 projects 文档，返回项目 OG + 跳转 shop 或饭团项目页。
+ * - `/share/feituan`：保留字，非 Firestore 文档 id；聚合「饭团上架中」项目生成首页 OG，跳转 `/feituan`。
+ * 真人浏览器用 JS 跳转真实页；勿用 meta refresh，以免爬虫跟丢 og:image。
  */
 const { onRequest } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
@@ -10,6 +11,9 @@ const crypto = require('crypto');
 if (!admin.apps.length) {
   admin.initializeApp();
 }
+
+/** 与 web/src/lib/shareLink.ts FEITUAN_HOME_SHARE_QUERY 同步；调整文案/预览后递增以刷新抓取缓存 */
+const FEITUAN_HOME_SHARE_QUERY = 'cv=4';
 
 function getShareAppOrigin() {
   const env = process.env.SHARE_APP_ORIGIN;
@@ -244,6 +248,21 @@ function stripToPlainText(input) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+function compactPlainText(input, max) {
+  const plain = stripToPlainText(typeof input === 'string' ? input : '');
+  if (!plain) return '';
+  const n = Number(max) || 80;
+  return plain.length <= n ? plain : `${plain.slice(0, n - 1)}…`;
+}
+
+/** 微信摘要解析对 emoji 等字符较敏感，外链预览描述尽量用纯文本 */
+function stripEmojiForOg(input) {
+  return String(input ?? '')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function formatDeadlineDescription(ts) {
   if (!ts || typeof ts.toDate !== 'function') return '截止时间：待定';
   const d = ts.toDate();
@@ -288,6 +307,83 @@ function pickShareImage(project, shop, origin) {
   return logo || '';
 }
 
+/** 与前端 buildFeituanHomeShareCard 一致：商品图 → 说明图 → 店铺图，最后回退 Logo */
+function pickFeituanHomeShareImage(project, shop, origin) {
+  const products = Array.isArray(project.products) ? [...project.products] : [];
+  products.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  for (const p of products) {
+    const abs = toAbsoluteUrl(p && p.imageUrl, origin);
+    if (abs) return abs;
+  }
+  const blocks = Array.isArray(project.imageBlocks) ? project.imageBlocks : [];
+  for (const b of blocks) {
+    if (String(b?.url ?? '').trim()) {
+      const abs = toAbsoluteUrl(b.url, origin);
+      if (abs) return abs;
+    }
+  }
+  const banner = toAbsoluteUrl(shop && shop.bannerImage, origin);
+  if (banner) return banner;
+  return toAbsoluteUrl(shop && shop.logoImage, origin);
+}
+
+function kualaLumpurMonthDay() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kuala_Lumpur',
+      month: 'numeric',
+      day: 'numeric',
+    }).formatToParts(new Date());
+    const m = Number(parts.find((p) => p.type === 'month')?.value ?? 1);
+    const day = Number(parts.find((p) => p.type === 'day')?.value ?? 1);
+    return { m, day };
+  } catch {
+    const d = new Date();
+    return { m: d.getMonth() + 1, day: d.getDate() };
+  }
+}
+
+function sendOgSharePage(res, { sharePageUrl, targetUrl, ogTitle, ogDescription, ogImage, bodyLinkText }) {
+  const safeTitle = escapeHtml(ogTitle);
+  const safeDesc = escapeHtml(stripEmojiForOg(ogDescription));
+  const safeImageUrl = ogImage ? escapeHtmlAttrUrl(ogImage) : '';
+  const safeCanonical = escapeHtml(sharePageUrl);
+  const safeTarget = escapeHtml(targetUrl);
+  const jsTarget = JSON.stringify(targetUrl);
+  const linkLabel =
+    typeof bodyLinkText === 'string' && bodyLinkText.trim() ? bodyLinkText.trim() : '进入团购';
+  const ogImageTags = ogImage
+    ? `<meta property="og:image" content="${safeImageUrl}">
+  <meta property="og:image:secure_url" content="${safeImageUrl}">
+  <meta property="og:image:alt" content="${safeTitle}">`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${safeTitle}</title>
+  <meta name="description" content="${safeDesc}">
+  <link rel="canonical" href="${safeCanonical}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="大马饭团">
+  <meta property="og:title" content="${safeTitle}">
+  <meta property="og:description" content="${safeDesc}">
+  ${ogImageTags}
+  <meta property="og:url" content="${safeCanonical}">
+</head>
+<body>
+  <p><a href="${safeTarget}">${escapeHtml(linkLabel)}</a></p>
+  <script>window.location.replace(${jsTarget});</script>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=120');
+  res.status(200).send(html);
+}
+
 function extractProjectId(req) {
   const q = (req.query?.pid || req.query?.projectId || '').toString().trim();
   if (q) return q;
@@ -318,17 +414,102 @@ exports.shareRedirect = onRequest(
   },
   async (req, res) => {
     const origin = getShareAppOrigin();
-    const projectId = extractProjectId(req);
+    const projectIdRaw = extractProjectId(req);
 
-    if (!projectId) {
+    if (!projectIdRaw) {
       res.redirect(302, origin + '/');
       return;
     }
-
-    let targetUrl = `${origin}/`;
+    let fallbackTargetUrl = `${origin}/`;
 
     try {
-      const projectRef = admin.firestore().collection('projects').doc(projectId);
+      /** 饭团首页：外链须 `/share/feituan`，与前端 getFeituanHomeShareUrl 一致 */
+      if (projectIdRaw.toLowerCase() === 'feituan') {
+        const shareQs = FEITUAN_HOME_SHARE_QUERY ? `?${FEITUAN_HOME_SHARE_QUERY}` : '';
+        const sharePageUrl = `${origin}/share/feituan${shareQs}`;
+        const targetUrl = `${origin}/feituan`;
+        fallbackTargetUrl = targetUrl;
+
+        const { m: klMonth, day: klDay } = kualaLumpurMonthDay();
+        const sameOriginLogo = `${origin.replace(/\/$/, '')}/feituan-logo.png`;
+        let ogTitle = `大马饭团｜${klMonth}月${klDay}日｜今日团`;
+        let ogDescription =
+          '今日精选饭团，和朋友一起拼单下单。';
+        let ogImage = sameOriginLogo;
+
+        try {
+          const listedSnap = await admin
+            .firestore()
+            .collection('projects')
+            .where('feituanStatus', '==', 'listed')
+            .get();
+
+          const now = Date.now();
+          const sorted = listedSnap.docs
+            .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+            .filter((p) => {
+              const ca = p.closesAt;
+              if (!ca || typeof ca.toDate !== 'function') return true;
+              return ca.toDate().getTime() > now;
+            })
+            .sort((a, b) => {
+              const ta = a.feituanReviewedAt?.toMillis?.() ?? 0;
+              const tb = b.feituanReviewedAt?.toMillis?.() ?? 0;
+              return tb - ta;
+            });
+
+          if (sorted.length > 0) {
+            const shopIds = [...new Set(sorted.map((p) => p.shopId).filter(Boolean))];
+            const shopReads = shopIds.map((sid) =>
+              admin.firestore().collection('shops').doc(String(sid)).get()
+            );
+            const shopSnaps = await Promise.all(shopReads);
+            const shopById = new Map(
+              shopSnaps.filter((s) => s.exists).map((s) => [s.id, s.data() || {}])
+            );
+
+            const items = sorted.map((p) => ({
+              project: p,
+              shop: p.shopId ? shopById.get(String(p.shopId)) || {} : {},
+            }));
+
+            const shopNames = [
+              ...new Set(
+                items.map((it) => (it.shop && String(it.shop.name || '').trim()) || '').filter(
+                  Boolean
+                )
+              ),
+            ];
+
+            const descByShops = shopNames.join('、');
+            const first = items[0];
+            const firstIntro = first
+              ? compactPlainText(String(first.project.textContent || ''), 42)
+              : '';
+            ogDescription =
+              descByShops.length >= 12
+                ? descByShops
+                : ([descByShops, firstIntro].filter(Boolean).join('｜') || ogDescription);
+
+            ogImage =
+              pickFeituanHomeShareImage(first.project, first.shop || {}, origin) || sameOriginLogo;
+          }
+        } catch (e) {
+          console.error('shareRedirect feituan aggregate', e);
+        }
+
+        sendOgSharePage(res, {
+          sharePageUrl,
+          targetUrl,
+          ogTitle,
+          ogDescription,
+          ogImage,
+          bodyLinkText: '进入饭团',
+        });
+        return;
+      }
+
+      const projectRef = admin.firestore().collection('projects').doc(projectIdRaw);
       const projectSnap = await projectRef.get();
       if (!projectSnap.exists) {
         res.redirect(302, origin + '/');
@@ -336,58 +517,38 @@ exports.shareRedirect = onRequest(
       }
 
       const project = projectSnap.data() || {};
-      const shopId = project.shopId;
+      const shopDocId = project.shopId ? String(project.shopId) : '';
       let shop = {};
-      if (shopId) {
-        const shopSnap = await admin.firestore().collection('shops').doc(shopId).get();
+      if (shopDocId) {
+        const shopSnap = await admin.firestore().collection('shops').doc(shopDocId).get();
         if (shopSnap.exists) shop = shopSnap.data() || {};
       }
 
       const slug = (shop.slug || '').toString().trim();
+      let targetUrl = `${origin}/`;
       if (project.feituanStatus === 'listed') {
-        targetUrl = `${origin}/feituan/projects/${encodeURIComponent(projectId)}`;
+        targetUrl = `${origin}/feituan/projects/${encodeURIComponent(projectIdRaw)}`;
       } else if (slug) {
-        targetUrl = `${origin}/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectId)}`;
+        targetUrl = `${origin}/shop/${encodeURIComponent(slug)}/${encodeURIComponent(projectIdRaw)}`;
       }
+      fallbackTargetUrl = targetUrl;
 
-      const sharePageUrl = `${origin}/share/${encodeURIComponent(projectId)}`;
+      const sharePageUrl = `${origin}/share/${encodeURIComponent(projectIdRaw)}`;
 
       const ogTitle = buildTitle(project, shop);
       const ogDescription = buildDescription(project);
       const ogImage = pickShareImage(project, shop, origin);
 
-      const safeTitle = escapeHtml(ogTitle);
-      const safeDesc = escapeHtml(ogDescription);
-      const safeImageUrl = ogImage ? escapeHtmlAttrUrl(ogImage) : '';
-      const safeCanonical = escapeHtml(sharePageUrl);
-      const safeTarget = escapeHtml(targetUrl);
-      const jsTarget = JSON.stringify(targetUrl);
-
-      const html = `<!DOCTYPE html>
-<html lang="zh-Hans">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${safeTitle}</title>
-  <link rel="canonical" href="${safeCanonical}">
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="${safeTitle}">
-  <meta property="og:description" content="${safeDesc}">
-  ${ogImage ? `<meta property="og:image" content="${safeImageUrl}">\n  <meta property="og:image:secure_url" content="${safeImageUrl}">\n  <meta property="og:image:alt" content="${safeTitle}">` : ''}
-  <meta property="og:url" content="${safeCanonical}">
-</head>
-<body>
-  <p><a href="${safeTarget}">进入团购</a></p>
-  <script>window.location.replace(${jsTarget});</script>
-</body>
-</html>`;
-
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', 'public, max-age=120');
-      res.status(200).send(html);
+      sendOgSharePage(res, {
+        sharePageUrl,
+        targetUrl,
+        ogTitle,
+        ogDescription,
+        ogImage,
+      });
     } catch (e) {
       console.error('shareRedirect', e);
-      res.redirect(302, targetUrl);
+      res.redirect(302, fallbackTargetUrl);
     }
   }
 );

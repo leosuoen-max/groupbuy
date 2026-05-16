@@ -269,7 +269,7 @@ export default function ShopHome() {
     () => (data ? buildWechatShareCardFromShopHome(projectId, data) : null),
     [data, projectId]
   );
-  const wechatShareDebug = useWechatShareCard(wechatShareCard);
+  const { debug: wechatShareDebug } = useWechatShareCard(wechatShareCard);
 
   const [cart, setCart] = useState<Record<string, number>>({});
   const [bundleBuilder, setBundleBuilder] = useState<
@@ -448,7 +448,11 @@ export default function ShopHome() {
       sortOrder: tool.sortOrder ?? 0,
       tool,
     }));
-    return [...products, ...bundles].sort((a, b) => a.sortOrder - b.sortOrder);
+    return [...products, ...bundles].sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      if (a.kind !== b.kind) return a.kind === 'product' ? -1 : 1;
+      return a.key.localeCompare(b.key);
+    });
   }, [activeProducts, activeBundleTools]);
 
   const getCurrentScheme = (toolId: string) => {

@@ -9,6 +9,7 @@ import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
 import { getFeituanHomeShareUrl } from '../lib/shareLink';
+import { isWechatBrowser } from '../lib/wechatService';
 import { getShopById, type ShopRow } from '../lib/shopService';
 import {
   buildFeituanHomeShareCard,
@@ -16,6 +17,23 @@ import {
 } from '../lib/wechatShareMeta';
 
 const C = FEITUAN_HOME;
+
+function formatWechatShareSetupError(raw: string | null): string {
+  const msg = (raw ?? '').trim();
+  if (!msg) {
+    return '请确认 WECHAT_APP_ID/SECRET、JS 安全域名 groupbuy-app-24c46.web.app、公众号 IP 白名单';
+  }
+  if (/40164|invalid ip|not in whitelist/i.test(msg)) {
+    return '公众号 IP 白名单未包含 Cloud Functions 出口 IP（errcode 40164），请在 mp.weixin.qq.com → 基本配置 → IP 白名单添加';
+  }
+  if (/retCode":-1|retCode\":-1|retCode:-1/i.test(msg)) {
+    return '微信未接受分享参数（retCode:-1），请重新部署后刷新；分享 link 已与签名 URL 对齐';
+  }
+  if (/WECHAT_APP_ID|not configured/i.test(msg)) {
+    return 'Cloud Functions 未配置 WECHAT_APP_ID / WECHAT_APP_SECRET';
+  }
+  return msg.length > 120 ? `${msg.slice(0, 119)}…` : msg;
+}
 
 function projectImages(p: ProjectRow): string[] {
   const urls: string[] = [];
@@ -116,12 +134,16 @@ export default function FeituanHome() {
   const [shareSheetCopied, setShareSheetCopied] = useState(false);
   const shareCard = useMemo(
     () =>
-      rows.length > 0
-        ? buildFeituanHomeShareCard(rows.map((x) => ({ project: x.project.data, shop: x.shop?.data ?? null })))
-        : null,
+      buildFeituanHomeShareCard(
+        rows.map((x) => ({ project: x.project.data, shop: x.shop?.data ?? null }))
+      ),
     [rows]
   );
-  const wechatShareDebug = useWechatShareCard(shareCard);
+  const {
+    debug: wechatShareDebug,
+    ready: wechatShareReady,
+    setupError: wechatShareSetupError,
+  } = useWechatShareCard(shareCard);
   const shareUrl = shareCard?.link?.trim() || getFeituanHomeShareUrl();
   const shareHeadline = shareCard?.title?.trim() || '大马饭团 · 今日团';
 
@@ -262,9 +284,16 @@ export default function FeituanHome() {
         }}
       />
       {wechatShareDebug ? (
-        <pre className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
-          {JSON.stringify(wechatShareDebug, null, 2)}
-        </pre>
+        <div className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
+          {wechatShareDebug.error || wechatShareDebug.wxError ? (
+            <p className="mb-2 rounded-lg bg-red-950/80 px-2 py-1.5 text-red-200">
+              {formatWechatShareSetupError(wechatShareDebug.error || wechatShareDebug.wxError)}
+            </p>
+          ) : null}
+          <pre className="whitespace-pre-wrap break-all">
+            {JSON.stringify(wechatShareDebug, null, 2)}
+          </pre>
+        </div>
       ) : null}
       </div>
       <FeituanHomeBottomNav />
@@ -276,6 +305,13 @@ export default function FeituanHome() {
         onCopyLink={() => void handleShareSheetCopyLink()}
         showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
         onSystemShare={() => void handleShareSheetSystemShare()}
+        wechatPasteHint={
+          isWechatBrowser()
+            ? wechatShareReady
+              ? '微信内打开饭团页后：点右上角「…」→「发送给朋友」。从公众号菜单进、再分享，和点链接进 H5 再分享，机制不同；请在本页用三点分享。'
+              : `微信分享未就绪：${formatWechatShareSetupError(wechatShareSetupError)}。调试：?debugWechatShare=1`
+            : undefined
+        }
       />
     </main>
   );

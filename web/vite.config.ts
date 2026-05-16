@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -36,7 +36,36 @@ function deployVersionPlugin(): Plugin {
   }
 }
 
+/** 微信若直接抓 SPA 壳子（如用户分享当前页 `/feituan`），补默认 og:*；图片须绝对 URL（相对路径爬虫常打不开）。 */
+function injectDefaultOpenGraph(originFromEnv: string): Plugin {
+  return {
+    name: 'inject-default-og',
+    transformIndexHtml(html) {
+      const fallbackOrigin = 'https://groupbuy-app-24c46.web.app'
+      const o = (originFromEnv.trim() || fallbackOrigin).replace(/\/+$/, '')
+      const ogImage = `${o}/feituan-logo.png`
+      const block = `
+    <meta name="description" content="今日精选团购，与朋友一起拼单下单。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="大马饭团" />
+    <meta property="og:title" content="大马饭团" />
+    <meta property="og:description" content="今日精选团购，与朋友一起拼单下单。" />
+    <meta property="og:image" content="${ogImage}" />
+    <meta property="og:image:secure_url" content="${ogImage}" />
+    <meta property="og:image:alt" content="大马饭团" />
+    <meta property="og:url" content="${o}/" />`
+      return html.replace('</head>', `${block}\n  </head>`)
+    },
+  }
+}
+
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), deployVersionPlugin()],
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, '')
+  /** 未设置时 OG 域名由 injectDefaultOpenGraph 内 fallback 兜底（生产默认 web.app）。 */
+  const appOrigin = (env.VITE_PUBLIC_APP_ORIGIN || '').trim().replace(/\/+$/, '')
+
+  return {
+    plugins: [react(), deployVersionPlugin(), injectDefaultOpenGraph(appOrigin)],
+  }
 })

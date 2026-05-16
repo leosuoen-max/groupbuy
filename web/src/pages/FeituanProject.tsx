@@ -196,7 +196,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
         : null,
     [project, shop?.data]
   );
-  const wechatShareDebug = useWechatShareCard(wechatShareCard);
+  const { debug: wechatShareDebug } = useWechatShareCard(wechatShareCard);
 
   useEffect(() => {
     let cancelled = false;
@@ -334,7 +334,11 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
       sortOrder: tool.sortOrder ?? 0,
       tool,
     }));
-    return [...products, ...bundles].sort((a, b) => a.sortOrder - b.sortOrder);
+    return [...products, ...bundles].sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      if (a.kind !== b.kind) return a.kind === 'product' ? -1 : 1;
+      return a.key.localeCompare(b.key);
+    });
   }, [activeBundleTools, sellableProducts]);
 
   const orderLines = useMemo<OrderLine[]>(() => {

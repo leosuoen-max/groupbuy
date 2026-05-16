@@ -132,6 +132,23 @@ function normalizeDraftProducts(input: unknown): ProjectProduct[] {
   });
 }
 
+/** 与普通商品共用 sortOrder 的混排次序（顾客端商品清单对齐） */
+type CatalogMixBase = {
+  sortOrder: number;
+  type: 'product' | 'bundle';
+  id: string;
+};
+
+function compareCatalogMixMerge<T extends CatalogMixBase>(a: T, b: T): number {
+  if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+  if (a.type !== b.type) return a.type === 'product' ? -1 : 1;
+  return a.id.localeCompare(b.id);
+}
+
+function sortCatalogMixMerge<T extends CatalogMixBase>(rows: readonly T[]): T[] {
+  return [...rows].sort(compareCatalogMixMerge);
+}
+
 function newProduct(sortOrder: number): ProjectProduct {
   return {
     id: crypto.randomUUID(),
@@ -417,7 +434,7 @@ export default function ProjectEdit() {
   /** 商品与普通商品、套餐工具共用 sortOrder 空间，与顾客端「商品清单」混排一致 */
   const moveMixedCatalogItem = useCallback(
     (kind: 'product' | 'bundle', entityId: string, delta: -1 | 1) => {
-      const merged = [
+      const merged = sortCatalogMixMerge([
         ...products.map((p) => ({
           type: 'product' as const,
           id: p.id,
@@ -428,11 +445,7 @@ export default function ProjectEdit() {
           id: b.id,
           sortOrder: Number(b.sortOrder ?? 0) || 0,
         })),
-      ].sort((a, b) => {
-        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-        if (a.type !== b.type) return a.type === 'product' ? -1 : 1;
-        return a.id.localeCompare(b.id);
-      });
+      ]);
 
       const idx = merged.findIndex((x) => x.type === kind && x.id === entityId);
       if (idx < 0) return;
@@ -927,25 +940,24 @@ export default function ProjectEdit() {
       .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   }, [bundleTools]);
 
-  const mixedSortPreview = useMemo(() => {
-    const productItems = products.map((p) => ({
-      id: p.id,
-      type: 'product' as const,
-      name: p.name?.trim() || '未命名商品',
-      sortOrder: Number(p.sortOrder ?? 0) || 0,
-    }));
-    const bundleItems = bundleTools.map((tool) => ({
-      id: tool.id,
-      type: 'bundle' as const,
-      name: tool.name?.trim() || '未命名套餐',
-      sortOrder: Number(tool.sortOrder ?? 0) || 0,
-    }));
-    return [...productItems, ...bundleItems].sort((a, b) => {
-      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-      if (a.type !== b.type) return a.type === 'product' ? -1 : 1;
-      return a.id.localeCompare(b.id);
-    });
-  }, [products, bundleTools]);
+  const mixedSortPreview = useMemo(
+    () =>
+      sortCatalogMixMerge([
+        ...products.map((p) => ({
+          id: p.id,
+          type: 'product' as const,
+          name: p.name?.trim() || '未命名商品',
+          sortOrder: Number(p.sortOrder ?? 0) || 0,
+        })),
+        ...bundleTools.map((tool) => ({
+          id: tool.id,
+          type: 'bundle' as const,
+          name: tool.name?.trim() || '未命名套餐',
+          sortOrder: Number(tool.sortOrder ?? 0) || 0,
+        })),
+      ]),
+    [products, bundleTools]
+  );
 
   const catalogMixPositions = useMemo(() => {
     const m = new Map<string, number>();

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getWechatJsSdkSignature, isWechatBrowser } from '../lib/wechatService';
+import { toWechatJsSdkShareCard } from '../lib/wechatShareMeta';
 
 export type WechatShareCard = {
   title: string;
@@ -26,11 +27,20 @@ export type WechatShareDebugState = {
   timelineSetStatus: string;
   legacyAppMessageSetStatus: string;
   legacyTimelineSetStatus: string;
+  bridgeBound: boolean;
   signatureOk: boolean;
   wxReady: boolean;
   wxError: string | null;
   error: string | null;
   userAgent: string;
+};
+
+export type UseWechatShareCardResult = {
+  /** `?debugWechatShare=1` 时才有 */
+  debug: WechatShareDebugState | null;
+  /** 签名成功且 wx.ready（右上角分享应带标题/缩略图） */
+  ready: boolean;
+  setupError: string | null;
 };
 
 type WxReadyCallback = () => void;
@@ -62,9 +72,17 @@ type WxSharePayload = WechatShareCard & {
   complete?: WxCallback;
 };
 
+type WeixinJSBridgeLike = {
+  on: (event: string, cb: () => void) => void;
+  invoke: (method: string, args: Record<string, string>, cb?: () => void) => void;
+};
+
 declare global {
   interface Window {
     wx?: WxJsSdk;
+    WeixinJSBridge?: WeixinJSBridgeLike;
+    __dmftWeixinBridgeBound?: boolean;
+    __dmftLatestWechatShareCard?: WechatShareCard;
   }
 }
 
@@ -116,25 +134,19 @@ function loadWechatJsSdk(): Promise<WxJsSdk> {
 
 function currentPageUrlForWechatSignature(): string {
   const ua = navigator.userAgent || '';
-  // iOS 微信在 SPA/replaceState 场景里通常校验首个落地 URL，而不是清理后的当前 URL。
   if (/MicroMessenger/i.test(ua) && /iPhone|iPad|iPod/i.test(ua) && initialWechatPageUrl) {
     return initialWechatPageUrl;
   }
   return pageUrlForWechatSignature(window.location.href);
 }
 
-function normalizeShareCard(card: WechatShareCard): WechatShareCard {
-  return {
-    title: card.title.trim(),
-    desc: card.desc.trim(),
-    link: card.link.trim(),
-    imgUrl: card.imgUrl.trim(),
-  };
-}
-
 function shouldShowDebugPanel(): boolean {
   if (typeof window === 'undefined') return false;
   return new URLSearchParams(window.location.search).get('debugWechatShare') === '1';
+}
+
+function shouldWxConfigDebug(): boolean {
+  return shouldShowDebugPanel();
 }
 
 function getDebugShareMode(): string {
@@ -202,6 +214,174 @@ function errorText(err: unknown): string {
   }
 }
 
+/** iOS 微信要求分享 link 与 wx.config 签名所用 URL 一致，否则 updateAppMessageShareData 常 retCode:-1 */
+function menuLinkMatchingSignature(fallbackLink: string): string {
+  if (typeof window === 'undefined') return fallbackLink;
+  return currentPageUrlForWechatSignature() || fallbackLink;
+}
+
+function prepareShareCard(card: WechatShareCard): WechatShareCard {
+  const base = applyDebugShareMode(card);
+  const menuLink = menuLinkMatchingSignature(base.link);
+  const prepared = toWechatJsSdkShareCard(base, { menuLink });
+  if (typeof window !== 'undefined') {
+    window.__dmftLatestWechatShareCard = prepared;
+  }
+  return prepared;
+}
+
+function bindWeixinJSBridgeMenuShare(): boolean {
+  const bridge = window.WeixinJSBridge;
+  if (!bridge) return false;
+  if (window.__dmftWeixinBridgeBound) return true;
+
+  bridge.on('menu:share:appmessage', () => {
+    const c = window.__dmftLatestWechatShareCard;
+    if (!c) return;
+    bridge.invoke(
+      'sendAppMessage',
+      {
+        title: c.title,
+        desc: c.desc,
+        link: c.link,
+        img_url: c.imgUrl,
+        type: 'link',
+        data_url: '',
+      },
+      () => {}
+    );
+  });
+  bridge.on('menu:share:timeline', () => {
+    const c = window.__dmftLatestWechatShareCard;
+    if (!c) return;
+    bridge.invoke(
+      'shareTimeline',
+      {
+        title: c.title,
+        link: c.link,
+        img_url: c.imgUrl,
+      },
+      () => {}
+    );
+  });
+  window.__dmftWeixinBridgeBound = true;
+  return true;
+}
+
+function ensureWeixinJSBridgeMenuShare(): void {
+  if (bindWeixinJSBridgeMenuShare()) return;
+  document.addEventListener('WeixinJSBridgeReady', () => bindWeixinJSBridgeMenuShare(), {
+    once: true,
+  });
+}
+
+function pushAppMessageShareData(
+  wx: WxJsSdk,
+  shareCard: WechatShareCard,
+  statusKey: string,
+  onStatus?: (key: string, status: string) => void
+): void {
+  if (!wx.updateAppMessageShareData) {
+    onStatus?.(statusKey, 'missing_api');
+    return;
+  }
+  onStatus?.(statusKey, 'calling');
+  wx.updateAppMessageShareData({
+    title: shareCard.title,
+    desc: shareCard.desc,
+    link: shareCard.link,
+    imgUrl: shareCard.imgUrl,
+    success: (res) => onStatus?.(statusKey, `success:${errorText(res)}`),
+    fail: (res) => onStatus?.(statusKey, `fail:${errorText(res)}`),
+    cancel: (res) => onStatus?.(statusKey, `cancel:${errorText(res)}`),
+    complete: (res) => onStatus?.(statusKey, `complete:${errorText(res)}`),
+  });
+}
+
+function pushTimelineShareData(
+  wx: WxJsSdk,
+  shareCard: WechatShareCard,
+  statusKey: string,
+  onStatus?: (key: string, status: string) => void
+): void {
+  if (!wx.updateTimelineShareData) {
+    onStatus?.(statusKey, 'missing_api');
+    return;
+  }
+  onStatus?.(statusKey, 'calling');
+  wx.updateTimelineShareData({
+    title: shareCard.title,
+    desc: shareCard.desc,
+    link: shareCard.link,
+    imgUrl: shareCard.imgUrl,
+    success: (res) => onStatus?.(statusKey, `success:${errorText(res)}`),
+    fail: (res) => onStatus?.(statusKey, `fail:${errorText(res)}`),
+    cancel: (res) => onStatus?.(statusKey, `cancel:${errorText(res)}`),
+    complete: (res) => onStatus?.(statusKey, `complete:${errorText(res)}`),
+  });
+}
+
+function registerWxShareApis(
+  wx: WxJsSdk,
+  shareCard: WechatShareCard,
+  onStatus?: (key: string, status: string) => void
+): void {
+  const legacyAppPayload: WxSharePayload = {
+    title: shareCard.title,
+    desc: shareCard.desc,
+    link: shareCard.link,
+    imgUrl: shareCard.imgUrl,
+    trigger: (res) => {
+      onStatus?.('legacyAppMessageSetStatus', `trigger:${errorText(res)}`);
+      // iOS：在用户点开分享菜单时再写入，避免 ready 时 retCode:-1
+      pushAppMessageShareData(wx, shareCard, 'appMessageSetStatus', onStatus);
+    },
+    success: (res) => onStatus?.('legacyAppMessageSetStatus', `success:${errorText(res)}`),
+    fail: (res) => onStatus?.('legacyAppMessageSetStatus', `fail:${errorText(res)}`),
+    cancel: (res) => onStatus?.('legacyAppMessageSetStatus', `cancel:${errorText(res)}`),
+  };
+
+  const legacyTimelinePayload: WxSharePayload = {
+    title: shareCard.title,
+    desc: shareCard.desc,
+    link: shareCard.link,
+    imgUrl: shareCard.imgUrl,
+    trigger: (res) => {
+      onStatus?.('legacyTimelineSetStatus', `trigger:${errorText(res)}`);
+      pushTimelineShareData(wx, shareCard, 'timelineSetStatus', onStatus);
+    },
+    success: (res) => onStatus?.('legacyTimelineSetStatus', `success:${errorText(res)}`),
+    fail: (res) => onStatus?.('legacyTimelineSetStatus', `fail:${errorText(res)}`),
+    cancel: (res) => onStatus?.('legacyTimelineSetStatus', `cancel:${errorText(res)}`),
+  };
+
+  if (wx.onMenuShareAppMessage) {
+    try {
+      wx.onMenuShareAppMessage(legacyAppPayload);
+      onStatus?.('legacyAppMessageSetStatus', 'registered');
+    } catch (e) {
+      onStatus?.('legacyAppMessageSetStatus', `throw:${errorText(e)}`);
+    }
+  } else {
+    onStatus?.('legacyAppMessageSetStatus', 'missing_api');
+    pushAppMessageShareData(wx, shareCard, 'appMessageSetStatus', onStatus);
+  }
+
+  if (wx.onMenuShareTimeline) {
+    try {
+      wx.onMenuShareTimeline(legacyTimelinePayload);
+      onStatus?.('legacyTimelineSetStatus', 'registered');
+    } catch (e) {
+      onStatus?.('legacyTimelineSetStatus', `throw:${errorText(e)}`);
+    }
+  } else {
+    onStatus?.('legacyTimelineSetStatus', 'missing_api');
+    pushTimelineShareData(wx, shareCard, 'timelineSetStatus', onStatus);
+  }
+
+  ensureWeixinJSBridgeMenuShare();
+}
+
 function makeInitialDebugState(card: WechatShareCard | null | undefined): WechatShareDebugState {
   const hasWindow = typeof window !== 'undefined';
   const ua = hasWindow ? navigator.userAgent || '' : '';
@@ -212,7 +392,7 @@ function makeInitialDebugState(card: WechatShareCard | null | undefined): Wechat
     stage: card ? 'init' : 'waiting_card',
     pageUrl: hasWindow ? window.location.href : '',
     signatureUrl: '',
-    shareCard: card ? applyDebugShareMode(normalizeShareCard(card)) : null,
+    shareCard: card ? prepareShareCard(card) : null,
     apiSupport: {
       updateAppMessageShareData: false,
       updateTimelineShareData: false,
@@ -223,6 +403,7 @@ function makeInitialDebugState(card: WechatShareCard | null | undefined): Wechat
     timelineSetStatus: 'idle',
     legacyAppMessageSetStatus: 'idle',
     legacyTimelineSetStatus: 'idle',
+    bridgeBound: false,
     signatureOk: false,
     wxReady: false,
     wxError: null,
@@ -233,7 +414,7 @@ function makeInitialDebugState(card: WechatShareCard | null | undefined): Wechat
 
 export function useWechatShareCard(
   card: WechatShareCard | null | undefined
-): WechatShareDebugState | null {
+): UseWechatShareCardResult {
   const [debugState, setDebugState] = useState<WechatShareDebugState>(() =>
     makeInitialDebugState(card)
   );
@@ -242,13 +423,15 @@ export function useWechatShareCard(
     const debugEnabled = shouldShowDebugPanel();
     const wechat = isWechatBrowser();
     const pageUrl = typeof window !== 'undefined' ? window.location.href : '';
+
     if (!card) {
       setDebugState(makeInitialDebugState(card));
       return;
     }
 
-    const shareCard = applyDebugShareMode(normalizeShareCard(card));
+    const shareCard = prepareShareCard(card);
     const signatureUrl = typeof window !== 'undefined' ? currentPageUrlForWechatSignature() : '';
+
     setDebugState({
       enabled: debugEnabled,
       debugShareMode: getDebugShareMode(),
@@ -267,12 +450,14 @@ export function useWechatShareCard(
       timelineSetStatus: 'idle',
       legacyAppMessageSetStatus: 'idle',
       legacyTimelineSetStatus: 'idle',
+      bridgeBound: Boolean(window.__dmftWeixinBridgeBound),
       signatureOk: false,
       wxReady: false,
       wxError: null,
       error: null,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent || '' : '',
     });
+
     if (!wechat) return;
     if (!shareCard.title || !shareCard.link) {
       setDebugState((prev) => ({
@@ -284,6 +469,24 @@ export function useWechatShareCard(
     }
 
     let cancelled = false;
+    let wxRef: WxJsSdk | null = null;
+
+    const applyShareRegistration = () => {
+      if (!wxRef || cancelled) return;
+      registerWxShareApis(wxRef, shareCard, (key, status) => {
+        setDebugState((prev) => ({ ...prev, [key]: status }));
+      });
+      setDebugState((prev) => ({
+        ...prev,
+        stage: 'wx_ready_share_api_called',
+        bridgeBound: Boolean(window.__dmftWeixinBridgeBound),
+      }));
+    };
+
+    const onPageShow = () => {
+      if (wxRef && !cancelled) applyShareRegistration();
+    };
+
     void (async () => {
       try {
         setDebugState((prev) => ({ ...prev, stage: 'loading_sdk_and_signature' }));
@@ -292,6 +495,7 @@ export function useWechatShareCard(
           getWechatJsSdkSignature(signatureUrl),
         ]);
         if (cancelled) return;
+        wxRef = wx;
 
         setDebugState((prev) => ({
           ...prev,
@@ -304,8 +508,12 @@ export function useWechatShareCard(
             onMenuShareTimeline: typeof wx.onMenuShareTimeline === 'function',
           },
         }));
+
+        // 旧版 Bridge 尽早挂上，避免仅依赖 updateAppMessageShareData（iOS 常失败）
+        ensureWeixinJSBridgeMenuShare();
+
         wx.config({
-          debug: false,
+          debug: shouldWxConfigDebug(),
           appId: signature.appId,
           timestamp: signature.timestamp,
           nonceStr: signature.nonceStr,
@@ -317,113 +525,18 @@ export function useWechatShareCard(
             'onMenuShareTimeline',
           ],
         });
+
         wx.ready(() => {
+          if (cancelled) return;
           setDebugState((prev) => ({
             ...prev,
             stage: 'wx_ready_setting_share_data',
             wxReady: true,
           }));
-          const makePayload = (
-            key:
-              | 'appMessageSetStatus'
-              | 'timelineSetStatus'
-              | 'legacyAppMessageSetStatus'
-              | 'legacyTimelineSetStatus'
-          ): WxSharePayload => ({
-            ...shareCard,
-            trigger: (res) => {
-              setDebugState((prev) => ({
-                ...prev,
-                [key]: `trigger:${errorText(res)}`,
-              }));
-            },
-            success: (res) => {
-              setDebugState((prev) => ({
-                ...prev,
-                [key]: `success:${errorText(res)}`,
-              }));
-            },
-            fail: (res) => {
-              setDebugState((prev) => ({
-                ...prev,
-                [key]: `fail:${errorText(res)}`,
-              }));
-            },
-            cancel: (res) => {
-              setDebugState((prev) => ({
-                ...prev,
-                [key]: `cancel:${errorText(res)}`,
-              }));
-            },
-            complete: (res) => {
-              setDebugState((prev) => ({
-                ...prev,
-                [key]: `complete:${errorText(res)}`,
-              }));
-            },
-          });
-
-          try {
-            if (wx.updateAppMessageShareData) {
-              setDebugState((prev) => ({ ...prev, appMessageSetStatus: 'calling' }));
-              wx.updateAppMessageShareData(makePayload('appMessageSetStatus'));
-            } else {
-              setDebugState((prev) => ({ ...prev, appMessageSetStatus: 'missing_api' }));
-            }
-          } catch (e) {
-            setDebugState((prev) => ({
-              ...prev,
-              appMessageSetStatus: `throw:${errorText(e)}`,
-            }));
-          }
-
-          try {
-            if (wx.updateTimelineShareData) {
-              setDebugState((prev) => ({ ...prev, timelineSetStatus: 'calling' }));
-              wx.updateTimelineShareData(makePayload('timelineSetStatus'));
-            } else {
-              setDebugState((prev) => ({ ...prev, timelineSetStatus: 'missing_api' }));
-            }
-          } catch (e) {
-            setDebugState((prev) => ({
-              ...prev,
-              timelineSetStatus: `throw:${errorText(e)}`,
-            }));
-          }
-
-          try {
-            if (wx.onMenuShareAppMessage) {
-              setDebugState((prev) => ({ ...prev, legacyAppMessageSetStatus: 'calling' }));
-              wx.onMenuShareAppMessage(makePayload('legacyAppMessageSetStatus'));
-            } else {
-              setDebugState((prev) => ({ ...prev, legacyAppMessageSetStatus: 'missing_api' }));
-            }
-          } catch (e) {
-            setDebugState((prev) => ({
-              ...prev,
-              legacyAppMessageSetStatus: `throw:${errorText(e)}`,
-            }));
-          }
-
-          try {
-            if (wx.onMenuShareTimeline) {
-              setDebugState((prev) => ({ ...prev, legacyTimelineSetStatus: 'calling' }));
-              wx.onMenuShareTimeline(makePayload('legacyTimelineSetStatus'));
-            } else {
-              setDebugState((prev) => ({ ...prev, legacyTimelineSetStatus: 'missing_api' }));
-            }
-          } catch (e) {
-            setDebugState((prev) => ({
-              ...prev,
-              legacyTimelineSetStatus: `throw:${errorText(e)}`,
-            }));
-          }
-
-          setDebugState((prev) => ({
-            ...prev,
-            stage: 'wx_ready_share_api_called',
-          }));
+          applyShareRegistration();
+          window.setTimeout(() => applyShareRegistration(), 300);
         });
+
         wx.error((err) => {
           console.warn('wechat share config failed', err);
           setDebugState((prev) => ({
@@ -431,6 +544,7 @@ export function useWechatShareCard(
             stage: 'wx_error',
             wxError: errorText(err),
           }));
+          ensureWeixinJSBridgeMenuShare();
         });
       } catch (e) {
         console.warn('wechat share setup failed', e);
@@ -439,13 +553,24 @@ export function useWechatShareCard(
           stage: 'setup_error',
           error: errorText(e),
         }));
+        ensureWeixinJSBridgeMenuShare();
       }
     })();
 
+    window.addEventListener('pageshow', onPageShow);
+
     return () => {
       cancelled = true;
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [card]);
 
-  return debugState.enabled ? debugState : null;
+  const ready = debugState.wxReady && debugState.signatureOk;
+  const setupError = debugState.wxError || debugState.error;
+
+  return {
+    debug: debugState.enabled ? debugState : null,
+    ready,
+    setupError,
+  };
 }
