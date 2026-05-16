@@ -31,7 +31,10 @@ import {
 import { listDeliveryPointsByOwnerId } from './deliveryPointService';
 import { isFeituanAdmin } from './feituanService';
 import { getProject } from './projectService';
-import { getProjectPermissionForUser } from './permissionService';
+import {
+  merchantHasShopStaffAccess,
+  resolveMerchantShopRole,
+} from './permissionService';
 import { getShopById } from './shopService';
 import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type {
@@ -1169,16 +1172,10 @@ async function assertMerchantCanManageOrder(
   }
   const shop = await getShopById(order.shopId);
   if (!shop) throw new Error('店铺不存在');
-  if (shop.data.ownerId === actorUserId) return;
-  const perm = await getProjectPermissionForUser(actorUserId, order.projectId);
-  if (
-    perm &&
-    perm.data.projectId === order.projectId &&
-    (perm.data.role === 'normal_admin' || perm.data.role === 'high_admin')
-  ) {
-    return;
+  const role = await resolveMerchantShopRole(actorUserId, shop);
+  if (!merchantHasShopStaffAccess(role)) {
+    throw new Error('无权限操作该订单');
   }
-  throw new Error('无权限操作该订单');
 }
 
 export async function merchantConfirmPaymentGroup(

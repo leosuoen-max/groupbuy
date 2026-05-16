@@ -32,9 +32,9 @@ export function ShopMoreMenuSheet({
 
   const base = '/shop/' + encodeURIComponent(shopSlug) + '/' + encodeURIComponent(projectId);
   const dashboardBase = '/dashboard/' + encodeURIComponent(shopSlug);
+  /** 店长、高级管理员可看项目/店铺配置；普通管理员仅订单与对账入口 */
+  const canConfigureFromCustomer = Boolean(isShopOwner || invitedRole === 'high_admin');
   const showAdminSection = Boolean(isShopOwner || invitedRole);
-  const canEditProject = Boolean(isShopOwner || invitedRole === 'high_admin');
-  const canShopSettings = Boolean(isShopOwner || invitedRole === 'high_admin');
 
   return (
     <div className="pointer-events-auto fixed inset-0 z-30 bg-black/25">
@@ -109,7 +109,7 @@ export function ShopMoreMenuSheet({
               >
                 📋 订单管理
               </Link>
-              {canEditProject ? (
+              {canConfigureFromCustomer ? (
                 <Link
                   to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
                   onClick={onClose}
@@ -118,7 +118,7 @@ export function ShopMoreMenuSheet({
                   ✏️ 编辑菜单
                 </Link>
               ) : null}
-              {canEditProject ? (
+              {canConfigureFromCustomer ? (
                 <Link
                   to={`${dashboardBase}/projects/${encodeURIComponent(projectId)}`}
                   onClick={onClose}
@@ -127,7 +127,7 @@ export function ShopMoreMenuSheet({
                   ⚙️ 项目设置
                 </Link>
               ) : null}
-              {isShopOwner && canShopSettings ? (
+              {canConfigureFromCustomer ? (
                 <Link
                   to={`${dashboardBase}/settings`}
                   onClick={onClose}

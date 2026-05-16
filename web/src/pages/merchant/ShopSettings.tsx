@@ -4,6 +4,11 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug, updateShop, uploadShopImage } from '../../lib/shopService';
 import {
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
+} from '../../lib/permissionService';
+import {
   DEFAULT_SHOP_THEME_COLOR,
   DESIGN_BORDER,
   DESIGN_PAGE_BG,
@@ -49,7 +54,13 @@ export default function ShopSettings() {
         try {
           const row = await getShopBySlug(slug);
           if (!row) throw new Error('未找到该商户链接');
-          if (row.data.ownerId !== user.uid) throw new Error('无权限');
+          const effRole: MerchantShopActorRole | null =
+            row.data.ownerId === user.uid
+              ? 'owner'
+              : await resolveMerchantShopRole(user.uid, row);
+          if (!merchantCanManageShopSettingsAndProjects(effRole)) {
+            throw new Error('无权限：仅店主或高级管理员可修改店铺设置');
+          }
           if (cancelled) return;
           setShopId(row.id);
           setName(row.data.name ?? '');

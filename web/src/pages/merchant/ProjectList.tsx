@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Timestamp } from 'firebase/firestore';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import {
   canDeleteProject,
   copyProjectFromCustomerLinkAsDraft,
@@ -12,7 +13,6 @@ import {
   updateProjectDoc,
   type ProjectRow,
 } from '../../lib/projectService';
-import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import { getProjectSharePageUrl } from '../../lib/shareLink';
 import {
   getFeituanProjectPublishBlocker,
@@ -57,9 +57,9 @@ function customerShopHomeUrl(_slug: string, projectId: string): string {
 export default function ProjectList() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const { user, loading: authLoading } = useAuthUser();
+  const m = useMerchantShopAccess(shopSlug);
   const navigate = useNavigate();
   const [shopId, setShopId] = useState<string | null>(null);
-  const [shopRow, setShopRow] = useState<ShopRow | null>(null);
   const [shopName, setShopName] = useState('');
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,41 +78,38 @@ export default function ProjectList() {
     setLoading(true);
     setErr(null);
     try {
-      const shop = await getShopBySlug(slug);
-      if (!shop) {
+      if (!m.shop) {
         setShopId(null);
-        setShopRow(null);
         setProjects([]);
-        setErr('未找到该商户链接');
+        setErr(m.bootErr ?? '未找到该商户链接');
         return;
       }
-      if (shop.data.ownerId !== user.uid) {
+      if (!m.canConfigureShopAndProjects) {
         setShopId(null);
-        setShopRow(null);
         setProjects([]);
-        setErr('无权限访问该店铺');
+        setErr('无权限访问：仅店主或高级管理员可管理项目');
         return;
       }
-      setShopId(shop.id);
-      setShopRow(shop);
-      setShopName(shop.data.name);
-      setProjects(await listProjectsByShopId(shop.id));
+      setShopId(m.shop.id);
+      setShopName(m.shop.data.name);
+      setProjects(await listProjectsByShopId(m.shop.id));
+      setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
     } finally {
       setLoading(false);
     }
-  }, [slug, user]);
+  }, [m.bootErr, m.canConfigureShopAndProjects, m.shop, user]);
 
   useEffect(() => {
     queueMicrotask(() => {
-      if (!authLoading && user) {
+      if (!authLoading && !m.loading && user) {
         void refresh();
       } else if (!authLoading && !user) {
         setLoading(false);
       }
     });
-  }, [authLoading, user, refresh]);
+  }, [authLoading, m.loading, refresh, user]);
 
   const handleNew = async () => {
     if (!shopId) return;
@@ -264,7 +261,7 @@ export default function ProjectList() {
     }
   };
 
-  if (authLoading || (user && loading)) {
+  if (authLoading || m.loading || (user && loading)) {
     return (
       <PageShell title="项目列表" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -297,7 +294,7 @@ export default function ProjectList() {
     <PageShell title="项目列表" subtitle={shopName}>
       {err ? <p className="mb-2 text-sm text-amber-800">{err}</p> : null}
       <section className="mb-4 rounded-xl border border-orange-100 bg-orange-50/60 p-3 text-xs leading-relaxed text-orange-950">
-        {shopRow?.data.feituanEnabled ? (
+        {m.shop?.data.feituanEnabled ? (
           <p>
             本店已开通「大马饭团」。项目可提交到饭团审批，上架后店端只读，顾客仅使用饭团链接参团。
           </p>
@@ -356,7 +353,7 @@ export default function ProjectList() {
             const feituanLabel = feituanStatusLabel(p.data.feituanStatus);
             const feituanListed = p.data.feituanStatus === 'listed';
             const showFeituanSubmit =
-              shopRow?.data.feituanEnabled && canSubmitToFeituan(p.data.feituanStatus);
+              m.shop?.data.feituanEnabled && canSubmitToFeituan(p.data.feituanStatus);
             const feituanSubmitBlocker = showFeituanSubmit
               ? getFeituanProjectPublishBlocker(p.data)
               : null;

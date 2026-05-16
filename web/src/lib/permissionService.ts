@@ -5,15 +5,18 @@ import {
   getDocs,
   limit,
   query,
-  serverTimestamp,
-  setDoc,
   updateDoc,
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebase';
+import { getProject } from './projectService';
+import type { ShopRow } from './shopService';
 import type { PermissionDoc } from '../types/firestore';
 
 export type PermissionRow = { id: string; data: PermissionDoc };
+
+/** 店员身份：店主 / 受邀高级 / 受邀普通（不包含未授权） */
+export type MerchantShopActorRole = 'owner' | 'high_admin' | 'normal_admin';
 
 /**
  * 被邀请管理员的权限（创建人见 shops.ownerId，通常不在 permissions 里）
@@ -34,6 +37,96 @@ export async function getProjectPermissionForUser(
   if (snap.empty) return null;
   const d = snap.docs[0];
   return { id: d.id, data: d.data() as PermissionDoc };
+}
+
+/** 当前账号在某店铺的受邀店铺级权限（scope=shop）；若无可返回 null */
+export async function getShopPermissionForUser(
+  userId: string,
+  shopId: string
+): Promise<PermissionRow | null> {
+  const db = getDb();
+  const q = query(
+    collection(db, 'permissions'),
+    where('userId', '==', userId),
+    where('scope', '==', 'shop'),
+    where('scopeId', '==', shopId),
+    limit(5)
+  );
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  return { id: d.id, data: d.data() as PermissionDoc };
+}
+
+/**
+ * 历史数据：仅存 project scope 的旧管理员；升级到「整店管理员」前应仍能登录。
+ * 若多个项目条目角色不同，取最高（high_admin 优先）。
+ */
+export async function getLegacyHighestProjectAdminRoleForShop(
+  userId: string,
+  shopId: string
+): Promise<'high_admin' | 'normal_admin' | null> {
+  const db = getDb();
+  const q = query(
+    collection(db, 'permissions'),
+    where('userId', '==', userId),
+    where('scope', '==', 'project'),
+    limit(320)
+  );
+  const snap = await getDocs(q);
+  let best: 'high_admin' | 'normal_admin' | null = null;
+  const cache = new Map<string, string | null>();
+  for (const ds of snap.docs) {
+    const data = ds.data() as PermissionDoc;
+    if (data.role !== 'high_admin' && data.role !== 'normal_admin') continue;
+    const pid = (data.projectId ?? '').trim();
+    if (!pid) continue;
+    let sid = cache.get(pid);
+    if (sid === undefined) {
+      const row = await getProject(pid);
+      sid = row?.data.shopId ?? null;
+      cache.set(pid, sid ?? null);
+    }
+    if (sid !== shopId) continue;
+    if (data.role === 'high_admin') return 'high_admin';
+    if (!best) best = 'normal_admin';
+  }
+  return best;
+}
+
+/** 店员在本店的有效角色：店主优先；否则店铺邀请；否则历史 project-scope 回填 */
+export async function resolveMerchantShopRole(
+  actorUid: string,
+  shop: ShopRow
+): Promise<MerchantShopActorRole | null> {
+  if (shop.data.ownerId === actorUid) return 'owner';
+  const invited = await getShopPermissionForUser(actorUid, shop.id);
+  if (
+    invited &&
+    invited.data.scope === 'shop' &&
+    (invited.data.role === 'high_admin' || invited.data.role === 'normal_admin')
+  ) {
+    return invited.data.role;
+  }
+  const legacy = await getLegacyHighestProjectAdminRoleForShop(actorUid, shop.id);
+  return legacy ?? null;
+}
+
+/** 订单、对账等店员入口（含普通管理员） */
+export function merchantHasShopStaffAccess(role: MerchantShopActorRole | null): boolean {
+  return role !== null;
+}
+
+/** 项目管理、配送点库、店铺设置等（店主 + 高级管理员） */
+export function merchantCanManageShopSettingsAndProjects(
+  role: MerchantShopActorRole | null
+): boolean {
+  return role === 'owner' || role === 'high_admin';
+}
+
+/** 「管理员管理」页：仅店主 */
+export function merchantCanManageAdminInvitations(role: MerchantShopActorRole | null): boolean {
+  return role === 'owner';
 }
 
 /** 列出某项目下全部管理员权限（不含 owner） */
@@ -93,52 +186,4 @@ export async function updateProjectPermissionRole(params: {
 export async function removeProjectPermission(permissionId: string): Promise<void> {
   const db = getDb();
   await deleteDoc(doc(db, 'permissions', permissionId));
-}
-
-/** 项目编辑保存时：按店铺管理员池同步项目管理员权限 */
-export async function syncProjectAdminsFromShopPool(params: {
-  projectId: string;
-  shopId: string;
-  selectedUserIds: string[];
-  grantedBy: string;
-}): Promise<void> {
-  const db = getDb();
-  const selected = new Set(params.selectedUserIds.map((x) => x.trim()).filter(Boolean));
-  const [shopAdmins, projectPerms] = await Promise.all([
-    listShopAdminPermissions(params.shopId),
-    listProjectPermissions(params.projectId),
-  ]);
-  const shopRoleMap = new Map(shopAdmins.map((x) => [x.data.userId, x.data.role]));
-  const existingMap = new Map(projectPerms.map((x) => [x.data.userId, x]));
-
-  const tasks: Promise<unknown>[] = [];
-
-  for (const userId of selected) {
-    const role = shopRoleMap.get(userId);
-    if (!role) continue; // 仅允许店铺管理员池内成员被分配到项目
-    const ref = doc(db, 'permissions', `${userId}_${params.projectId}`);
-    tasks.push(
-      setDoc(
-        ref,
-        {
-          userId,
-          projectId: params.projectId,
-          scope: 'project',
-          scopeId: params.projectId,
-          role,
-          grantedBy: params.grantedBy,
-          grantedAt: serverTimestamp(),
-        },
-        { merge: true }
-      )
-    );
-  }
-
-  for (const [userId, row] of existingMap.entries()) {
-    if (!selected.has(userId)) {
-      tasks.push(deleteDoc(doc(db, 'permissions', row.id)));
-    }
-  }
-
-  await Promise.all(tasks);
 }

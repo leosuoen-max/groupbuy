@@ -21,6 +21,10 @@ import {
   listDeliveryPointsByOwnerId,
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
+import {
+  merchantHasShopStaffAccess,
+  resolveMerchantShopRole,
+} from '../../lib/permissionService';
 import { getShopBySlug } from '../../lib/shopService';
 import {
   cardApplicationsForPaymentGroup,
@@ -240,6 +244,23 @@ export default function MerchantOrderDetail({
         setRow(null);
         setErr('订单不存在或不属于当前店铺');
         return;
+      } else if (!user) {
+        setRow(null);
+        setErr('请先登录');
+        return;
+      } else {
+        const shopRow = await getShopBySlug(slug);
+        if (!shopRow || r.data.shopId !== shopRow.id) {
+          setRow(null);
+          setErr('订单不存在或不属于当前店铺');
+          return;
+        }
+        const role = await resolveMerchantShopRole(user.uid, shopRow);
+        if (!merchantHasShopStaffAccess(role)) {
+          setRow(null);
+          setErr('无权限查看该订单');
+          return;
+        }
       }
       setRow(r);
     } catch (e) {

@@ -2,20 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../components/PageShell';
 import { useAuthUser } from '../hooks/useAuthUser';
-import {
-  acceptProjectInvitation,
-  getInvitationByCode,
-} from '../lib/invitationService';
-import { getProject } from '../lib/projectService';
+import { acceptInvitation, getInvitationByCode } from '../lib/invitationService';
 import { getShopById } from '../lib/shopService';
 
 type InviteMeta = {
-  projectId?: string;
   shopSlug: string;
   roleLabel: string;
-  projectTitle: string;
+  subtitle: string;
   shopName: string;
-  scope: 'shop' | 'project';
 };
 
 export default function InviteAccept() {
@@ -49,29 +43,26 @@ export default function InviteAccept() {
         setErr('邀请已过期（24 小时内有效）');
         return;
       }
-      const proj = row.data.projectId ? await getProject(row.data.projectId) : null;
-      const shop = row.data.shopId
-        ? await getShopById(row.data.shopId)
-        : proj
-          ? await getShopById(proj.data.shopId)
-          : null;
-      if (cancelled) return;
-      if (!shop || (row.data.scope === 'project' && !proj)) {
+      if (row.data.scope !== 'shop') {
         setBoot('bad');
-        setErr('项目或店铺不存在');
+        setErr(
+          '项目级邀请已停用，请让店主在「管理员管理」中重新发送店铺邀请'
+        );
+        return;
+      }
+      const shop = row.data.shopId ? await getShopById(row.data.shopId) : null;
+      if (cancelled) return;
+      if (!shop) {
+        setBoot('bad');
+        setErr('店铺不存在');
         return;
       }
       setMeta({
-        projectId: proj?.id,
         shopSlug: shop.data.slug,
         roleLabel:
           row.data.role === 'high_admin' ? '高级管理员' : '普通管理员',
-        projectTitle:
-          row.data.scope === 'shop'
-            ? '店铺管理员邀请'
-            : proj?.data.title?.trim() || '（项目）',
+        subtitle: '店铺管理员邀请（全店项目适用）',
         shopName: shop.data.name,
-        scope: row.data.scope,
       });
       setBoot('ready');
     })();
@@ -85,15 +76,10 @@ export default function InviteAccept() {
     setAccepting(true);
     setErr(null);
     try {
-      await acceptProjectInvitation(code, user.uid);
-      if (meta.scope === 'project' && meta.projectId) {
-        navigate(
-          `/shop/${encodeURIComponent(meta.shopSlug)}/${encodeURIComponent(meta.projectId)}`,
-          { replace: true }
-        );
-        return;
-      }
-      navigate(`/dashboard/${encodeURIComponent(meta.shopSlug)}`, { replace: true });
+      await acceptInvitation(code, user.uid);
+      navigate(`/dashboard/${encodeURIComponent(meta.shopSlug)}`, {
+        replace: true,
+      });
     } catch (e) {
       setErr(e instanceof Error ? e.message : '接受失败');
     } finally {
@@ -127,7 +113,7 @@ export default function InviteAccept() {
 
   if (boot === 'ready' && !authLoading && !user && meta) {
     return (
-      <PageShell title="管理员邀请" subtitle={meta.projectTitle}>
+      <PageShell title="管理员邀请" subtitle={meta.subtitle}>
         <p className="mb-2 text-sm text-gray-700">
           {meta.shopName} · 邀请你为 <strong>{meta.roleLabel}</strong>
         </p>
@@ -159,7 +145,7 @@ export default function InviteAccept() {
   }
 
   return (
-    <PageShell title="管理员邀请" subtitle={meta.projectTitle}>
+    <PageShell title="管理员邀请" subtitle={meta.subtitle}>
       <p className="mb-2 text-sm text-gray-700">{meta.shopName}</p>
       <p className="mb-4 text-sm text-gray-600">
         邀请角色：<strong>{meta.roleLabel}</strong>

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { SignOutButton } from '../../components/SignOutButton';
-import { useAuthUser } from '../../hooks/useAuthUser';
+import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import { formatMYR } from '../../lib/formatMYR';
 import { aggregateShopOrdersForToday } from '../../lib/merchantDashboardStats';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
@@ -11,14 +11,12 @@ import {
   listCardRequestsByShop,
   type CardPurchaseRequestRow,
 } from '../../lib/cardService';
-import { getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
-import type { ShopRow } from '../../lib/shopService';
+import { isShopOpenForCustomers } from '../../lib/shopService';
 
 export default function MerchantDashboard() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
-  const { user, loading: authLoading } = useAuthUser();
-  const [shop, setShop] = useState<ShopRow | null | undefined>(undefined);
-  const [err, setErr] = useState<string | null>(null);
+  const m = useMerchantShopAccess(shopSlug);
+
   const [orderRows, setOrderRows] = useState<OrderRow[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersErr, setOrdersErr] = useState<string | null>(null);
@@ -26,27 +24,10 @@ export default function MerchantDashboard() {
     CardPurchaseRequestRow[]
   >([]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setErr(null);
-      try {
-        const row = await getShopBySlug(decodeURIComponent(shopSlug));
-        if (!cancelled) setShop(row);
-      } catch (e) {
-        if (!cancelled) {
-          setShop(null);
-          setErr(e instanceof Error ? e.message : '加载失败');
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [shopSlug]);
+  const shop = m.shop;
 
   useEffect(() => {
-    if (!shop || !user || shop.data.ownerId !== user.uid) {
+    if (!shop || !m.user || !m.canOrdersOrReconciliation) {
       queueMicrotask(() => {
         setOrderRows([]);
         setOrdersErr(null);
@@ -75,10 +56,10 @@ export default function MerchantDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [shop, user]);
+  }, [shop, m.user, m.canOrdersOrReconciliation]);
 
   useEffect(() => {
-    if (!shop || !user || shop.data.ownerId !== user.uid) {
+    if (!shop || !m.user || !m.canConfigureShopAndProjects) {
       queueMicrotask(() => setCardPurchaseRows([]));
       return;
     }
@@ -93,7 +74,7 @@ export default function MerchantDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [shop, user]);
+  }, [shop, m.user, m.canConfigureShopAndProjects]);
 
   const pendingCardConfirmCount = useMemo(
     () =>
@@ -112,7 +93,7 @@ export default function MerchantDashboard() {
     return `${d.getMonth() + 1}/${d.getDate()}`;
   }, []);
 
-  if (authLoading || shop === undefined) {
+  if (m.loading) {
     return (
       <PageShell title="商户后台" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -120,7 +101,7 @@ export default function MerchantDashboard() {
     );
   }
 
-  if (!user) {
+  if (!m.user) {
     return (
       <PageShell title="商户后台" subtitle="未登录">
         <Link className="text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
@@ -130,11 +111,11 @@ export default function MerchantDashboard() {
     );
   }
 
-  if (err || !shop) {
+  if (m.bootErr || !shop) {
     return (
       <PageShell title="商户后台" subtitle="未找到链接">
         <p className="text-sm text-gray-600">
-          {err ?? '链接不存在或已被删除。'}
+          {m.bootErr ?? '链接不存在或已被删除。'}
         </p>
         <Link className="mt-3 inline-block text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
           返回后台入口
@@ -143,11 +124,11 @@ export default function MerchantDashboard() {
     );
   }
 
-  if (shop.data.ownerId !== user.uid) {
+  if (!m.canOrdersOrReconciliation) {
     return (
       <PageShell title="商户后台" subtitle="无权限">
         <p className="text-sm text-gray-600">
-          你不是该商户的创建人，无法查看此后台首页。
+          当前账号无权访问该店铺后台。请先由店主将你加入管理员列表。
         </p>
         <Link className="mt-3 inline-block text-indigo-600 underline-offset-2 hover:underline" to="/dashboard">
           返回后台入口
@@ -155,6 +136,8 @@ export default function MerchantDashboard() {
       </PageShell>
     );
   }
+
+  const cfg = m.canConfigureShopAndProjects;
 
   const base = `/dashboard/${encodeURIComponent(shop.data.slug)}`;
   const shopPaused = !isShopOpenForCustomers(shop.data);
@@ -166,6 +149,11 @@ export default function MerchantDashboard() {
           <strong>店铺已停用：</strong>顾客端无法进店、下单与购卡；你可继续在此处理历史订单与设置。需要恢复请在「平台 ·
           商户管理」中启用。
         </div>
+      ) : null}
+      {m.role === 'normal_admin' ? (
+        <p className="mb-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+          当前为<strong>普通管理员</strong>：可使用订单管理与对账单；项目、店铺与优惠卡配置由店主或高级管理员处理。
+        </p>
       ) : null}
       <section className="mb-5">
         <h2 className="mb-2 text-sm font-semibold text-gray-900">
@@ -210,7 +198,7 @@ export default function MerchantDashboard() {
       </section>
 
       <h2 className="mb-2 text-sm font-semibold text-gray-900">快捷入口</h2>
-      {pendingCardConfirmCount > 0 ? (
+      {cfg && pendingCardConfirmCount > 0 ? (
         <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
           <span className="font-semibold text-amber-900">优惠卡：</span>
           当前有{' '}
@@ -219,19 +207,23 @@ export default function MerchantDashboard() {
           （顾客已传截图）。请到「优惠卡」页面处理。
         </p>
       ) : null}
-      <div className="grid grid-cols-3 gap-1.5 overflow-visible sm:gap-2">
-        <Link
-          to={`${base}/projects`}
-          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          项目列表
-        </Link>
-        <Link
-          to={`${base}/product-library`}
-          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          产品库
-        </Link>
+      <div className={`grid gap-1.5 overflow-visible sm:gap-2 ${cfg ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        {cfg ? (
+          <Link
+            to={`${base}/projects`}
+            className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            项目列表
+          </Link>
+        ) : null}
+        {cfg ? (
+          <Link
+            to={`${base}/product-library`}
+            className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            产品库
+          </Link>
+        ) : null}
         <Link
           to={`${base}/orders`}
           className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
@@ -244,44 +236,52 @@ export default function MerchantDashboard() {
         >
           对账单
         </Link>
-        <Link
-          to={`${base}/settings`}
-          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          基本设置
-        </Link>
-        <Link
-          to={`${base}/delivery-points`}
-          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          配送点
-        </Link>
-        <Link
-          to={`${base}/admins`}
-          className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          管理员
-        </Link>
-        <Link
-          to={`${base}/cards`}
-          className="relative flex min-h-[3.25rem] items-center justify-center overflow-visible rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
-        >
-          <span className="relative z-0 px-3">优惠卡</span>
-          {pendingCardConfirmCount > 0 ? (
-            <>
-              <span
-                className="pointer-events-none absolute right-2 top-2 z-10 flex h-3 w-3 items-center justify-center"
-                aria-hidden
-              >
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-70" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-red-600 ring-2 ring-white" />
-              </span>
-              <span className="sr-only">
-                {pendingCardConfirmCount} 笔优惠卡购卡或充值待确认
-              </span>
-            </>
-          ) : null}
-        </Link>
+        {cfg ? (
+          <Link
+            to={`${base}/settings`}
+            className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            基本设置
+          </Link>
+        ) : null}
+        {cfg ? (
+          <Link
+            to={`${base}/delivery-points`}
+            className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            配送点
+          </Link>
+        ) : null}
+        {cfg && m.canManageAdminInvitations ? (
+          <Link
+            to={`${base}/admins`}
+            className="flex min-h-[3.25rem] items-center justify-center rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            管理员
+          </Link>
+        ) : null}
+        {cfg ? (
+          <Link
+            to={`${base}/cards`}
+            className="relative flex min-h-[3.25rem] items-center justify-center overflow-visible rounded-xl border border-gray-200 bg-white px-1.5 text-center text-xs font-medium leading-snug text-gray-900 shadow-sm active:bg-gray-50 sm:min-h-[3.5rem] sm:px-2 sm:text-sm"
+          >
+            <span className="relative z-0 px-3">优惠卡</span>
+            {pendingCardConfirmCount > 0 ? (
+              <>
+                <span
+                  className="pointer-events-none absolute right-2 top-2 z-10 flex h-3 w-3 items-center justify-center"
+                  aria-hidden
+                >
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-70" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-red-600 ring-2 ring-white" />
+                </span>
+                <span className="sr-only">
+                  {pendingCardConfirmCount} 笔优惠卡购卡或充值待确认
+                </span>
+              </>
+            ) : null}
+          </Link>
+        ) : null}
       </div>
 
       <div className="mt-6 border-t border-gray-100 pt-4">

@@ -4,6 +4,7 @@ import { PageShell } from '../../components/PageShell';
 import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
 import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   orderHasPaymentProof,
@@ -11,7 +12,6 @@ import {
   parseScreenshotEntries,
 } from '../../lib/paymentScreenshotHelpers';
 import { listOrdersByShopId, type OrderRow } from '../../lib/orderService';
-import { getShopBySlug } from '../../lib/shopService';
 import { buildPaymentGroups } from '../../lib/paymentGroups';
 import { deriveDisplayOrderStatus } from '../../lib/paymentGroupView';
 import type { OrderDoc, OrderStatus } from '../../types/firestore';
@@ -51,6 +51,7 @@ export default function OrderManagement() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
   const slug = decodeURIComponent(shopSlug);
   const { user, loading: authLoading } = useAuthUser();
+  const m = useMerchantShopAccess(shopSlug);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [err, setErr] = useState<string | null>(null);
@@ -68,25 +69,24 @@ export default function OrderManagement() {
     setLoading(true);
     setErr(null);
     try {
-      const shop = await getShopBySlug(slug);
-      if (!shop) {
+      if (!m.shop) {
         setShopRow(null);
         setOrders([]);
-        setErr('未找到该商户链接');
+        setErr(m.bootErr ?? '未找到该商户链接');
         return;
       }
-      if (shop.data.ownerId !== user.uid) {
+      if (!m.canOrdersOrReconciliation) {
         setShopRow(null);
         setOrders([]);
         setErr('无权限访问该商户');
         return;
       }
       setShopRow({
-        id: shop.id,
-        slug: shop.data.slug,
-        name: shop.data.name,
+        id: m.shop.id,
+        slug: m.shop.data.slug,
+        name: m.shop.data.name,
       });
-      const rows = await listOrdersByShopId(shop.id, {
+      const rows = await listOrdersByShopId(m.shop.id, {
         bypassCache: opts?.bypassCache === true,
       });
       setOrders(rows);
@@ -95,14 +95,14 @@ export default function OrderManagement() {
     } finally {
       setLoading(false);
     }
-  }, [slug, user]);
+  }, [user, m.bootErr, m.canOrdersOrReconciliation, m.shop]);
 
   useEffect(() => {
     queueMicrotask(() => {
-      if (!authLoading && user) void refresh();
+      if (!authLoading && !m.loading && user) void refresh();
       else if (!authLoading && !user) setLoading(false);
     });
-  }, [authLoading, user, refresh]);
+  }, [authLoading, m.loading, refresh, user]);
 
   /** 手机端常前台停留在订单列表：切回浏览器/后台时应拉最新，避免「顾客已传图但列表仍是旧的」 */
   useEffect(() => {
@@ -187,7 +187,7 @@ export default function OrderManagement() {
 
   const baseDash = `/dashboard/${encodeURIComponent(slug)}`;
 
-  if (authLoading || (user && loading)) {
+  if (authLoading || m.loading || (user && loading)) {
     return (
       <PageShell title="订单管理" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>

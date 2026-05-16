@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { ProofDatetimeFilterFields } from '../components/reconciliation/ProofDatetimeFilterFields';
+import { ProductionBundleBreakdownSection } from '../components/reconciliation/ProductionBundleBreakdownSection';
 import { PageShell } from '../components/PageShell';
 import { ActionButton } from '../components/ui/ActionButton';
 import { EmptyStateCard } from '../components/ui/EmptyStateCard';
@@ -266,8 +268,9 @@ export default function FeituanReconciliation() {
   );
 
   const productionTotals = useMemo(
-    () => buildProductionTotals(scopedOrders, bucketSelection),
-    [bucketSelection, scopedOrders]
+    () =>
+      buildProductionTotals(scopedOrders, bucketSelection, projectsMap),
+    [bucketSelection, projectsMap, scopedOrders]
   );
 
   const profitTotals = useMemo(
@@ -481,41 +484,15 @@ export default function FeituanReconciliation() {
             ))}
           </select>
         </label>
-        <div className="mt-3 grid max-w-md gap-2 sm:grid-cols-2">
-          <label className="block text-sm text-gray-800">
-            凭证/自动确认时间起
-            <input
-              type="datetime-local"
-              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              value={proofStart}
-              onChange={(e) => {
-                const v = e.target.value;
-                const next = new URLSearchParams(searchParams);
-                if (v) next.set('proofStart', v);
-                else next.delete('proofStart');
-                setSearchParams(next);
-              }}
-            />
-          </label>
-          <label className="block text-sm text-gray-800">
-            凭证/自动确认时间止
-            <input
-              type="datetime-local"
-              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              value={proofEnd}
-              onChange={(e) => {
-                const v = e.target.value;
-                const next = new URLSearchParams(searchParams);
-                if (v) next.set('proofEnd', v);
-                else next.delete('proofEnd');
-                setSearchParams(next);
-              }}
-            />
-          </label>
-        </div>
-        <p className="mt-2 text-xs text-gray-600">
-          时间筛选按顾客上传截图、免凭证确认、饭团钱包/次卡自动确认时间统计。若要表示“5月4日24:00”，请填写次日 00:00。
-        </p>
+        <ProofDatetimeFilterFields
+          searchParams={searchParams}
+          setSearchParams={setSearchParams}
+          proofStart={proofStart}
+          proofEnd={proofEnd}
+          startLabel="凭证/自动确认时间起"
+          endLabel="凭证/自动确认时间止"
+          hint="时间筛选按顾客上传截图、免凭证确认、饭团钱包/次卡自动确认时间统计。若要表示「5月4日24:00」，请填写次日 00:00。"
+        />
       </div>
 
       {viewMode === 'reconciliation' ? (
@@ -904,27 +881,10 @@ export default function FeituanReconciliation() {
               </ul>
             )}
           </section>
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-gray-900">
-                套餐拆解（{productionTotals.bundleOptionItems.length} 项）
-              </h3>
-            </div>
-            {productionTotals.bundleOptionItems.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-gray-500">暂无套餐拆解项。</p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {productionTotals.bundleOptionItems.map((row) => (
-                  <li key={row.name} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                    <span className="min-w-0 break-words text-sm text-gray-800">{row.name}</span>
-                    <span className="shrink-0 text-base font-semibold tabular-nums text-gray-900">
-                      × {row.quantity}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <ProductionBundleBreakdownSection
+            breakdowns={productionTotals.bundleToolBreakdowns}
+            multiProjectScope={!projectFilter.trim()}
+          />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">

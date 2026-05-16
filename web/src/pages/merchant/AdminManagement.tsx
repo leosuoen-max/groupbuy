@@ -48,7 +48,7 @@ export default function AdminManagement() {
       }
       if (shop.data.ownerId !== user.uid) {
         setShopId(null);
-        setErr('仅店铺创建人可生成管理员邀请');
+        setErr('仅店主可管理管理员邀请');
         return;
       }
       setShopId(shop.id);
@@ -150,7 +150,7 @@ export default function AdminManagement() {
   };
 
   const handleRemovePermission = async (p: PermissionRow) => {
-    if (!confirm('确认移除该管理员的项目权限？')) return;
+    if (!confirm('确认将该管理员移出店铺管理员列表？')) return;
     setPermBusyId(p.id);
     setErr(null);
     try {
@@ -210,7 +210,8 @@ export default function AdminManagement() {
 
       <>
           <p className="mb-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
-            先邀请加入店铺管理员列表；项目权限请在项目创建/编辑页分配。
+            受邀管理员由店主在「管理员管理」中邀请；接受邀请后，可按角色管理本店<strong>所有项目</strong>。
+            普通管理员以订单与对账为主；高级管理员可改项目与店铺设置（不可增删管理员）。
           </p>
 
           <fieldset className="mb-4 text-sm text-gray-800">
@@ -233,7 +234,7 @@ export default function AdminManagement() {
                 checked={role === 'high_admin'}
                 onChange={() => setRole('high_admin')}
               />
-              高级管理员（可改菜单与设置）
+              高级管理员（除「管理员管理」外，与店主权限相同）
             </label>
           </fieldset>
 

@@ -12,6 +12,11 @@ import {
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
 import { getShopBySlug } from '../../lib/shopService';
+import {
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
+} from '../../lib/permissionService';
 
 export default function DeliveryPoints() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
@@ -67,8 +72,12 @@ export default function DeliveryPoints() {
           setOwnerId(null);
           return;
         }
-        if (shop.data.ownerId !== user.uid) {
-          setBootErr('无权限');
+        const effRole: MerchantShopActorRole | null =
+          shop.data.ownerId === user.uid
+            ? 'owner'
+            : await resolveMerchantShopRole(user.uid, shop);
+        if (!merchantCanManageShopSettingsAndProjects(effRole)) {
+          setBootErr('无权限：仅店主或高级管理员可管理配送点');
           setShopId(null);
           setOwnerId(null);
           return;

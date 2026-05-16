@@ -16,10 +16,9 @@ import {
 } from '../../lib/deliveryPointService';
 import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import {
-  listProjectPermissions,
-  listShopAdminPermissions,
-  syncProjectAdminsFromShopPool,
-  type PermissionRow,
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
 } from '../../lib/permissionService';
 import {
   listCardTemplatesByShop,
@@ -365,8 +364,6 @@ export default function ProjectEdit() {
   const [validationHighlightKey, setValidationHighlightKey] = useState<string | null>(null);
 
   const [shopRow, setShopRow] = useState<ShopRow | null>(null);
-  const [shopAdminPool, setShopAdminPool] = useState<PermissionRow[]>([]);
-  const [selectedProjectAdminUserIds, setSelectedProjectAdminUserIds] = useState<string[]>([]);
   const [passCardTemplates, setPassCardTemplates] = useState<CardTemplateRow[]>(
     []
   );
@@ -636,7 +633,11 @@ export default function ProjectEdit() {
           }
           return;
         }
-        if (shop.data.ownerId !== user.uid) {
+        const effRole: MerchantShopActorRole | null =
+          shop.data.ownerId === user.uid
+            ? 'owner'
+            : await resolveMerchantShopRole(user.uid, shop);
+        if (!merchantCanManageShopSettingsAndProjects(effRole)) {
           if (!cancelled) {
             setBootErr('无权限');
             setShopRow(null);
@@ -1247,38 +1248,6 @@ export default function ProjectEdit() {
     []
   );
 
-  useEffect(() => {
-    if (!shopRow?.id || !resolvedPid) {
-      setShopAdminPool([]);
-      setSelectedProjectAdminUserIds([]);
-      return;
-    }
-    let cancelled = false;
-    void Promise.all([
-      listShopAdminPermissions(shopRow.id),
-      listProjectPermissions(resolvedPid),
-    ])
-      .then(([pool, projectPerms]) => {
-        if (cancelled) return;
-        setShopAdminPool(pool);
-        const poolSet = new Set(pool.map((x) => x.data.userId));
-        const selected = projectPerms
-          .map((p) => p.data.userId)
-          .filter((uid) => poolSet.has(uid));
-        setSelectedProjectAdminUserIds(Array.from(new Set(selected)));
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setShopAdminPool([]);
-        setSelectedProjectAdminUserIds([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [shopRow?.id, resolvedPid]);
-
   const handleSaveDraft = async () => {
     if (!resolvedPid) return;
     if (feituanStatus === 'listed') {
@@ -1317,14 +1286,6 @@ export default function ProjectEdit() {
         status: 'draft',
         publishedAt: null,
       });
-      if (user && shopRow?.id) {
-        await syncProjectAdminsFromShopPool({
-          projectId: resolvedPid,
-          shopId: shopRow.id,
-          selectedUserIds: selectedProjectAdminUserIds,
-          grantedBy: user.uid,
-        });
-      }
       if (draftStorageKey) sessionStorage.removeItem(draftStorageKey);
       setMsg('已保存草稿');
     } catch (e) {
@@ -1385,14 +1346,6 @@ export default function ProjectEdit() {
         status: 'published',
         publishedAt: Timestamp.now(),
       });
-      if (user && shopRow?.id) {
-        await syncProjectAdminsFromShopPool({
-          projectId: resolvedPid,
-          shopId: shopRow.id,
-          selectedUserIds: selectedProjectAdminUserIds,
-          grantedBy: user.uid,
-        });
-      }
       if (draftStorageKey) sessionStorage.removeItem(draftStorageKey);
       setStatus('published');
       let pubMsg = '已发布（顾客端读 Firestore 将在下一步接上）';
@@ -1529,48 +1482,6 @@ export default function ProjectEdit() {
             会显示在饭团首页项目卡片上，建议写成「月/日 + 午餐/晚餐时间」。
           </span>
         </label>
-        <section className="rounded-xl border border-gray-100 bg-white p-3">
-          <div className="mb-1 text-sm font-semibold text-gray-900">项目管理员</div>
-          <p className="mb-2 text-xs text-gray-500">
-            先在「管理员管理」邀请加入店铺，再在此分配到当前项目。
-          </p>
-          {shopAdminPool.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-gray-300 px-3 py-3 text-xs text-gray-500">
-              暂无店铺管理员可分配。
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {shopAdminPool.map((p) => {
-                const checked = selectedProjectAdminUserIds.includes(p.data.userId);
-                return (
-                  <label
-                    key={p.id}
-                    className="flex cursor-pointer items-center justify-between rounded-lg border border-gray-100 px-3 py-2 text-xs text-gray-800"
-                  >
-                    <span>
-                      用户 {p.data.userId.slice(-8)}
-                      <span className="ml-1 text-gray-500">
-                        （{p.data.role === 'high_admin' ? '高级管理员' : '普通管理员'}）
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4"
-                      checked={checked}
-                      onChange={(e) => {
-                        const on = e.target.checked;
-                        setSelectedProjectAdminUserIds((prev) => {
-                          if (on) return Array.from(new Set([...prev, p.data.userId]));
-                          return prev.filter((x) => x !== p.data.userId);
-                        });
-                      }}
-                    />
-                  </label>
-                );
-              })}
-            </div>
-          )}
-        </section>
         <section className="rounded-2xl border border-gray-100 bg-gradient-to-b from-gray-50 to-white p-3.5 shadow-sm">
           <div className="mb-2 text-base font-semibold text-gray-900">项目 Banner 与说明</div>
           <div className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">

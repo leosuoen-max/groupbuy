@@ -1,10 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ProofDatetimeFilterFields } from '../../components/reconciliation/ProofDatetimeFilterFields';
+import { ProductionBundleBreakdownSection } from '../../components/reconciliation/ProductionBundleBreakdownSection';
 import { PageShell } from '../../components/PageShell';
 import { ActionButton } from '../../components/ui/ActionButton';
 import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
 import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   DEFAULT_BUCKET_SELECTION,
@@ -44,7 +47,6 @@ import {
   listDeliveryPointsByOwnerId,
   type DeliveryPointRow,
 } from '../../lib/deliveryPointService';
-import { getShopBySlug } from '../../lib/shopService';
 import type { OrderDoc, OrderLineDoc, OrderStatus } from '../../types/firestore';
 
 function statusLabel(s: OrderStatus): string {
@@ -118,6 +120,7 @@ export default function ReconciliationStatement() {
   const slug = decodeURIComponent(shopSlug);
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuthUser();
+  const m = useMerchantShopAccess(shopSlug);
   const [searchParams, setSearchParams] = useSearchParams();
   const projectFilter = searchParams.get('project') ?? '';
   const proofStart = searchParams.get('proofStart') ?? '';
@@ -152,22 +155,21 @@ export default function ReconciliationStatement() {
     setLoading(true);
     setErr(null);
     try {
-      const shop = await getShopBySlug(slug);
-      if (!shop) {
+      if (!m.shop) {
         setOrders([]);
-        setErr('未找到该商户链接');
+        setErr(m.bootErr ?? '未找到该商户链接');
         return;
       }
-      if (shop.data.ownerId !== user.uid) {
+      if (!m.canOrdersOrReconciliation) {
         setOrders([]);
         setErr('无权限访问该商户');
         return;
       }
-      setShopName(shop.data.name);
+      setShopName(m.shop.data.name);
       const [orderRows, dpRows] = await Promise.all([
-        listOrdersByShopId(shop.id),
-        listDeliveryPointsByOwnerId(shop.data.ownerId, {
-          fallbackShopId: shop.id,
+        listOrdersByShopId(m.shop.id),
+        listDeliveryPointsByOwnerId(m.shop.data.ownerId, {
+          fallbackShopId: m.shop.id,
           includeInactive: true,
         }).catch(() => [] as DeliveryPointRow[]),
       ]);
@@ -178,14 +180,14 @@ export default function ReconciliationStatement() {
     } finally {
       setLoading(false);
     }
-  }, [slug, user]);
+  }, [m.bootErr, m.canOrdersOrReconciliation, m.shop, user]);
 
   useEffect(() => {
     queueMicrotask(() => {
-      if (!authLoading && user) void refresh();
+      if (!authLoading && !m.loading && user) void refresh();
       else if (!authLoading && !user) setLoading(false);
     });
-  }, [authLoading, user, refresh]);
+  }, [authLoading, m.loading, refresh, user]);
 
   function parseDateTimeMs(yyyyMmDdHhMm: string): number | null {
     if (!yyyyMmDdHhMm.trim()) return null;
@@ -232,8 +234,9 @@ export default function ReconciliationStatement() {
     [scopedOrders]
   );
   const productionTotals = useMemo(
-    () => buildProductionTotals(scopedOrders, bucketSelection),
-    [scopedOrders, bucketSelection]
+    () =>
+      buildProductionTotals(scopedOrders, bucketSelection, projectDocsMap),
+    [scopedOrders, bucketSelection, projectDocsMap]
   );
 
   const projectIdsKey = useMemo(
@@ -451,7 +454,7 @@ export default function ReconciliationStatement() {
     [user, refresh]
   );
 
-  if (authLoading || (user && loading)) {
+  if (authLoading || m.loading || (user && loading)) {
     return (
       <PageShell title="对账单" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -554,41 +557,15 @@ export default function ReconciliationStatement() {
             ))}
           </select>
         </label>
-        <div className="mt-3 grid max-w-md gap-2 sm:grid-cols-2">
-          <label className="block text-sm text-gray-800">
-            凭证时间起（精确到分钟）
-            <input
-              type="datetime-local"
-              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              value={proofStart}
-              onChange={(e) => {
-                const v = e.target.value;
-                const next = new URLSearchParams(searchParams);
-                if (v) next.set('proofStart', v);
-                else next.delete('proofStart');
-                setSearchParams(next);
-              }}
-            />
-          </label>
-          <label className="block text-sm text-gray-800">
-            凭证时间止（精确到分钟）
-            <input
-              type="datetime-local"
-              className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              value={proofEnd}
-              onChange={(e) => {
-                const v = e.target.value;
-                const next = new URLSearchParams(searchParams);
-                if (v) next.set('proofEnd', v);
-                else next.delete('proofEnd');
-                setSearchParams(next);
-              }}
-            />
-          </label>
-        </div>
-        <p className="mt-2 text-xs text-gray-600">
-          时间筛选按「付款凭证提交时间」统计，包含顾客上传截图与商户免提交凭证。若要表示“5月4日24:00”，请填写次日 00:00。
-        </p>
+        <ProofDatetimeFilterFields
+          searchParams={searchParams}
+          setSearchParams={setSearchParams}
+          proofStart={proofStart}
+          proofEnd={proofEnd}
+          startLabel="凭证时间起（精确到分钟）"
+          endLabel="凭证时间止（精确到分钟）"
+          hint="时间筛选按「付款凭证提交时间」统计，包含顾客上传截图与商户免提交凭证。若要表示「5月4日24:00」，请填写次日 00:00。"
+        />
       </div>
 
       {viewMode === 'reconciliation' ? (
@@ -1026,27 +1003,10 @@ export default function ReconciliationStatement() {
               </ul>
             )}
           </section>
-          <section className="rounded-xl border border-gray-200 bg-white">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-gray-900">
-                套餐拆解（{productionTotals.bundleOptionItems.length} 项）
-              </h3>
-            </div>
-            {productionTotals.bundleOptionItems.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-gray-500">暂无套餐拆解项。</p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {productionTotals.bundleOptionItems.map((row) => (
-                  <li key={row.name} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                    <span className="min-w-0 break-words text-sm text-gray-800">{row.name}</span>
-                    <span className="shrink-0 text-base font-semibold tabular-nums text-gray-900">
-                      × {row.quantity}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <ProductionBundleBreakdownSection
+            breakdowns={productionTotals.bundleToolBreakdowns}
+            multiProjectScope={!projectFilter.trim()}
+          />
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">

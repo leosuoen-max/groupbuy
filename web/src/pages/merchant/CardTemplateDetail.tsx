@@ -4,6 +4,11 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug } from '../../lib/shopService';
 import {
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
+} from '../../lib/permissionService';
+import {
   confirmCardPurchaseRequest,
   getCardTemplate,
   listCardLedger,
@@ -102,7 +107,13 @@ export default function CardTemplateDetail() {
       try {
         const row = await getShopBySlug(slug);
         if (!row) throw new Error('未找到该商户链接');
-        if (row.data.ownerId !== user.uid) throw new Error('无权限');
+        const eff: MerchantShopActorRole | null =
+          row.data.ownerId === user.uid
+            ? 'owner'
+            : await resolveMerchantShopRole(user.uid, row);
+        if (!merchantCanManageShopSettingsAndProjects(eff)) {
+          throw new Error('无权限：仅店主或高级管理员可访问');
+        }
         if (cancelled) return;
         setShopId(row.id);
         await refresh();

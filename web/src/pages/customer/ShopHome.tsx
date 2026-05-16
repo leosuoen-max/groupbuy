@@ -30,7 +30,7 @@ import {
   listOrdersByCustomer,
   type OrderRow,
 } from '../../lib/orderService';
-import { getProjectPermissionForUser } from '../../lib/permissionService';
+import { resolveMerchantShopRole } from '../../lib/permissionService';
 import { getShopBySlug } from '../../lib/shopService';
 import { listCardTemplatesByShop } from '../../lib/cardService';
 import { getOrCreateCustomerKey } from '../../lib/customerIdentity';
@@ -227,15 +227,14 @@ export default function ShopHome() {
         try {
           const shop = await getShopBySlug(slug);
           const owner = shop?.data.ownerId === user.uid;
-          const perm = await getProjectPermissionForUser(user.uid, pid);
+          const merchantRole =
+            shop && user ? await resolveMerchantShopRole(user.uid, shop) : null;
           const invited =
-            perm?.data.projectId === pid
-              ? perm.data.role === 'high_admin'
-                ? 'high_admin'
-                : perm.data.role === 'normal_admin'
-                  ? 'normal_admin'
-                  : null
-              : null;
+            merchantRole === 'high_admin'
+              ? 'high_admin'
+              : merchantRole === 'normal_admin'
+                ? 'normal_admin'
+                : null;
 
           if (!cancelled) {
             setMoreMenu({

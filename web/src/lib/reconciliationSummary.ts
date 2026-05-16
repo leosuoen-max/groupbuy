@@ -1,6 +1,7 @@
 import type { OrderRow } from './orderService';
+import { parseBundleProductId } from './reconciliationProfit';
 import { orderHasPaymentProof } from './paymentScreenshotHelpers';
-import type { OrderDoc } from '../types/firestore';
+import type { OrderDoc, ProjectDoc } from '../types/firestore';
 import { buildPaymentGroups } from './paymentGroups';
 import { listOrderCardPaymentApplications } from './orderCardPaymentApplications';
 import {
@@ -46,9 +47,23 @@ export type ProductionCountRow = {
   quantity: number;
 };
 
+/** 单个套餐工具下的拆解明细（不按方案再拆分时，同一工具下各方案拆解项汇总） */
+export type ProductionBundleToolBreakdown = {
+  /** `${projectId}\t${toolId}` */
+  key: string;
+  projectId: string;
+  projectTitle: string;
+  bundleToolId: string;
+  bundleToolName: string;
+  optionItems: ProductionCountRow[];
+  /** 本工具段内拆解份数之和（与各拆解项 × 数量加总一致） */
+  sectionOptionTotalQty: number;
+};
+
 export type ProductionTotals = {
   normalItems: ProductionCountRow[];
-  bundleOptionItems: ProductionCountRow[];
+  /** 按套餐工具分组后的拆解明细 */
+  bundleToolBreakdowns: ProductionBundleToolBreakdown[];
   normalTotalQty: number;
   bundleOptionTotalQty: number;
   totalQty: number;
@@ -328,13 +343,79 @@ function extractBundleOptionNames(lineName: string): string[] {
   return out;
 }
 
+/** 从套餐行快照文字取「括号前」的标题片段，用作无项目锚定时的兜底展示 */
+function extractBundleHeadingFromLineName(lineName: string): string {
+  const raw = lineName.trim();
+  if (!raw) return '';
+  const iFull = raw.indexOf('（');
+  if (iFull > 0) {
+    const head = raw.slice(0, iFull).trim();
+    if (head) return head;
+  }
+  const iHalf = raw.indexOf('(');
+  if (iHalf > 0) {
+    const head = raw.slice(0, iHalf).trim();
+    if (head) return head;
+  }
+  return '';
+}
+
+function resolveBundleToolDisplayName(
+  project: ProjectDoc | undefined,
+  toolId: string,
+  lineSample: string
+): string {
+  if (toolId === '__unparsed__') {
+    const h = extractBundleHeadingFromLineName(lineSample);
+    return h || '套餐（未识别工具）';
+  }
+  const tool = project?.bundleTools?.find((t) => t.id === toolId);
+  const resolved = tool?.name?.trim();
+  if (resolved) return resolved;
+  const fromLine = extractBundleHeadingFromLineName(lineSample);
+  if (fromLine) return fromLine;
+  return `套餐工具（${toolId.slice(0, 8)}…）`;
+}
+
+type ToolBreakdownBucket = {
+  counts: Map<string, number>;
+  lineSample: string;
+  orderProjectTitle: string;
+};
+
+function getToolBucket(
+  map: Map<string, ToolBreakdownBucket>,
+  key: string,
+  orderProjectTitle: string
+): ToolBreakdownBucket {
+  let b = map.get(key);
+  if (!b) {
+    b = {
+      counts: new Map(),
+      lineSample: '',
+      orderProjectTitle: orderProjectTitle.trim() || '',
+    };
+    map.set(key, b);
+  }
+  return b;
+}
+
+function touchLineSample(bucket: ToolBreakdownBucket, candidate: string) {
+  const t = candidate.trim();
+  if (!t || t.length <= bucket.lineSample.length) return;
+  bucket.lineSample = t;
+}
+
 /** 厨房生产统计：普通商品数量 + 套餐拆解单项数量（复用当前筛选口径） */
 export function buildProductionTotals(
   rows: OrderRow[],
-  bucketSelection: BucketSelection
+  bucketSelection: BucketSelection,
+  projectDocsById?: Map<string, ProjectDoc> | null
 ): ProductionTotals {
+  const projects = projectDocsById ?? null;
+
   const normal = new Map<string, number>();
-  const bundleOptions = new Map<string, number>();
+  const toolBundles = new Map<string, ToolBreakdownBucket>();
   let normalTotalQty = 0;
   let bundleOptionTotalQty = 0;
 
@@ -344,33 +425,98 @@ export function buildProductionTotals(
     const groups = listOrderPaymentGroups(o);
     if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
     const scopedLines = linesInSelectedBuckets(groups, bucketSelection);
+
+    const projectId = String(o.projectId ?? '').trim() || '__no_project__';
+    const orderProjectTitle = String(o.projectTitle ?? '').trim();
+
     for (const line of scopedLines) {
       const qty = Math.max(0, Number(line.quantity) || 0);
       if (qty <= 0) continue;
-      const isBundle = String(line.productId ?? '').startsWith('bundle:');
+      const productIdStr = String(line.productId ?? '');
+      const isBundle = productIdStr.startsWith('bundle:');
+
       if (!isBundle) {
         const key = line.name?.trim() || '未命名商品';
         normal.set(key, (normal.get(key) ?? 0) + qty);
         normalTotalQty += qty;
         continue;
       }
+
+      const parsed = parseBundleProductId(productIdStr);
+      const toolId = parsed?.toolId ?? '__unparsed__';
+      const compositeKey = `${projectId}\t${toolId}`;
+      const bucket = getToolBucket(toolBundles, compositeKey, orderProjectTitle);
+      touchLineSample(bucket, line.name ?? '');
+
       const optionNames = extractBundleOptionNames(line.name ?? '');
       if (optionNames.length === 0) {
-        const key = line.name?.trim() || '未命名套餐项';
-        bundleOptions.set(key, (bundleOptions.get(key) ?? 0) + qty);
+        const fallbackName = line.name?.trim() || '未命名套餐项';
+        bucket.counts.set(
+          fallbackName,
+          (bucket.counts.get(fallbackName) ?? 0) + qty
+        );
         bundleOptionTotalQty += qty;
         continue;
       }
-      for (const name of optionNames) {
-        bundleOptions.set(name, (bundleOptions.get(name) ?? 0) + qty);
+      for (const opt of optionNames) {
+        bucket.counts.set(opt, (bucket.counts.get(opt) ?? 0) + qty);
         bundleOptionTotalQty += qty;
       }
     }
   }
 
+  const bundleToolBreakdowns: ProductionBundleToolBreakdown[] = [
+    ...toolBundles.entries(),
+  ]
+    .map(([compositeKey, bucket]) => {
+      const tabIdx = compositeKey.indexOf('\t');
+      const projIdRaw =
+        tabIdx >= 0 ? compositeKey.slice(0, tabIdx) : '__no_project__';
+      const toolKey =
+        tabIdx >= 0 ? compositeKey.slice(tabIdx + 1) : '__unparsed__';
+
+      const project =
+        projIdRaw === '__no_project__' ? undefined : projects?.get(projIdRaw);
+      const projectTitle =
+        projIdRaw === '__no_project__'
+          ? '—'
+          : project?.title?.trim() ||
+            bucket.orderProjectTitle ||
+            projIdRaw.slice(0, 8);
+
+      const optionItems = toSortedCountRows(bucket.counts);
+      const sectionOptionTotalQty = optionItems.reduce(
+        (s, x) => s + x.quantity,
+        0
+      );
+
+      return {
+        key: compositeKey,
+        projectId: projIdRaw === '__no_project__' ? '' : projIdRaw,
+        projectTitle,
+        bundleToolId: toolKey,
+        bundleToolName: resolveBundleToolDisplayName(
+          project,
+          toolKey,
+          bucket.lineSample
+        ),
+        optionItems,
+        sectionOptionTotalQty,
+      };
+    })
+    .sort((a, b) => {
+      if (a.projectTitle !== b.projectTitle) {
+        return a.projectTitle.localeCompare(b.projectTitle, 'zh-CN');
+      }
+      if (a.bundleToolName !== b.bundleToolName) {
+        return a.bundleToolName.localeCompare(b.bundleToolName, 'zh-CN');
+      }
+      return a.key.localeCompare(b.key, 'zh-CN');
+    });
+
   return {
     normalItems: toSortedCountRows(normal),
-    bundleOptionItems: toSortedCountRows(bundleOptions),
+    bundleToolBreakdowns,
     normalTotalQty,
     bundleOptionTotalQty,
     totalQty: normalTotalQty + bundleOptionTotalQty,
@@ -388,26 +534,61 @@ export function buildProductionCopyText(params: {
   out.push('=============');
   out.push(`总份数：${totals.totalQty}`);
   out.push(`普通商品：${totals.normalTotalQty}`);
-  out.push(`套餐拆解单项：${totals.bundleOptionTotalQty}`);
+  out.push(`套餐拆解单项合计：${totals.bundleOptionTotalQty}`);
   out.push('');
   out.push(`普通商品（${totals.normalItems.length}种）`);
   if (totals.normalItems.length === 0) out.push('—');
   for (const r of totals.normalItems) out.push(`${r.name} × ${r.quantity}`);
   out.push('');
-  out.push(`套餐拆解（${totals.bundleOptionItems.length}项）`);
-  if (totals.bundleOptionItems.length === 0) out.push('—');
-  for (const r of totals.bundleOptionItems) out.push(`${r.name} × ${r.quantity}`);
+  out.push(`套餐拆解（${totals.bundleToolBreakdowns.length}个套餐工具）`);
+  if (totals.bundleToolBreakdowns.length === 0) {
+    out.push('—');
+  } else {
+    for (const g of totals.bundleToolBreakdowns) {
+      const projectHint =
+        g.projectTitle && g.projectTitle !== '—'
+          ? ` · ${g.projectTitle}`
+          : '';
+      out.push(
+        `--- ${g.bundleToolName}${projectHint} · 拆解份数合计 ${g.sectionOptionTotalQty} ---`
+      );
+      for (const row of g.optionItems) {
+        out.push(`  ${row.name} × ${row.quantity}`);
+      }
+    }
+  }
   out.push('=============');
   return out.join('\n');
 }
 
+function escCsvField(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 export function buildProductionCsv(totals: ProductionTotals): string {
-  const lines = ['类型,名称,数量'];
+  const lines = ['类型,套餐工具,项目,品项名称,数量'];
   for (const r of totals.normalItems) {
-    lines.push(`普通商品,"${r.name.replace(/"/g, '""')}",${r.quantity}`);
+    lines.push(
+      ['普通商品', escCsvField(''), escCsvField(''), escCsvField(r.name), r.quantity].join(
+        ','
+      )
+    );
   }
-  for (const r of totals.bundleOptionItems) {
-    lines.push(`套餐拆解,"${r.name.replace(/"/g, '""')}",${r.quantity}`);
+  for (const g of totals.bundleToolBreakdowns) {
+    const projEsc = escCsvField(
+      g.projectTitle && g.projectTitle !== '—' ? g.projectTitle : ''
+    );
+    for (const r of g.optionItems) {
+      lines.push(
+        [
+          '套餐拆解',
+          escCsvField(g.bundleToolName),
+          projEsc,
+          escCsvField(r.name),
+          r.quantity,
+        ].join(',')
+      );
+    }
   }
   return lines.join('\n');
 }

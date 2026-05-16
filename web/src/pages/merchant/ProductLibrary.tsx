@@ -13,6 +13,11 @@ import {
 import { uploadProjectAsset } from '../../lib/projectService';
 import { getShopBySlug, type ShopRow } from '../../lib/shopService';
 import type { ProductLibraryKind } from '../../types/firestore';
+import {
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
+} from '../../lib/permissionService';
 
 const inputCls =
   'mt-0.5 w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-inner';
@@ -26,6 +31,9 @@ export default function ProductLibrary() {
   const [rows, setRows] = useState<ProductLibraryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
+  const [accessRole, setAccessRole] = useState<MerchantShopActorRole | null | 'unknown'>(
+    'unknown'
+  );
 
   const [draftName, setDraftName] = useState('');
   const [draftKind, setDraftKind] = useState<ProductLibraryKind>('product');
@@ -75,7 +83,35 @@ export default function ProductLibrary() {
     };
   }, [shop?.id, refresh]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!shop || !user) {
+      setAccessRole('unknown');
+      return () => {
+        cancelled = true;
+      };
+    }
+    void (async () => {
+      const eff: MerchantShopActorRole | null =
+        shop.data.ownerId === user.uid
+          ? 'owner'
+          : await resolveMerchantShopRole(user.uid, shop);
+      if (!cancelled) setAccessRole(eff);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shop, user]);
+
   if (authLoading || shop === undefined) {
+    return (
+      <PageShell title="产品库" subtitle="加载中…">
+        <p className="text-sm text-gray-600">请稍候…</p>
+      </PageShell>
+    );
+  }
+
+  if (shop && user && accessRole === 'unknown') {
     return (
       <PageShell title="产品库" subtitle="加载中…">
         <p className="text-sm text-gray-600">请稍候…</p>
@@ -107,10 +143,10 @@ export default function ProductLibrary() {
     );
   }
 
-  if (shop.data.ownerId !== user.uid) {
+  if (!merchantCanManageShopSettingsAndProjects(accessRole === 'unknown' ? null : accessRole)) {
     return (
       <PageShell title="产品库" subtitle="无权限">
-        <p className="text-sm text-gray-600">仅店主可管理产品库。</p>
+        <p className="text-sm text-gray-600">仅店主或高级管理员可管理产品库。</p>
         <Link
           className="mt-2 inline-block text-indigo-600 underline-offset-2 hover:underline"
           to={`/dashboard/${encodeURIComponent(shop.data.slug)}`}
@@ -257,7 +293,7 @@ export default function ProductLibrary() {
                   setMsg('请先填写名称再上传图片');
                   return;
                 }
-                void uploadProjectAsset(user.uid, file, 'product')
+                void uploadProjectAsset(shop.data.ownerId, file, 'product')
                   .then(async (url) => {
                     const optKind = draftKind === 'bundle_option';
                     const rPrice = optKind ? 0 : Number(draftRetail) || 0;

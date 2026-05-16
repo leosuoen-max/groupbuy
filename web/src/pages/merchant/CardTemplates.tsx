@@ -3,6 +3,11 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { getShopBySlug } from '../../lib/shopService';
+import {
+  merchantCanManageShopSettingsAndProjects,
+  resolveMerchantShopRole,
+  type MerchantShopActorRole,
+} from '../../lib/permissionService';
 import { H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import {
   cardRequestAwaitingCustomerProof,
@@ -82,6 +87,7 @@ export default function CardTemplates() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuthUser();
   const [shopId, setShopId] = useState<string | null>(null);
+  const [shopOwnerUid, setShopOwnerUid] = useState<string | null>(null);
   const [bootErr, setBootErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<CardTemplateRow[]>([]);
@@ -126,9 +132,16 @@ export default function CardTemplates() {
       try {
         const row = await getShopBySlug(slug);
         if (!row) throw new Error('未找到该商户链接');
-        if (row.data.ownerId !== user.uid) throw new Error('无权限');
+        const eff: MerchantShopActorRole | null =
+          row.data.ownerId === user.uid
+            ? 'owner'
+            : await resolveMerchantShopRole(user.uid, row);
+        if (!merchantCanManageShopSettingsAndProjects(eff)) {
+          throw new Error('无权限：仅店主或高级管理员可访问');
+        }
         if (cancelled) return;
         setShopId(row.id);
+        setShopOwnerUid(row.data.ownerId);
         await refresh(row.id);
       } catch (e) {
         if (!cancelled) {
@@ -142,10 +155,8 @@ export default function CardTemplates() {
     };
   }, [authLoading, user, slug, refresh]);
 
-  const ownerId = user?.uid ?? null;
-
   const handleSave = async () => {
-    if (!draft || !shopId || !ownerId) return;
+    if (!draft || !shopId || !shopOwnerUid) return;
     setSaving(true);
     setMsg(null);
     try {
@@ -163,7 +174,7 @@ export default function CardTemplates() {
         await updateCardTemplate(draft.id, payload);
         setMsg('已保存修改');
       } else {
-        await createCardTemplate(shopId, ownerId, payload);
+        await createCardTemplate(shopId, shopOwnerUid, payload);
         setMsg(draft.type === 'stored' ? '钱包已开通' : '已新建次卡');
       }
       setDraft(null);
