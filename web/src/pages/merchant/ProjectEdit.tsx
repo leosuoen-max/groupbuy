@@ -383,6 +383,10 @@ export default function ProjectEdit() {
   const [appendSmallTargetLineNo, setAppendSmallTargetLineNo] = useState<number | null>(null);
   const [activeLineIndex, setActiveLineIndex] = useState(0);
   const [activeLineCaret, setActiveLineCaret] = useState(0);
+  /** `product:id` | `bundle:id`，用于前端展示排序条 */
+  const [selectedCatalogMixKey, setSelectedCatalogMixKey] = useState<string | null>(
+    null
+  );
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordChunksRef = useRef<BlobPart[]>([]);
   const recordStreamRef = useRef<MediaStream | null>(null);
@@ -410,30 +414,10 @@ export default function ProjectEdit() {
 
   const DRAFT_TTL_MS = 30 * 60 * 1000;
 
-  const reindexProducts = useCallback(
-    (rows: ProjectProduct[]) => rows.map((row, i) => ({ ...row, sortOrder: i })),
-    []
-  );
-
-  const moveProduct = useCallback(
-    (productId: string, direction: -1 | 1) => {
-      setProducts((prev) => {
-        const idx = prev.findIndex((x) => x.id === productId);
-        if (idx < 0) return prev;
-        const nextIdx = idx + direction;
-        if (nextIdx < 0 || nextIdx >= prev.length) return prev;
-        const next = [...prev];
-        const [item] = next.splice(idx, 1);
-        next.splice(nextIdx, 0, item);
-        return reindexProducts(next);
-      });
-    },
-    [reindexProducts]
-  );
-
-  const moveBundleTool = useCallback(
-    (toolId: string, direction: -1 | 1) => {
-      const mixed = [
+  /** 商品与普通商品、套餐工具共用 sortOrder 空间，与顾客端「商品清单」混排一致 */
+  const moveMixedCatalogItem = useCallback(
+    (kind: 'product' | 'bundle', entityId: string, delta: -1 | 1) => {
+      const merged = [
         ...products.map((p) => ({
           type: 'product' as const,
           id: p.id,
@@ -444,22 +428,26 @@ export default function ProjectEdit() {
           id: b.id,
           sortOrder: Number(b.sortOrder ?? 0) || 0,
         })),
-      ].sort((a, b) => a.sortOrder - b.sortOrder);
+      ].sort((a, b) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        if (a.type !== b.type) return a.type === 'product' ? -1 : 1;
+        return a.id.localeCompare(b.id);
+      });
 
-      const idx = mixed.findIndex((x) => x.type === 'bundle' && x.id === toolId);
+      const idx = merged.findIndex((x) => x.type === kind && x.id === entityId);
       if (idx < 0) return;
-      const target = idx + direction;
-      if (target < 0 || target >= mixed.length) return;
+      const nextIdx = idx + delta;
+      if (nextIdx < 0 || nextIdx >= merged.length) return;
 
-      const reordered = [...mixed];
+      const reordered = [...merged];
       const [picked] = reordered.splice(idx, 1);
-      reordered.splice(target, 0, picked);
+      reordered.splice(nextIdx, 0, picked);
 
       const productSort = new Map<string, number>();
       const bundleSort = new Map<string, number>();
-      reordered.forEach((x, i) => {
-        if (x.type === 'product') productSort.set(x.id, i);
-        else bundleSort.set(x.id, i);
+      reordered.forEach((row, ord) => {
+        if (row.type === 'product') productSort.set(row.id, ord);
+        else bundleSort.set(row.id, ord);
       });
 
       setProducts((prev) =>
@@ -476,6 +464,20 @@ export default function ProjectEdit() {
       );
     },
     [products, bundleTools]
+  );
+
+  const moveProduct = useCallback(
+    (productId: string, direction: -1 | 1) => {
+      moveMixedCatalogItem('product', productId, direction);
+    },
+    [moveMixedCatalogItem]
+  );
+
+  const moveBundleTool = useCallback(
+    (toolId: string, direction: -1 | 1) => {
+      moveMixedCatalogItem('bundle', toolId, direction);
+    },
+    [moveMixedCatalogItem]
   );
 
   const removeBundleTool = useCallback((toolId: string) => {
@@ -938,8 +940,35 @@ export default function ProjectEdit() {
       name: tool.name?.trim() || '未命名套餐',
       sortOrder: Number(tool.sortOrder ?? 0) || 0,
     }));
-    return [...productItems, ...bundleItems].sort((a, b) => a.sortOrder - b.sortOrder);
+    return [...productItems, ...bundleItems].sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      if (a.type !== b.type) return a.type === 'product' ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
   }, [products, bundleTools]);
+
+  const catalogMixPositions = useMemo(() => {
+    const m = new Map<string, number>();
+    mixedSortPreview.forEach((item, i) => {
+      m.set(`${item.type}:${item.id}`, i);
+    });
+    return m;
+  }, [mixedSortPreview]);
+
+  const selectedMixPos = useMemo(() => {
+    if (!selectedCatalogMixKey) return -1;
+    return mixedSortPreview.findIndex(
+      (x) => `${x.type}:${x.id}` === selectedCatalogMixKey
+    );
+  }, [mixedSortPreview, selectedCatalogMixKey]);
+
+  useEffect(() => {
+    if (!selectedCatalogMixKey) return;
+    const ok = mixedSortPreview.some(
+      (x) => `${x.type}:${x.id}` === selectedCatalogMixKey
+    );
+    if (!ok) setSelectedCatalogMixKey(null);
+  }, [mixedSortPreview, selectedCatalogMixKey]);
 
   const promotionValidation = useMemo<{
     message: string;
@@ -1805,25 +1834,106 @@ export default function ProjectEdit() {
               + 添加商品
             </button>
           </div>
-          <div className="mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2">
-            <div className="mb-1 text-xs font-medium text-indigo-700">前端展示顺序预览（商品 + 套餐）</div>
-            <div className="flex flex-wrap gap-1.5">
-              {mixedSortPreview.map((item, i) => (
-                <span
-                  key={`${item.type}:${item.id}`}
-                  className={`rounded-full px-2 py-0.5 text-[11px] ${
-                    item.type === 'bundle'
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-white text-slate-700'
-                  }`}
+          <div
+            className={`mb-3 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 ${
+              feituanLocked ? 'pointer-events-none opacity-60' : ''
+            }`}
+          >
+            <div className="mb-1 flex flex-wrap items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-indigo-700">
+                  前端展示排序（商品 + 套餐）
+                </div>
+                <p className="mt-0.5 text-[11px] leading-snug text-indigo-900/75">
+                  点击标签选中一条，再点「上移 / 下移」调整顾客端清单顺序。
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-1.5">
+                <button
+                  type="button"
+                  className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs font-medium text-indigo-900 shadow-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  disabled={
+                    feituanLocked ||
+                    selectedMixPos < 0 ||
+                    selectedMixPos >= mixedSortPreview.length ||
+                    selectedMixPos <= 0
+                  }
+                  onClick={() => {
+                    const sel = mixedSortPreview[selectedMixPos];
+                    if (!sel || feituanLocked || selectedMixPos <= 0) return;
+                    moveMixedCatalogItem(sel.type, sel.id, -1);
+                  }}
                 >
-                  {i + 1}. {item.type === 'bundle' ? '套餐' : '商品'}：{item.name}
-                </span>
-              ))}
+                  上移
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-indigo-200 bg-white px-2.5 py-1 text-xs font-medium text-indigo-900 shadow-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                  disabled={
+                    feituanLocked ||
+                    selectedMixPos < 0 ||
+                    selectedMixPos >= mixedSortPreview.length ||
+                    selectedMixPos >= mixedSortPreview.length - 1
+                  }
+                  onClick={() => {
+                    const sel = mixedSortPreview[selectedMixPos];
+                    if (
+                      !sel ||
+                      feituanLocked ||
+                      selectedMixPos >= mixedSortPreview.length - 1
+                    ) {
+                      return;
+                    }
+                    moveMixedCatalogItem(sel.type, sel.id, 1);
+                  }}
+                >
+                  下移
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {mixedSortPreview.map((item, i) => {
+                const mixKey = `${item.type}:${item.id}`;
+                const selected = mixKey === selectedCatalogMixKey;
+                return (
+                  <button
+                    key={mixKey}
+                    type="button"
+                    title={feituanLocked ? '饭团上架后不可改序' : '点击选中'}
+                    disabled={feituanLocked}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      if (feituanLocked) return;
+                      setSelectedCatalogMixKey((prev) =>
+                        prev === mixKey ? null : mixKey
+                      );
+                    }}
+                    className={`rounded-full px-2 py-0.5 text-left text-[11px] transition ${
+                      item.type === 'bundle'
+                        ? 'bg-amber-100 text-amber-900'
+                        : 'bg-white text-slate-800'
+                    } ${
+                      selected
+                        ? 'ring-2 ring-indigo-600 ring-offset-1 ring-offset-indigo-50'
+                        : ''
+                    } ${feituanLocked ? '' : 'active:scale-[0.98]'}`}
+                  >
+                    {i + 1}. {item.type === 'bundle' ? '套餐' : '商品'}：{item.name}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="space-y-3">
-            {products.map((p, idx) => (
+            {products.map((p, idx) => {
+              const pMixPos = catalogMixPositions.get(`product:${p.id}`) ?? -1;
+              const pMoveUpDisabled =
+                feituanLocked || pMixPos <= 0;
+              const pMoveDownDisabled =
+                feituanLocked ||
+                pMixPos < 0 ||
+                pMixPos >= mixedSortPreview.length - 1;
+              return (
               <div
                 key={p.id}
                 className="rounded-xl border border-gray-100 bg-gray-50 p-3"
@@ -1918,7 +2028,7 @@ export default function ProjectEdit() {
                       <button
                         type="button"
                         className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-700 disabled:text-gray-300"
-                        disabled={idx === 0}
+                        disabled={pMoveUpDisabled}
                         onClick={() => moveProduct(p.id, -1)}
                       >
                         上移
@@ -1926,7 +2036,7 @@ export default function ProjectEdit() {
                       <button
                         type="button"
                         className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-700 disabled:text-gray-300"
-                        disabled={idx === products.length - 1}
+                        disabled={pMoveDownDisabled}
                         onClick={() => moveProduct(p.id, 1)}
                       >
                         下移
@@ -2241,7 +2351,8 @@ export default function ProjectEdit() {
                   </button>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         </div>
 
@@ -2262,7 +2373,15 @@ export default function ProjectEdit() {
             </p>
           ) : (
             <div className="space-y-4">
-              {bundleTools.map((tool) => (
+              {bundleTools.map((tool) => {
+                const tMixPos =
+                  catalogMixPositions.get(`bundle:${tool.id}`) ?? -1;
+                const tMoveUpDisabled = feituanLocked || tMixPos <= 0;
+                const tMoveDownDisabled =
+                  feituanLocked ||
+                  tMixPos < 0 ||
+                  tMixPos >= mixedSortPreview.length - 1;
+                return (
                 <div key={tool.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                   <label className="block text-xs text-gray-700">
                     套餐名称
@@ -2295,11 +2414,14 @@ export default function ProjectEdit() {
                   </label>
                   <div className="mt-2 flex items-center gap-2 text-xs">
                     <span className="text-gray-700">排序（与普通商品共用）</span>
-                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">当前位次：{Number(tool.sortOrder ?? 0) + 1}</span>
+                    <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700">
+                      当前清单位次：
+                      {tMixPos >= 0 ? tMixPos + 1 : '—'}
+                    </span>
                     <button
                       type="button"
                       className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-700 disabled:text-gray-300"
-                      disabled={Number(tool.sortOrder ?? 0) <= 0}
+                      disabled={tMoveUpDisabled}
                       onClick={() => moveBundleTool(tool.id, -1)}
                     >
                       上移
@@ -2307,7 +2429,7 @@ export default function ProjectEdit() {
                     <button
                       type="button"
                       className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-700 disabled:text-gray-300"
-                      disabled={Number(tool.sortOrder ?? 0) >= products.length + bundleTools.length - 1}
+                      disabled={tMoveDownDisabled}
                       onClick={() => moveBundleTool(tool.id, 1)}
                     >
                       下移
@@ -3210,7 +3332,8 @@ export default function ProjectEdit() {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
