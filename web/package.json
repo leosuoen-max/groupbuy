@@ -7,6 +7,8 @@
     "dev": "vite",
     "dev:host": "vite --host",
     "cleanup-health": "node scripts/delete-health-check.mjs",
+    "migrate-delivery-slot": "node scripts/migrate-project-delivery-slot.mjs",
+    "migrate-delivery-slot:dry": "node scripts/migrate-project-delivery-slot.mjs --dry-run",
     "dev-wipe-firestore": "node scripts/dev-wipe-firestore.mjs --yes",
     "build": "tsc -b && vite build",
     "test": "vitest run",

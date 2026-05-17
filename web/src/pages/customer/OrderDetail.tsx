@@ -4,6 +4,7 @@ import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
+import { formatOrderDeliverySlotLabel } from '../../lib/deliverySlot';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
@@ -919,6 +920,7 @@ export default function OrderDetail() {
         >
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
+          <p>配送时间：{formatOrderDeliverySlotLabel(order)}</p>
           <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
           {order.deliveryPointSnapshot?.detail ? (
             <p className="text-xs text-gray-600">{order.deliveryPointSnapshot.detail}</p>

@@ -66,8 +66,8 @@ export function getFeituanProjectPublishBlocker(project: ProjectDoc): string | n
   if (!closesAt || closesAt.getTime() <= Date.now()) {
     return '项目截止时间已过，请先延长截止时间';
   }
-  if (!project.deliveryTimeText?.trim()) {
-    return '请先填写送达时间';
+  if (!project.deliveryDate?.trim() || !project.deliveryPeriod) {
+    return '请先配置配送时间（配送日与中午/傍晚）';
   }
   return null;
 }

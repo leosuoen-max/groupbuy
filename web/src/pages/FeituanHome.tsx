@@ -5,6 +5,7 @@ import { FeituanHomeBottomNav } from '../components/feituan/FeituanHomeBottomNav
 import { FeituanHomePageHeader } from '../components/feituan/FeituanHomePageHeader';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { useWechatShareCard } from '../hooks/useWechatShareCard';
+import { resolveProjectDeliveryLabel } from '../lib/deliverySlot';
 import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
@@ -77,8 +78,8 @@ function fmtCloseTime(p: ProjectRow): string {
 }
 
 function deliveryTimeLabel(p: ProjectRow): string {
-  const text = p.data.deliveryTimeText?.trim();
-  return text || '待商户填写';
+  const label = resolveProjectDeliveryLabel(p.data);
+  return label || '待商户填写';
 }
 
 function TimingBadgeBox({ children }: { children: ReactNode }) {
@@ -109,7 +110,7 @@ function ProjectTimingBadge({ project }: { project: ProjectRow }) {
         </p>
       ) : null}
       <p>
-        送达：
+        配送：
         <span style={{ color: C.brandViolet }}>{delivery}</span>
       </p>
     </TimingBadgeBox>

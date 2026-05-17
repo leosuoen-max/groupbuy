@@ -94,7 +94,11 @@ export type ProjectDoc = {
   title: string;
   status: 'draft' | 'published' | 'closed';
   closesAt: Timestamp;
-  /** 商户填写的送达时间文案，例如「5/20 午餐时间」 */
+  /** 配送日 YYYY-MM-DD（临时项目） */
+  deliveryDate?: string;
+  /** 配送时段：中午 / 傍晚 */
+  deliveryPeriod?: 'midday' | 'evening';
+  /** 由配送日+时段自动生成的展示文案，例如「5/18（周日）中午」 */
   deliveryTimeText?: string;
   maxParticipants?: number | null;
   textContent?: string;
@@ -668,6 +672,12 @@ export type OrderDoc = {
   deliveryPointSnapshot: {
     name: string;
     detail?: string;
+  };
+  /** 下单时固化的配送时间（临时项目）；历史订单可能缺失 */
+  deliverySlot?: {
+    date: string;
+    period: 'midday' | 'evening';
+    label: string;
   };
   isManualMatch: boolean;
   paymentScreenshots: unknown[];

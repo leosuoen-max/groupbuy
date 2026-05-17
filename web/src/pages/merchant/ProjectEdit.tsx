@@ -31,6 +31,15 @@ import {
   type ProductLibraryRow,
 } from '../../lib/productLibraryService';
 import { ProductLibraryCombobox } from '../../components/merchant/ProductLibraryCombobox';
+import {
+  buildProjectDeliveryFields,
+  defaultDeliveryDateInput,
+  formatDeliverySlotLabel,
+  inferDeliverySlotFromLegacy,
+  parseDeliveryDateLocal,
+  resolveProjectDeliverySlot,
+  type DeliverySlotPeriod,
+} from '../../lib/deliverySlot';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
 import {
   DescriptionLineEditor,
@@ -43,6 +52,18 @@ const PROJECT_EDIT_DRAFT_DEBOUNCE_MS = 400;
 function toDatetimeLocalValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function validateProjectDeliveryInput(
+  date: string,
+  period: DeliverySlotPeriod
+): string | null {
+  if (!date.trim()) return '请选择配送日期';
+  if (!parseDeliveryDateLocal(date.trim())) return '配送日期无效';
+  if (period !== 'midday' && period !== 'evening') {
+    return '请选择中午或傍晚配送';
+  }
+  return null;
 }
 
 function tsToDatetimeLocalInput(
@@ -363,7 +384,8 @@ export default function ProjectEdit() {
   const [closesAt, setClosesAt] = useState(() =>
     toDatetimeLocalValue(new Date(Date.now() + 24 * 60 * 60 * 1000))
   );
-  const [deliveryTimeText, setDeliveryTimeText] = useState('');
+  const [deliveryDate, setDeliveryDate] = useState(() => defaultDeliveryDateInput());
+  const [deliveryPeriod, setDeliveryPeriod] = useState<DeliverySlotPeriod>('midday');
   const [textContent, setTextContent] = useState('');
   const [descriptionAssets, setDescriptionAssets] = useState<DescriptionAsset[]>([]);
   const [imageBlocks, setImageBlocks] = useState<ProjectImageBlock[]>([]);
@@ -417,7 +439,8 @@ export default function ProjectEdit() {
     savedAt: number;
     title: string;
     closesAt: string;
-    deliveryTimeText?: string;
+    deliveryDate?: string;
+    deliveryPeriod?: DeliverySlotPeriod;
     textContent: string;
     descriptionAssets?: DescriptionAsset[];
     imageBlocks?: ProjectImageBlock[];
@@ -516,7 +539,10 @@ export default function ProjectEdit() {
       }
       if (typeof d.title === 'string') setTitle(d.title);
       if (typeof d.closesAt === 'string') setClosesAt(d.closesAt);
-      if (typeof d.deliveryTimeText === 'string') setDeliveryTimeText(d.deliveryTimeText);
+      if (typeof d.deliveryDate === 'string') setDeliveryDate(d.deliveryDate);
+      if (d.deliveryPeriod === 'midday' || d.deliveryPeriod === 'evening') {
+        setDeliveryPeriod(d.deliveryPeriod);
+      }
       if (typeof d.textContent === 'string') {
         const parsed = splitDescription(d.textContent);
         const editor = parseEditorContent(parsed.body);
@@ -569,7 +595,19 @@ export default function ProjectEdit() {
       return;
     }
     setTitle(row.data.title);
-    setDeliveryTimeText(row.data.deliveryTimeText ?? '');
+    const slot =
+      resolveProjectDeliverySlot(row.data) ??
+      inferDeliverySlotFromLegacy(
+        row.data.deliveryTimeText,
+        row.data.closesAt?.toDate?.() ?? null
+      );
+    if (slot) {
+      setDeliveryDate(slot.date);
+      setDeliveryPeriod(slot.period);
+    } else {
+      setDeliveryDate('');
+      setDeliveryPeriod('midday');
+    }
     const parsedDesc = splitDescription(row.data.textContent ?? '');
     const editor = parseEditorContent(parsedDesc.body);
     setTextContent(editor.plain);
@@ -704,7 +742,8 @@ export default function ProjectEdit() {
       savedAt: Date.now(),
       title,
       closesAt,
-      deliveryTimeText,
+      deliveryDate,
+      deliveryPeriod,
       textContent,
       imageBlocks,
       products,
@@ -726,7 +765,8 @@ export default function ProjectEdit() {
     draftHydrated,
     title,
     closesAt,
-    deliveryTimeText,
+    deliveryDate,
+    deliveryPeriod,
     textContent,
     imageBlocks,
     products,
@@ -1305,9 +1345,9 @@ export default function ProjectEdit() {
       focusValidationTarget(promotionValidation.key);
       return;
     }
-    const deliveryText = deliveryTimeText.trim();
-    if (!deliveryText) {
-      setMsg('请填写送达时间，例如「5/20 午餐时间」或「5/20 晚餐时间」');
+    const deliveryErr = validateProjectDeliveryInput(deliveryDate, deliveryPeriod);
+    if (deliveryErr) {
+      setMsg(deliveryErr);
       return;
     }
     setValidationHighlightKey(null);
@@ -1318,7 +1358,7 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: title.trim() || '未命名项目',
         closesAt: Timestamp.fromDate(d),
-        deliveryTimeText: deliveryText,
+        ...buildProjectDeliveryFields(deliveryDate.trim(), deliveryPeriod),
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts.length ? normalizedProducts : [],
@@ -1358,13 +1398,13 @@ export default function ProjectEdit() {
     }
     setValidationHighlightKey(null);
     const t = title.trim();
-    const deliveryText = deliveryTimeText.trim();
+    const deliveryErr = validateProjectDeliveryInput(deliveryDate, deliveryPeriod);
     if (!t) {
       setMsg('请填写项目标题');
       return;
     }
-    if (!deliveryText) {
-      setMsg('请填写送达时间，例如「5/20 午餐时间」或「5/20 晚餐时间」');
+    if (deliveryErr) {
+      setMsg(deliveryErr);
       return;
     }
     if (!canPublishByRegularProducts && !canPublishByBundleSchemes) {
@@ -1378,7 +1418,7 @@ export default function ProjectEdit() {
       await updateProjectDoc(resolvedPid, {
         title: t,
         closesAt: Timestamp.fromDate(d),
-        deliveryTimeText: deliveryText,
+        ...buildProjectDeliveryFields(deliveryDate.trim(), deliveryPeriod),
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts,
@@ -1511,18 +1551,48 @@ export default function ProjectEdit() {
             onChange={(e) => setClosesAt(e.target.value)}
           />
         </label>
-        <label className="block text-sm font-medium text-gray-800">
-          送达时间（必填）
-          <input
-            className={input}
-            value={deliveryTimeText}
-            onChange={(e) => setDeliveryTimeText(e.target.value)}
-            placeholder="例如：5/20 午餐时间、5/20 晚餐时间"
-          />
-          <span className="mt-1 block text-xs font-normal text-gray-500">
-            会显示在饭团首页项目卡片上，建议写成「月/日 + 午餐/晚餐时间」。
-          </span>
-        </label>
+        <fieldset className="block text-sm font-medium text-gray-800">
+          <legend className="mb-2">配送时间（必填）</legend>
+          <label className="mb-3 block font-normal">
+            <span className="mb-1 block text-xs text-gray-600">配送日</span>
+            <input
+              type="date"
+              className={input}
+              value={deliveryDate}
+              onChange={(e) => setDeliveryDate(e.target.value)}
+            />
+          </label>
+          <p className="mb-2 text-xs font-normal text-gray-600">配送时段</p>
+          <div className="flex flex-wrap gap-3 font-normal">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50">
+              <input
+                type="radio"
+                name="deliveryPeriod"
+                checked={deliveryPeriod === 'midday'}
+                onChange={() => setDeliveryPeriod('midday')}
+              />
+              中午
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50">
+              <input
+                type="radio"
+                name="deliveryPeriod"
+                checked={deliveryPeriod === 'evening'}
+                onChange={() => setDeliveryPeriod('evening')}
+              />
+              傍晚
+            </label>
+          </div>
+          {deliveryDate && parseDeliveryDateLocal(deliveryDate) ? (
+            <p className="mt-2 text-xs font-normal text-gray-500">
+              展示文案：
+              <span className="font-medium text-emerald-800">
+                {formatDeliverySlotLabel(deliveryDate, deliveryPeriod)}
+              </span>
+              （饭团首页与分享将使用此格式）
+            </p>
+          ) : null}
+        </fieldset>
         <section className="rounded-2xl border border-gray-100 bg-gradient-to-b from-gray-50 to-white p-3.5 shadow-sm">
           <div className="mb-2 text-base font-semibold text-gray-900">项目 Banner 与说明</div>
           <div className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">

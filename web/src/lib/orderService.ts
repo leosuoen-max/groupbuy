@@ -37,6 +37,10 @@ import {
   resolveMerchantShopRole,
 } from './permissionService';
 import { getShopById } from './shopService';
+import {
+  buildOrderDeliverySlotSnapshot,
+  resolveProjectDeliverySlot,
+} from './deliverySlot';
 import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type {
   BundleToolDoc,
@@ -92,7 +96,8 @@ type CreateOrderErrorCode =
   | 'FEITUAN_NOT_LISTED'
   | 'PRODUCT_NOT_FOUND'
   | 'PRODUCT_INACTIVE'
-  | 'INSUFFICIENT_STOCK';
+  | 'INSUFFICIENT_STOCK'
+  | 'DELIVERY_SLOT_NOT_CONFIGURED';
 
 const CREATE_ORDER_ERROR_MESSAGE: Record<CreateOrderErrorCode, string> = {
   PROJECT_NOT_FOUND: '项目不存在或已删除。',
@@ -103,6 +108,8 @@ const CREATE_ORDER_ERROR_MESSAGE: Record<CreateOrderErrorCode, string> = {
   PRODUCT_NOT_FOUND: '商品不存在，请返回重选。',
   PRODUCT_INACTIVE: '有商品已下架，请返回重选。',
   INSUFFICIENT_STOCK: '库存不足，请返回重选。',
+  DELIVERY_SLOT_NOT_CONFIGURED:
+    '项目尚未配置配送时间，请联系商户在后台设置后再下单。',
 };
 
 export class CreateOrderError extends Error {
@@ -179,6 +186,9 @@ function ensureProjectCanOrder(project: ProjectDoc): void {
   if (project.status === 'closed') throw new CreateOrderError('PROJECT_CLOSED');
   if (closesAt && closesAt.getTime() <= Date.now()) {
     throw new CreateOrderError('PROJECT_CLOSED');
+  }
+  if (!resolveProjectDeliverySlot(project)) {
+    throw new CreateOrderError('DELIVERY_SLOT_NOT_CONFIGURED');
   }
 }
 
@@ -307,6 +317,11 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       input.deliveryPointLabel.trim();
     const snapshotDetail = input.deliverySnapshot?.detail?.trim();
 
+    const projectDeliverySlot = resolveProjectDeliverySlot(project);
+    if (!projectDeliverySlot) {
+      throw new CreateOrderError('DELIVERY_SLOT_NOT_CONFIGURED');
+    }
+
     const orderPayload: Omit<OrderDoc, 'createdAt' | 'updatedAt'> = {
       orderNumber,
       channel,
@@ -341,6 +356,7 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
         name: snapshotName,
         ...(snapshotDetail ? { detail: snapshotDetail } : {}),
       },
+      deliverySlot: buildOrderDeliverySlotSnapshot(projectDeliverySlot),
       isManualMatch: input.isManualMatch,
       paymentScreenshots: [],
       status,

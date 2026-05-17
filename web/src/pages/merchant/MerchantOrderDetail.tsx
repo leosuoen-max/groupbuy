@@ -5,6 +5,7 @@ import { PaymentScreenshotsPanel } from '../../components/merchant/PaymentScreen
 import { ActionButton } from '../../components/ui/ActionButton';
 import { StatusChip } from '../../components/ui/StatusChip';
 import { useAuthUser } from '../../hooks/useAuthUser';
+import { formatOrderDeliverySlotLabel } from '../../lib/deliverySlot';
 import { formatMYR } from '../../lib/formatMYR';
 import { deriveDisplayOrderStatus } from '../../lib/paymentGroupView';
 import {
@@ -734,6 +735,11 @@ export default function MerchantOrderDetail({
               </button>
             ) : null}
           </div>
+          <p className="text-xs text-gray-600">配送时间</p>
+          <p className="mb-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+            {formatOrderDeliverySlotLabel(order)}
+          </p>
+          <p className="text-xs text-gray-600">配送点</p>
           <p className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
             {order.deliveryPointSnapshot?.name ?? '未填写'}
           </p>
