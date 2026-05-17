@@ -873,10 +873,17 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
             </section>
 
             <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
-              <div className={`pointer-events-auto flex w-full gap-2.5 px-4 ${H5_COLUMN_CLASS}`}>
+              <div className={`pointer-events-auto flex w-full gap-2 px-4 ${H5_COLUMN_CLASS}`}>
                 <Link
-                  to={`/feituan/projects/${encodeURIComponent(projectId)}/my-orders`}
-                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-[18px] py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50"
+                  to="/feituan"
+                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3.5 py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 sm:px-[18px]"
+                  style={{ borderColor: DESIGN_BORDER }}
+                >
+                  主页
+                </Link>
+                <Link
+                  to="/feituan/my-orders"
+                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3.5 py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 sm:px-[18px]"
                   style={{ borderColor: DESIGN_BORDER }}
                 >
                   我的订单
@@ -951,7 +958,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
               ← 返回大马饭团
             </Link>
             <Link
-              to={`/feituan/projects/${encodeURIComponent(projectId)}/my-orders`}
+              to="/feituan/my-orders"
               className="text-sm font-medium text-orange-700"
             >
               我的订单

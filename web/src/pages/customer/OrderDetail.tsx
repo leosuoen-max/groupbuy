@@ -230,6 +230,8 @@ export default function OrderDetail() {
   const base = isFeituanOrder
     ? `/feituan/projects/${encodeURIComponent(projectId)}`
     : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
+  const homeHref = isFeituanOrder ? '/feituan' : base;
+  const myOrdersHref = isFeituanOrder ? '/feituan/my-orders' : `${base}/my-orders`;
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -759,13 +761,13 @@ export default function OrderDetail() {
         <div className="mt-4 flex flex-wrap gap-2">
           <Link
             className="text-sm text-indigo-600 underline-offset-2 hover:underline"
-            to={base}
+            to={homeHref}
           >
-            返回项目首页
+            {isFeituanOrder ? '返回饭团主页' : '返回项目首页'}
           </Link>
           <Link
             className="text-sm text-indigo-600 underline-offset-2 hover:underline"
-            to={`${base}/my-orders`}
+            to={myOrdersHref}
           >
             我的订单
           </Link>
@@ -1639,7 +1641,7 @@ export default function OrderDetail() {
         <div className="mt-2 border-t border-gray-100 pt-6">
           <div className="flex gap-3">
             <Link
-              to={base}
+              to={homeHref}
               className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl border-2 border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
             >
               <svg
@@ -1657,10 +1659,10 @@ export default function OrderDetail() {
                   d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"
                 />
               </svg>
-              <span>返回首页</span>
+              <span>{isFeituanOrder ? '返回饭团主页' : '返回首页'}</span>
             </Link>
             <Link
-              to={`${base}/my-orders`}
+              to={myOrdersHref}
               className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-indigo-600 to-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/25 transition hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
             >
               <svg

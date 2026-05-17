@@ -23,6 +23,7 @@ import {
   withDefaultScreenshotFlagIfUrl,
 } from './paymentScreenshotHelpers';
 import { buildPaymentGroups } from './paymentGroups';
+import { deriveDisplayOrderStatus } from './paymentGroupView';
 import {
   computeImageFileMd5Hex,
   deleteFileByDownloadUrl,
@@ -654,11 +655,14 @@ export async function customerUploadPaymentScreenshot(input: {
     timestamp: Timestamp.now(),
   });
 
+  const nextOrder: OrderDoc = { ...order, paymentScreenshots: prev };
+  const nextStatus = deriveDisplayOrderStatus(nextOrder);
+
   await updateDoc(orderRef, {
     paymentScreenshots: prev,
     statusHistory: hist,
     updatedAt: serverTimestamp(),
-    ...(order.status === 'unpaid' ? { status: 'pending' as const } : {}),
+    ...(nextStatus !== order.status ? { status: nextStatus } : {}),
   });
 }
 
@@ -1497,11 +1501,17 @@ export async function merchantConfirmPayment(
   });
 }
 
-/** 商户将首单待付款标记为「免提交付款凭证」，使其进入待确认。 */
-export async function merchantWaiveInitialPaymentScreenshot(
+/**
+ * 商户将某一待付款支付组标记为「免提交付款凭证」，使该组进入待确认并同步订单 status。
+ */
+export async function merchantWaivePaymentGroupScreenshot(
   orderFirestoreId: string,
+  paymentGroupId: string,
   actorUserId: string
 ): Promise<void> {
+  const groupId = paymentGroupId.trim();
+  if (!groupId) throw new Error('缺少支付组');
+
   const db = getDb();
   const orderRef = doc(db, 'orders', orderFirestoreId);
   const preSnap = await getDoc(orderRef);
@@ -1512,6 +1522,16 @@ export async function merchantWaiveInitialPaymentScreenshot(
     throw new Error('当前状态不可免提交凭证');
   }
 
+  const preGroups = buildPaymentGroups(pre);
+  const preGroup = preGroups.find((g) => g.id === groupId);
+  if (!preGroup) throw new Error('支付组不存在，请刷新后重试');
+  if (preGroup.status !== 'unpaid') {
+    throw new Error('仅待付款支付组可免提交凭证');
+  }
+  if (preGroup.proofs.length > 0) {
+    throw new Error('该组已有可核对凭证，无需免提交');
+  }
+
   await runTransaction(db, async (tx) => {
     const oSnap = await tx.get(orderRef);
     if (!oSnap.exists()) throw new Error('订单不存在');
@@ -1519,53 +1539,76 @@ export async function merchantWaiveInitialPaymentScreenshot(
     if (o.status === 'cancelled' || o.status === 'confirmed') {
       throw new Error('订单状态已变更，请刷新后重试');
     }
-    if (o.initialPaymentConfirmedAt) {
-      throw new Error('该支付组已确认，无需免提交');
+
+    const groups = buildPaymentGroups(o);
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) throw new Error('支付组不存在，请刷新后重试');
+    if (group.status !== 'unpaid') {
+      throw new Error('仅待付款支付组可免提交凭证');
+    }
+    if (group.proofs.length > 0) {
+      throw new Error('该组已有可核对凭证，无需免提交');
     }
 
-    const hasInitialProof = Array.isArray(o.paymentScreenshots)
-      ? o.paymentScreenshots.some((raw) => {
-          if (!raw || typeof raw !== 'object') return false;
-          const item = raw as Record<string, unknown>;
-          const bid =
-            typeof item.appendBatchId === 'string' ? item.appendBatchId.trim() : '';
-          if (bid) return false;
-          const hasUrl = typeof item.url === 'string' && item.url.trim().length > 0;
-          const waived = item.waivedNoScreenshot === true;
-          return hasUrl || waived;
-        })
-      : false;
-    if (hasInitialProof) {
-      throw new Error('该支付组已有可核对凭证，无需免提交');
-    }
+    const appendBatchId =
+      group.appendBatchIds.length > 0
+        ? group.appendBatchIds[group.appendBatchIds.length - 1]
+        : undefined;
 
     const prevShots = Array.isArray(o.paymentScreenshots)
       ? [...o.paymentScreenshots]
       : [];
-    prevShots.push({
+    const entry: Record<string, unknown> = {
       id: globalThis.crypto.randomUUID(),
       uploadedAt: Timestamp.now(),
       waivedNoScreenshot: true,
       waivedByUserId: actorUserId,
       flag: 'yellow',
-      flagReason: '商户已免提交付款凭证（支付组）',
-    });
+      flagReason: group.includesInitial
+        ? '商户已免提交付款凭证（支付组）'
+        : '商户已免提交付款凭证',
+    };
+    if (appendBatchId) entry.appendBatchId = appendBatchId;
+    prevShots.push(entry);
+
+    const nextOrder: OrderDoc = { ...o, paymentScreenshots: prevShots };
+    const nextStatus = deriveDisplayOrderStatus(nextOrder);
 
     const history = [...(o.statusHistory ?? [])];
     history.push({
-      action: 'merchant_waive_initial_payment_screenshot',
+      action: 'merchant_waive_payment_group_screenshot',
       timestamp: Timestamp.now(),
       userId: actorUserId,
+      note: `${group.id}${appendBatchId ? `;batch=${appendBatchId}` : ''}`,
     });
 
     tx.update(orderRef, {
       paymentScreenshots: prevShots,
       statusHistory: history,
       updatedAt: serverTimestamp(),
-      ...(o.status === 'unpaid' ? { status: 'pending' as const } : {}),
+      ...(nextStatus !== o.status ? { status: nextStatus } : {}),
     });
   });
 }
+
+/** 商户将首单待付款标记为「免提交付款凭证」，使其进入待确认。 */
+export async function merchantWaiveInitialPaymentScreenshot(
+  orderFirestoreId: string,
+  actorUserId: string
+): Promise<void> {
+  const preSnap = await getDoc(doc(getDb(), 'orders', orderFirestoreId));
+  if (!preSnap.exists()) throw new Error('订单不存在');
+  const pre = preSnap.data() as OrderDoc;
+  if (pre.initialPaymentConfirmedAt) {
+    throw new Error('该支付组已确认，无需免提交');
+  }
+  const group = buildPaymentGroups(pre).find(
+    (g) => g.status === 'unpaid' && g.includesInitial
+  );
+  if (!group) throw new Error('没有可免提交的首单待付款组');
+  await merchantWaivePaymentGroupScreenshot(orderFirestoreId, group.id, actorUserId);
+}
+
 
 /** 商户确认某一档加购的补款（仅订单处于待补付款且该档未确认时） */
 export async function merchantConfirmAppendBatch(
@@ -1707,68 +1750,18 @@ export async function merchantWaiveAppendBatchScreenshot(
   appendBatchId: string,
   actorUserId: string
 ): Promise<void> {
-  const db = getDb();
-  const orderRef = doc(db, 'orders', orderFirestoreId);
-  const preSnap = await getDoc(orderRef);
+  const preSnap = await getDoc(doc(getDb(), 'orders', orderFirestoreId));
   if (!preSnap.exists()) throw new Error('订单不存在');
   const pre = preSnap.data() as OrderDoc;
-  await assertMerchantCanManageOrder(actorUserId, pre);
-  if (pre.status === 'cancelled' || pre.status === 'confirmed') {
-    throw new Error('当前状态不可免提交凭证');
-  }
+  const batch = (pre.appendBatches ?? []).find((b) => b.id === appendBatchId);
+  if (!batch) throw new Error('找不到该加购记录');
+  if (batch.confirmedAt) throw new Error('该笔加购已确认，无需免提交');
 
-  await runTransaction(db, async (tx) => {
-    const oSnap = await tx.get(orderRef);
-    if (!oSnap.exists()) throw new Error('订单不存在');
-    const o = oSnap.data() as OrderDoc;
-    if (o.status === 'cancelled' || o.status === 'confirmed') {
-      throw new Error('订单状态已变更，请刷新后重试');
-    }
-
-    const batches = o.appendBatches ?? [];
-    const batch = batches.find((b) => b.id === appendBatchId);
-    if (!batch) throw new Error('找不到该加购记录');
-    if (batch.confirmedAt) throw new Error('该笔加购已确认，无需免提交');
-
-    const pendingIds = batches.filter((b) => !b.confirmedAt).map((b) => b.id);
-    if (
-      canMerchantConfirmAppendBatchByScreenshots(
-        o.paymentScreenshots,
-        appendBatchId,
-        pendingIds,
-        batch.appendedAt
-      )
-    ) {
-      throw new Error('该组已有可核对凭证，无需免提交');
-    }
-
-    const prevShots = Array.isArray(o.paymentScreenshots)
-      ? [...o.paymentScreenshots]
-      : [];
-    prevShots.push({
-      id: globalThis.crypto.randomUUID(),
-      appendBatchId,
-      uploadedAt: Timestamp.now(),
-      waivedNoScreenshot: true,
-      waivedByUserId: actorUserId,
-      flag: 'yellow',
-      flagReason: '商户已免提交付款凭证',
-    });
-
-    const history = [...(o.statusHistory ?? [])];
-    history.push({
-      action: 'merchant_waive_append_batch_screenshot',
-      timestamp: Timestamp.now(),
-      userId: actorUserId,
-      note: appendBatchId,
-    });
-
-    tx.update(orderRef, {
-      paymentScreenshots: prevShots,
-      statusHistory: history,
-      updatedAt: serverTimestamp(),
-    });
-  });
+  const group = buildPaymentGroups(pre).find(
+    (g) => g.status === 'unpaid' && g.appendBatchIds.includes(appendBatchId)
+  );
+  if (!group) throw new Error('没有可免提交的该笔加购待付款组');
+  await merchantWaivePaymentGroupScreenshot(orderFirestoreId, group.id, actorUserId);
 }
 
 /** 一次性确认当前所有「待核实」加购补款（多档待确认时一并入账） */

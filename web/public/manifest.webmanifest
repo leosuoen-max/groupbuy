@@ -1,0 +1,31 @@
+{
+  "name": "大马饭团",
+  "short_name": "饭团",
+  "description": "今日精选团购，与朋友一起拼单下单。",
+  "start_url": "/feituan",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F6FBF7",
+  "theme_color": "#F6FBF7",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

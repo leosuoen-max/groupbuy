@@ -12,8 +12,7 @@ import {
   merchantAppendInternalNote,
   merchantAssignManualDeliveryMatch,
   merchantConfirmPaymentGroup,
-  merchantWaiveInitialPaymentScreenshot,
-  merchantWaiveAppendBatchScreenshot,
+  merchantWaivePaymentGroupScreenshot,
   type OrderRow,
 } from '../../lib/orderService';
 import { isFeituanAdmin } from '../../lib/feituanService';
@@ -199,13 +198,7 @@ export default function MerchantOrderDetail({
   const [err, setErr] = useState<string | null>(null);
   const [row, setRow] = useState<OrderRow | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
-  const [busy, setBusy] = useState<
-    | 'confirm'
-    | 'note'
-    | 'waive_append_proof'
-    | 'waive_initial_proof'
-    | null
-  >(null);
+  const [busy, setBusy] = useState<'confirm' | 'note' | string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const [dpModalOpen, setDpModalOpen] = useState(false);
@@ -369,28 +362,13 @@ export default function MerchantOrderDetail({
     }
   };
 
-  const handleWaiveAppendProof = async (appendBatchId: string) => {
+  const handleWaivePaymentGroup = async (paymentGroupId: string) => {
     if (!user || !row) return;
-    setBusy('waive_append_proof');
+    setBusy(`waive:${paymentGroupId}`);
     setMsg(null);
     try {
-      await merchantWaiveAppendBatchScreenshot(row.id, appendBatchId, user.uid);
+      await merchantWaivePaymentGroupScreenshot(row.id, paymentGroupId, user.uid);
       setMsg('该组已设为免提交付款凭证，现可进行确认');
-      await refresh();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : '操作失败');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleWaiveInitialProof = async () => {
-    if (!user || !row) return;
-    setBusy('waive_initial_proof');
-    setMsg(null);
-    try {
-      await merchantWaiveInitialPaymentScreenshot(row.id, user.uid);
-      setMsg('该支付组已设为免提交付款凭证，现可进行确认');
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '操作失败');
@@ -482,17 +460,9 @@ export default function MerchantOrderDetail({
           canMerchantManagePayment &&
           group.status === 'pending' &&
           order.status !== 'cancelled';
-        const canWaiveInitial =
+        const canWaiveGroup =
           canMerchantManagePayment &&
           group.status === 'unpaid' &&
-          group.includesInitial &&
-          group.appendBatchIds.length === 0 &&
-          order.status !== 'cancelled';
-        const canWaiveSingleAppend =
-          canMerchantManagePayment &&
-          group.status === 'unpaid' &&
-          !group.includesInitial &&
-          group.appendBatchIds.length === 1 &&
           order.status !== 'cancelled';
         const groupTime =
           group.timeMs > 0 ? new Date(group.timeMs).toLocaleString() : '—';
@@ -593,20 +563,16 @@ export default function MerchantOrderDetail({
                   : `确认本组收款（${formatMYR(group.subtotal)}）`}
               </ActionButton>
             ) : null}
-            {canWaiveInitial || canWaiveSingleAppend ? (
+            {canWaiveGroup ? (
               <ActionButton
                 type="button"
                 variant="secondary"
                 fullWidth
                 disabled={busy !== null}
                 className="mt-3 h-11"
-                onClick={() =>
-                  canWaiveInitial
-                    ? void handleWaiveInitialProof()
-                    : void handleWaiveAppendProof(group.appendBatchIds[0]!)
-                }
+                onClick={() => void handleWaivePaymentGroup(group.id)}
               >
-                {busy === 'waive_initial_proof' || busy === 'waive_append_proof'
+                {busy === `waive:${group.id}`
                   ? '处理中…'
                   : `本组免提交付款凭证（${formatMYR(group.subtotal)}）`}
               </ActionButton>

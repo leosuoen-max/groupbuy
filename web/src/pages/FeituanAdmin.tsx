@@ -385,7 +385,7 @@ export default function FeituanAdmin() {
           <h2 className="text-sm font-bold text-gray-950">运营入口</h2>
           <span className="text-xs text-gray-400">饭团后台</span>
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Link
           to="/feituan"
           className={quickLinkClass}
@@ -415,6 +415,12 @@ export default function FeituanAdmin() {
           className={quickLinkClass}
         >
           饭团配送
+        </Link>
+        <Link
+          to="/admin/shops"
+          className={quickLinkClass}
+        >
+          商户管理
         </Link>
       </div>
       </section>
