@@ -89,11 +89,36 @@ export type BundleToolDoc = {
   schemes: BundleSchemeDoc[];
 };
 
+export type ProjectKind = 'one_time' | 'recurring';
+
+export type RecurringDeliveryScheduleDoc = {
+  /** 销售开始日（可早于首配） */
+  salesStartDate: string;
+  /** 销售截止日（与末配同日） */
+  salesEndDate: string;
+  firstDeliveryDate: string;
+  firstDeliveryPeriod: 'midday' | 'evening';
+  lastDeliveryDate: string;
+  lastDeliveryPeriod: 'midday' | 'evening';
+  frequency: 'once_daily' | 'twice_daily';
+  /** frequency=once_daily 时必填 */
+  onceDailyPeriod?: 'midday' | 'evening';
+  /** 中午档截单 HH:mm */
+  middayCutoffTime: string;
+  /** 傍晚档截单；twice_daily 或 once_daily+evening 时必填 */
+  eveningCutoffTime?: string;
+  /** 系统生成的消费者说明文案 */
+  consumerNoticeText?: string;
+};
+
 export type ProjectDoc = {
   shopId: string;
   title: string;
   status: 'draft' | 'published' | 'closed';
   closesAt: Timestamp;
+  /** 缺省或 one_time=临时项目；recurring=长期项目 */
+  projectKind?: ProjectKind;
+  recurringSchedule?: RecurringDeliveryScheduleDoc;
   /** 配送日 YYYY-MM-DD（临时项目） */
   deliveryDate?: string;
   /** 配送时段：中午 / 傍晚 */

@@ -1,10 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { useWechatNotifySession } from '../../hooks/useWechatNotifySession';
 import { toLoadErrorMessage } from '../../lib/firebaseErrorMessage';
-import { formatOrderDeliverySlotLabel } from '../../lib/deliverySlot';
+import {
+  formatDeliverySlotLabel,
+  formatOrderDeliverySlotLabel,
+} from '../../lib/deliverySlot';
+import { hasOrderDeliverySlotLocked } from '../../lib/orderDeliverySlot';
+import {
+  canChangeDeliverySlot,
+  getRecurringSchedule,
+  isProjectRecurring,
+  listSlotsAfter,
+} from '../../lib/recurringDeliverySchedule';
 import { formatMYR } from '../../lib/formatMYR';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
 import { listDeliveryPointsByOwnerId } from '../../lib/deliveryPointService';
@@ -18,6 +28,7 @@ import {
 import {
   customerDeletePaymentScreenshot,
   customerUpdateOrderContact,
+  customerUpdateOrderDeliverySlot,
   customerUploadPaymentScreenshot,
   getOrderByNumber,
   type OrderRow,
@@ -57,6 +68,7 @@ import type {
   OrderLineDoc,
   ProjectDoc,
 } from '../../types/firestore';
+import type { ProjectDeliverySlot } from '../../lib/deliverySlot';
 
 function maskPhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
@@ -262,6 +274,10 @@ export default function OrderDetail() {
   const [editingContact, setEditingContact] = useState(false);
   const [contactSaving, setContactSaving] = useState(false);
   const [contactMsg, setContactMsg] = useState<string | null>(null);
+  const [deliveryChangeOpen, setDeliveryChangeOpen] = useState(false);
+  const [deliveryChangeTarget, setDeliveryChangeTarget] = useState('');
+  const [deliveryChangeSaving, setDeliveryChangeSaving] = useState(false);
+  const [deliveryChangeMsg, setDeliveryChangeMsg] = useState<string | null>(null);
 
   const [draftDeliveryId, setDraftDeliveryId] = useState<string>(OTHER_DELIVERY_ID);
   const [deliveryPoints, setDeliveryPoints] = useState<MockDeliveryPoint[]>([]);
@@ -472,6 +488,21 @@ export default function OrderDetail() {
     order.status !== 'cancelled' &&
     hasUnpaidGroupForCardPay &&
     Number(order.pendingAmount ?? 0) > 0;
+
+  const deliveryChangeOptions = useMemo(() => {
+    if (!order || !projectDoc || !isProjectRecurring(projectDoc)) return [];
+    if (!hasOrderDeliverySlotLocked(order)) return [];
+    const schedule = getRecurringSchedule(projectDoc);
+    if (!schedule || !order.deliverySlot?.date || !order.deliverySlot?.period) {
+      return [];
+    }
+    const current = {
+      date: order.deliverySlot.date,
+      period: order.deliverySlot.period,
+    };
+    if (!canChangeDeliverySlot(current, schedule)) return [];
+    return listSlotsAfter(current, schedule);
+  }, [order, projectDoc]);
 
   useEffect(() => {
     if (!canCardPay || !order || !projectDoc) {
@@ -921,6 +952,103 @@ export default function OrderDetail() {
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
           <p>配送时间：{formatOrderDeliverySlotLabel(order)}</p>
+          {deliveryChangeOptions.length > 0 ? (
+            <div className="mt-2">
+              {!deliveryChangeOpen ? (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-emerald-800 underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setDeliveryChangeOpen(true);
+                    setDeliveryChangeMsg(null);
+                    const first = deliveryChangeOptions[0];
+                    if (first) {
+                      setDeliveryChangeTarget(`${first.date}|${first.period}`);
+                    }
+                  }}
+                >
+                  更改配送时间
+                </button>
+              ) : (
+                <div className="mt-1 space-y-2 rounded-lg border border-emerald-100 bg-white/80 p-2">
+                  <label className="block text-xs text-gray-600">
+                    改到更晚的配送档
+                    <select
+                      className="mt-1 w-full rounded-lg border border-gray-200 px-2 py-1.5 text-sm"
+                      value={deliveryChangeTarget}
+                      onChange={(e) => setDeliveryChangeTarget(e.target.value)}
+                    >
+                      {deliveryChangeOptions.map((s: ProjectDeliverySlot) => {
+                        const key = `${s.date}|${s.period}`;
+                        return (
+                          <option key={key} value={key}>
+                            {formatDeliverySlotLabel(s.date, s.period)}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={deliveryChangeSaving || !deliveryChangeTarget}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:bg-gray-300"
+                      onClick={() => {
+                        if (!order || !orderRow) return;
+                        const [date, period] = deliveryChangeTarget.split('|');
+                        if (!date || (period !== 'midday' && period !== 'evening')) {
+                          setDeliveryChangeMsg('请选择配送档');
+                          return;
+                        }
+                        setDeliveryChangeSaving(true);
+                        setDeliveryChangeMsg(null);
+                        void customerUpdateOrderDeliverySlot({
+                          orderFirestoreId: orderRow.id,
+                          projectId: order.projectId,
+                          orderNumber: order.orderNumber,
+                          customerKey,
+                          targetDate: date,
+                          targetPeriod: period,
+                        })
+                          .then(() =>
+                            getOrderByNumber(
+                              order.projectId,
+                              order.orderNumber
+                            )
+                          )
+                          .then((row) => {
+                            applyOrderRow(row);
+                            setDeliveryChangeOpen(false);
+                            setDeliveryChangeMsg('已更新配送时间');
+                          })
+                          .catch((e: unknown) => {
+                            setDeliveryChangeMsg(
+                              e instanceof Error ? e.message : '更新失败'
+                            );
+                          })
+                          .finally(() => setDeliveryChangeSaving(false));
+                      }}
+                    >
+                      {deliveryChangeSaving ? '保存中…' : '确认更改'}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700"
+                      onClick={() => {
+                        setDeliveryChangeOpen(false);
+                        setDeliveryChangeMsg(null);
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                  {deliveryChangeMsg ? (
+                    <p className="text-xs text-gray-600">{deliveryChangeMsg}</p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
           <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
           {order.deliveryPointSnapshot?.detail ? (
             <p className="text-xs text-gray-600">{order.deliveryPointSnapshot.detail}</p>

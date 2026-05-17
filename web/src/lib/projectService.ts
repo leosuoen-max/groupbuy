@@ -21,7 +21,13 @@ import {
   defaultDeliveryDateInput,
   resolveProjectDeliverySlot,
 } from './deliverySlot';
-import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
+import type {
+  BundleToolDoc,
+  ProjectDoc,
+  ProjectKind,
+  ProjectProduct,
+  RecurringDeliveryScheduleDoc,
+} from '../types/firestore';
 
 export type ProjectRow = { id: string; data: ProjectDoc };
 
@@ -240,14 +246,23 @@ export async function copyProjectFromCustomerLinkAsDraft(params: {
     title,
     status: 'draft',
     closesAt: resolveCopyClosesAt(src.closesAt),
-    ...((): Pick<
-      ProjectDoc,
-      'deliveryDate' | 'deliveryPeriod' | 'deliveryTimeText'
-    > => {
-      const slot = resolveProjectDeliverySlot(src);
-      if (slot) return buildProjectDeliveryFields(slot.date, slot.period);
-      return { deliveryTimeText: src.deliveryTimeText ?? '' };
-    })(),
+    ...(src.projectKind === 'recurring' && src.recurringSchedule
+      ? {
+          projectKind: 'recurring' as const,
+          recurringSchedule: { ...src.recurringSchedule },
+          deliveryTimeText:
+            src.recurringSchedule.consumerNoticeText ??
+            src.deliveryTimeText ??
+            '',
+        }
+      : ((): Pick<
+          ProjectDoc,
+          'deliveryDate' | 'deliveryPeriod' | 'deliveryTimeText'
+        > => {
+          const slot = resolveProjectDeliverySlot(src);
+          if (slot) return buildProjectDeliveryFields(slot.date, slot.period);
+          return { deliveryTimeText: src.deliveryTimeText ?? '' };
+        })()),
     maxParticipants: src.maxParticipants ?? null,
     textContent: src.textContent ?? '',
     imageBlocks: [...(src.imageBlocks ?? [])].map((b) => ({ ...b })),
@@ -292,6 +307,8 @@ export async function updateProjectDoc(
     title?: string;
     status?: ProjectDoc['status'];
     closesAt?: Timestamp;
+    projectKind?: ProjectKind;
+    recurringSchedule?: RecurringDeliveryScheduleDoc | null;
     deliveryDate?: string;
     deliveryPeriod?: ProjectDoc['deliveryPeriod'];
     deliveryTimeText?: string;

@@ -17,6 +17,11 @@ import {
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { getDb, getStorageClient } from './firebase';
 import { buildPaymentGroups } from './paymentGroups';
+import {
+  hasOrderDeliverySlotLocked,
+  resolveAndBuildDeliverySlotSnapshot,
+} from './orderDeliverySlot';
+import { isProjectRecurring } from './recurringDeliverySchedule';
 import type {
   BundleSchemeDoc,
   CardLedgerDoc,
@@ -1794,6 +1799,18 @@ export async function applyCardPaymentToOrder(params: {
           ? 'pending'
           : 'partial_paid';
 
+    let deliverySlotPatch: { deliverySlot?: OrderDoc['deliverySlot'] } = {};
+    if (isProjectRecurring(projectPre) && !hasOrderDeliverySlotLocked(order)) {
+      const snapshot = resolveAndBuildDeliverySlotSnapshot(
+        projectPre,
+        now.toDate()
+      );
+      if (!snapshot) {
+        throw new Error('当前时间已超过项目截单，无法完成付款');
+      }
+      deliverySlotPatch = { deliverySlot: snapshot };
+    }
+
     tx.update(orderRef, {
       lines: nextLines,
       appendBatches: nextAppendBatches,
@@ -1807,6 +1824,7 @@ export async function applyCardPaymentToOrder(params: {
         : {}),
       statusHistory: hist,
       updatedAt: serverTimestamp(),
+      ...deliverySlotPatch,
     });
 
     // 7. 项目统计：unpaid - 1, confirmed + 1, confirmedRevenue +

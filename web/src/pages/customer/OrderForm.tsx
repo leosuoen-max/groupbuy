@@ -15,6 +15,11 @@ import {
   listFeituanOrdersForCustomer,
   listOrdersByCustomer,
 } from '../../lib/orderService';
+import { resolveProjectDeliveryLabel } from '../../lib/deliverySlot';
+import {
+  formatEstimatedDeliveryHint,
+  isProjectRecurring,
+} from '../../lib/recurringDeliverySchedule';
 import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
 import { getShopById, getShopBySlug, isShopOpenForCustomers } from '../../lib/shopService';
@@ -370,6 +375,17 @@ export default function OrderForm() {
   }, [project, booting, bootErr, projectId, points, isFeituanOrder, user?.phoneNumber, user?.uid]);
 
   const resolvedProjectTitle = project?.title?.trim() || projectTitleState;
+  const projectDeliveryLabel = useMemo(() => {
+    if (!project) return '—';
+    if (isProjectRecurring(project)) {
+      return formatEstimatedDeliveryHint(project);
+    }
+    return resolveProjectDeliveryLabel(project) || '—';
+  }, [project]);
+  const recurringConsumerNotice = useMemo(() => {
+    if (!project || !isProjectRecurring(project)) return '';
+    return project.recurringSchedule?.consumerNoticeText?.trim() ?? '';
+  }, [project]);
   const canPlaceOrder = project ? projectAllowsCustomerOrder(project) : false;
 
   const totalAmount = useMemo(
@@ -786,6 +802,11 @@ export default function OrderForm() {
       subtitle={`步骤 ${activeStep} / ${stepTotal} · ${resolvedProjectTitle}`}
     >
       {blockedHint}
+      {recurringConsumerNotice ? (
+        <p className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-950">
+          {recurringConsumerNotice}
+        </p>
+      ) : null}
 
       <div className="mb-4 flex gap-2 text-xs text-gray-500">
         {isFeituanOrder ? (
@@ -1527,7 +1548,17 @@ export default function OrderForm() {
               )}
             </p>
             {note.trim() ? <p>备注：{note.trim()}</p> : <p>备注：（无）</p>}
-            <div className="mt-3 font-medium text-gray-900">配送与地址</div>
+            <p className="mt-3">
+              <span className="font-medium text-gray-900">
+                {project && isProjectRecurring(project)
+                  ? '预计配送（按付款时间）：'
+                  : '配送时间：'}
+              </span>
+              <span className={ft('font-semibold text-emerald-800', 'font-medium')}>
+                {projectDeliveryLabel}
+              </span>
+            </p>
+            <div className="mt-3 font-medium text-gray-900">配送地址</div>
             <p className="mt-1">方式：{deliveryLabel}</p>
             <p className="mt-1 break-words">地址：{resolvedCustomerAddress || '—'}</p>
             {isFeituanOrder && deliveryId === OTHER_DELIVERY_ID ? (

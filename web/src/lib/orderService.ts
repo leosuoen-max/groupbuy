@@ -39,8 +39,21 @@ import {
 import { getShopById } from './shopService';
 import {
   buildOrderDeliverySlotSnapshot,
+  hasProjectDeliverySlotConfigured,
   resolveProjectDeliverySlot,
 } from './deliverySlot';
+import {
+  hasOrderDeliverySlotLocked,
+  lockOrderDeliverySlotIfNeeded,
+} from './orderDeliverySlot';
+import {
+  canAppendBeforeSlotCutoff,
+  canChangeDeliverySlot,
+  computeClosesAtDate,
+  getRecurringSchedule,
+  isProjectRecurring,
+  listSlotsAfter,
+} from './recurringDeliverySchedule';
 import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type {
   BundleToolDoc,
@@ -164,6 +177,68 @@ async function autoCancelExpiredTimedPromoOrder(
   return next;
 }
 
+function orderHasPaymentAction(order: OrderDoc): boolean {
+  const shots = Array.isArray(order.paymentScreenshots)
+    ? order.paymentScreenshots
+    : [];
+  if (shots.length > 0) return true;
+  if ((order.feituanWalletPaymentApplications ?? []).length > 0) return true;
+  if ((order.cardPaymentApplications ?? []).length > 0) return true;
+  if (order.cardPayment) return true;
+  return false;
+}
+
+async function autoCancelRecurringUnpaidPastClose(
+  orderRef: ReturnType<typeof doc>,
+  order: OrderDoc,
+  project: ProjectDoc
+): Promise<OrderDoc> {
+  if (order.status === 'cancelled') return order;
+  if (!isProjectRecurring(project)) return order;
+  if (orderHasPaymentAction(order)) return order;
+  if (order.status !== 'unpaid') return order;
+
+  const schedule = getRecurringSchedule(project);
+  if (!schedule) return order;
+  const closes = computeClosesAtDate(schedule);
+  if (!closes || Date.now() < closes.getTime()) return order;
+
+  const hist = [...(order.statusHistory ?? [])];
+  hist.push({
+    action: 'auto_cancel_recurring_unpaid_past_close',
+    timestamp: Timestamp.now(),
+    note: '超过项目最后截单时间仍未付款',
+  });
+  const next: OrderDoc = {
+    ...order,
+    status: 'cancelled',
+    statusHistory: hist,
+    updatedAt: Timestamp.now(),
+  };
+  await updateDoc(orderRef, {
+    status: 'cancelled',
+    statusHistory: hist,
+    updatedAt: serverTimestamp(),
+  });
+  return next;
+}
+
+async function applyOrderAutoCancellations(
+  orderRef: ReturnType<typeof doc>,
+  order: OrderDoc
+): Promise<OrderDoc> {
+  let next = await autoCancelExpiredTimedPromoOrder(orderRef, order);
+  const projectRow = await getProject(next.projectId);
+  if (projectRow) {
+    next = await autoCancelRecurringUnpaidPastClose(
+      orderRef,
+      next,
+      projectRow.data
+    );
+  }
+  return next;
+}
+
 function buildAutoCancelledTimedPromoOrder(order: OrderDoc): OrderDoc | null {
   if (!isTimedPromoPaymentExpired(order)) return null;
   const hist = [...(order.statusHistory ?? [])];
@@ -187,7 +262,7 @@ function ensureProjectCanOrder(project: ProjectDoc): void {
   if (closesAt && closesAt.getTime() <= Date.now()) {
     throw new CreateOrderError('PROJECT_CLOSED');
   }
-  if (!resolveProjectDeliverySlot(project)) {
+  if (!hasProjectDeliverySlotConfigured(project)) {
     throw new CreateOrderError('DELIVERY_SLOT_NOT_CONFIGURED');
   }
 }
@@ -317,8 +392,9 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       input.deliveryPointLabel.trim();
     const snapshotDetail = input.deliverySnapshot?.detail?.trim();
 
-    const projectDeliverySlot = resolveProjectDeliverySlot(project);
-    if (!projectDeliverySlot) {
+    const recurring = isProjectRecurring(project);
+    const oneTimeSlot = recurring ? null : resolveProjectDeliverySlot(project);
+    if (!recurring && !oneTimeSlot) {
       throw new CreateOrderError('DELIVERY_SLOT_NOT_CONFIGURED');
     }
 
@@ -356,7 +432,9 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
         name: snapshotName,
         ...(snapshotDetail ? { detail: snapshotDetail } : {}),
       },
-      deliverySlot: buildOrderDeliverySlotSnapshot(projectDeliverySlot),
+      ...(oneTimeSlot
+        ? { deliverySlot: buildOrderDeliverySlotSnapshot(oneTimeSlot) }
+        : {}),
       isManualMatch: input.isManualMatch,
       paymentScreenshots: [],
       status,
@@ -438,7 +516,7 @@ export async function listOrdersByCustomer(projectId: string, customerKey: strin
     await Promise.all(
       rows.map(async (row) => {
         const orderRef = doc(db, 'orders', row.id);
-        row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+        row.data = await applyOrderAutoCancellations(orderRef, row.data);
       })
     );
     customerOrdersCache.set(ck, { at: Date.now(), rows });
@@ -497,7 +575,7 @@ export async function listFeituanOrdersForCustomer(input: {
   await Promise.all(
     rows.map(async (row) => {
       const orderRef = doc(db, 'orders', row.id);
-      row.data = await autoCancelExpiredTimedPromoOrder(orderRef, row.data);
+      row.data = await applyOrderAutoCancellations(orderRef, row.data);
     })
   );
   return rows;
@@ -585,10 +663,15 @@ export async function customerUploadPaymentScreenshot(input: {
 
   const db = getDb();
   const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const projectRef = doc(db, 'projects', input.projectId);
   const snap = await getDoc(orderRef);
   if (!snap.exists()) throw new Error('订单不存在');
   let order = snap.data() as OrderDoc;
-  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
+  order = await applyOrderAutoCancellations(orderRef, order);
+  const projectSnap = await getDoc(projectRef);
+  const project = projectSnap.exists()
+    ? (projectSnap.data() as ProjectDoc)
+    : null;
 
   if (
     order.projectId !== input.projectId ||
@@ -611,6 +694,7 @@ export async function customerUploadPaymentScreenshot(input: {
   const existingShots = Array.isArray(order.paymentScreenshots)
     ? order.paymentScreenshots
     : [];
+  const isFirstPaymentScreenshot = existingShots.length === 0;
   const dupSameOrder = existingShots.some((s) => {
     if (!s || typeof s !== 'object') return false;
     const h = (s as Record<string, unknown>).md5Hash;
@@ -680,6 +764,20 @@ export async function customerUploadPaymentScreenshot(input: {
     updatedAt: serverTimestamp(),
     ...(nextStatus !== order.status ? { status: nextStatus } : {}),
   });
+
+  if (
+    isFirstPaymentScreenshot &&
+    project &&
+    isProjectRecurring(project) &&
+    !hasOrderDeliverySlotLocked(order)
+  ) {
+    await lockOrderDeliverySlotIfNeeded(
+      orderRef,
+      { ...order, paymentScreenshots: prev },
+      project,
+      uploadedAt.toDate()
+    );
+  }
 }
 
 /** 顾客删除一张付款截图（传错可删）；删光且原为待核实则回到待付款 */
@@ -704,7 +802,7 @@ export async function customerDeletePaymentScreenshot(input: {
   const snap = await getDoc(orderRef);
   if (!snap.exists()) throw new Error('订单不存在');
   let order = snap.data() as OrderDoc;
-  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
+  order = await applyOrderAutoCancellations(orderRef, order);
 
   if (
     order.projectId !== input.projectId ||
@@ -816,7 +914,7 @@ export async function getOrderByNumber(projectId: string, orderNumber: string): 
   const d = snap.docs[0];
   const orderRef = doc(db, 'orders', d.id);
   let data = d.data() as OrderDoc;
-  data = await autoCancelExpiredTimedPromoOrder(orderRef, data);
+  data = await applyOrderAutoCancellations(orderRef, data);
   return { id: d.id, data };
 }
 
@@ -930,6 +1028,81 @@ export async function customerUpdateOrderContact(input: {
   await updateDoc(orderRef, patch);
 }
 
+/** 长期项目：顾客在订单详情更改配送时间（仅往后、当前档截单前） */
+export async function customerUpdateOrderDeliverySlot(input: {
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  customerKey: string;
+  targetDate: string;
+  targetPeriod: 'midday' | 'evening';
+}): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const projectRef = doc(db, 'projects', input.projectId);
+
+  await runTransaction(db, async (tx) => {
+    const [orderSnap, projectSnap] = await Promise.all([
+      tx.get(orderRef),
+      tx.get(projectRef),
+    ]);
+    if (!projectSnap.exists()) throw new Error('项目不存在');
+    if (!orderSnap.exists()) throw new Error('订单不存在');
+
+    const project = projectSnap.data() as ProjectDoc;
+    const order = orderSnap.data() as OrderDoc;
+
+    if (
+      order.projectId !== input.projectId ||
+      order.orderNumber !== input.orderNumber
+    ) {
+      throw new Error('订单信息不匹配');
+    }
+    if (order.customerKey !== input.customerKey) {
+      throw new Error('仅下单本人可修改（请使用同一浏览器）');
+    }
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+    if (!isProjectRecurring(project)) {
+      throw new Error('仅长期项目订单可更改配送时间');
+    }
+    if (!hasOrderDeliverySlotLocked(order)) {
+      throw new Error('请先完成付款以确定配送时间');
+    }
+    if (!orderHasPaymentAction(order)) {
+      throw new Error('请先完成付款动作后再更改配送时间');
+    }
+
+    const schedule = getRecurringSchedule(project);
+    if (!schedule) throw new Error('项目配送配置无效');
+
+    const current = {
+      date: order.deliverySlot!.date,
+      period: order.deliverySlot!.period,
+    };
+    if (!canChangeDeliverySlot(current, schedule)) {
+      throw new Error('已超过本单配送截单时间，无法更改');
+    }
+
+    const target = {
+      date: input.targetDate.trim(),
+      period: input.targetPeriod,
+    };
+    const allowed = listSlotsAfter(current, schedule);
+    if (
+      !allowed.some(
+        (s) => s.date === target.date && s.period === target.period
+      )
+    ) {
+      throw new Error('仅能改到更晚的配送档');
+    }
+
+    tx.update(orderRef, {
+      deliverySlot: buildOrderDeliverySlotSnapshot(target),
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
 /** 顾客加购（仅加数量、扣库存；已确认订单会变为待补付款） */
 export async function customerAppendLinesToOrder(input: {
   orderFirestoreId: string;
@@ -974,6 +1147,21 @@ export async function customerAppendLinesToOrder(input: {
       order.status !== 'partial_paid'
     ) {
       throw new Error('当前状态不可加菜');
+    }
+
+    if (
+      isProjectRecurring(project) &&
+      hasOrderDeliverySlotLocked(order)
+    ) {
+      const schedule = getRecurringSchedule(project);
+      if (!schedule) throw new Error('项目配送配置无效');
+      const slot = {
+        date: order.deliverySlot!.date,
+        period: order.deliverySlot!.period,
+      };
+      if (!canAppendBeforeSlotCutoff(slot, schedule)) {
+        throw new Error('已超过本单配送截单时间，无法加购，请重新下单');
+      }
     }
 
     const newLineDocs = toOrderLines(input.additionalLines);
@@ -1318,7 +1506,7 @@ export async function merchantAssignManualDeliveryMatch(input: {
   const snap = await getDoc(orderRef);
   if (!snap.exists()) throw new Error('订单不存在');
   let order = snap.data() as OrderDoc;
-  order = await autoCancelExpiredTimedPromoOrder(orderRef, order);
+  order = await applyOrderAutoCancellations(orderRef, order);
 
   await assertMerchantCanManageOrder(input.actorUserId, order);
 

@@ -15,6 +15,8 @@ import { getShopById, type ShopRow } from '../lib/shopService';
 import { buildWechatShareCardFromProject } from '../lib/wechatShareMeta';
 import { formatMYR } from '../lib/formatMYR';
 import { formatRemainingShort } from '../lib/countdown';
+import { resolveProjectDeliveryLabel } from '../lib/deliverySlot';
+import { isProjectRecurring } from '../lib/recurringDeliverySchedule';
 import { FEITUAN_TW } from '../lib/feituanHomeTheme';
 import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../lib/shopTheme';
 import {
@@ -305,7 +307,9 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
       status: resolveProjectStatus(p, now),
       closesAt: p.closesAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
       orderCount: p.stats?.totalOrders ?? 0,
-      deliveryLabel: '按配送点',
+      deliveryLabel: isProjectRecurring(p)
+        ? resolveProjectDeliveryLabel(p).slice(0, 24) || '多次配送'
+        : resolveProjectDeliveryLabel(p) || '按配送点',
       textContent: p.textContent?.trim() || undefined,
       imageBlocks:
         p.imageBlocks
@@ -517,6 +521,15 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
               now={now}
               accentColor={shopHomeData.themeColor}
             />
+
+            {project?.data.projectKind === 'recurring' &&
+            project?.data.recurringSchedule?.consumerNoticeText?.trim() ? (
+              <section className="px-4 pb-2 pt-1" aria-label="配送说明">
+                <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-3.5 py-2.5 text-xs leading-relaxed text-emerald-950">
+                  {project.data.recurringSchedule.consumerNoticeText.trim()}
+                </p>
+              </section>
+            ) : null}
 
             {hasProjectDescription ? (
               <>

@@ -1,5 +1,10 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { OrderDoc, ProjectDoc } from '../types/firestore';
+import {
+  getRecurringSchedule,
+  isProjectRecurring,
+  validateRecurringSchedule,
+} from './recurringDeliverySchedule';
 
 /** 配送时段：中午 / 傍晚（展示文案，非餐饮专用「午餐/晚餐」） */
 export type DeliverySlotPeriod = 'midday' | 'evening';
@@ -94,8 +99,15 @@ export function buildProjectDeliveryFields(
 }
 
 export function hasProjectDeliverySlotConfigured(
-  project: Pick<ProjectDoc, 'deliveryDate' | 'deliveryPeriod'>
+  project: Pick<
+    ProjectDoc,
+    'projectKind' | 'deliveryDate' | 'deliveryPeriod' | 'recurringSchedule'
+  >
 ): boolean {
+  if (isProjectRecurring(project)) {
+    const schedule = getRecurringSchedule(project);
+    return schedule != null && validateRecurringSchedule(schedule) === null;
+  }
   if (!project.deliveryDate?.trim() || !project.deliveryPeriod) return false;
   return parseDeliveryDateLocal(project.deliveryDate) != null;
 }
@@ -157,10 +169,25 @@ export function inferDeliverySlotFromLegacy(
 }
 
 export function resolveProjectDeliverySlot(
-  project: Pick<ProjectDoc, 'deliveryDate' | 'deliveryPeriod' | 'deliveryTimeText'> & {
+  project: Pick<
+    ProjectDoc,
+    | 'projectKind'
+    | 'deliveryDate'
+    | 'deliveryPeriod'
+    | 'deliveryTimeText'
+    | 'recurringSchedule'
+  > & {
     closesAt?: ProjectDoc['closesAt'];
   }
 ): ProjectDeliverySlot | null {
+  if (isProjectRecurring(project)) {
+    const schedule = getRecurringSchedule(project);
+    if (!schedule) return null;
+    return {
+      date: schedule.firstDeliveryDate,
+      period: schedule.firstDeliveryPeriod,
+    };
+  }
   if (
     hasProjectDeliverySlotConfigured(project) &&
     project.deliveryPeriod
@@ -177,10 +204,28 @@ export function resolveProjectDeliverySlot(
 }
 
 export function resolveProjectDeliveryLabel(
-  project: Pick<ProjectDoc, 'deliveryDate' | 'deliveryPeriod' | 'deliveryTimeText'> & {
+  project: Pick<
+    ProjectDoc,
+    | 'projectKind'
+    | 'deliveryDate'
+    | 'deliveryPeriod'
+    | 'deliveryTimeText'
+    | 'recurringSchedule'
+  > & {
     closesAt?: ProjectDoc['closesAt'];
   }
 ): string {
+  if (isProjectRecurring(project)) {
+    const schedule = getRecurringSchedule(project);
+    if (schedule?.consumerNoticeText?.trim()) {
+      return schedule.consumerNoticeText.trim();
+    }
+    const slot = resolveProjectDeliverySlot(project);
+    if (slot) {
+      return `首次配送 ${formatDeliverySlotLabel(slot.date, slot.period)}`;
+    }
+    return '';
+  }
   const slot = resolveProjectDeliverySlot(project);
   if (slot) return formatDeliverySlotLabel(slot.date, slot.period);
   return project.deliveryTimeText?.trim() ?? '';

@@ -12,6 +12,16 @@ import { attachCustomerCardsToPhoneUser } from '../lib/cardService';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
 import { getAuthClient } from '../lib/firebase';
 import { attachCustomerOrdersToPhoneUser } from '../lib/orderService';
+import { PhoneCountryInput } from '../components/PhoneCountryInput';
+import {
+  DEFAULT_PHONE_COUNTRY_INPUT,
+  type PhoneCountryInputValue,
+} from '../lib/phoneCountries';
+import {
+  formatFirebasePhoneAuthError,
+  phoneCountryValueToE164,
+  validatePhoneCountryParts,
+} from '../lib/phoneE164';
 import { getRegisteredUser } from '../lib/registeredUserService';
 import { buildWechatBindStartUrl, finalizeWechatBind } from '../lib/wechatService';
 import type { RegisteredUserDoc } from '../types/firestore';
@@ -26,16 +36,6 @@ function safeReturnTo(raw: string | null, fallback: string): string {
   if (!raw) return fallback;
   if (!raw.startsWith('/') || raw.startsWith('//')) return fallback;
   return raw;
-}
-
-function normalizePhone(raw: string): string {
-  const v = raw.replace(/\s+/g, '');
-  if (v.startsWith('+')) return `+${v.slice(1).replace(/[^\d]/g, '')}`;
-  const digits = v.replace(/[^\d]/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('60')) return `+${digits}`;
-  if (digits.startsWith('0')) return `+60${digits.slice(1)}`;
-  return `+60${digits}`;
 }
 
 function maskPhone(phone: string): string {
@@ -60,7 +60,9 @@ export default function AccountCenter({
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const handledWechatBindCodeRef = useRef('');
   const claimedOrdersUserRef = useRef('');
-  const [phone, setPhone] = useState('');
+  const [phoneParts, setPhoneParts] = useState<PhoneCountryInputValue>(
+    DEFAULT_PHONE_COUNTRY_INPUT
+  );
   const [code, setCode] = useState('');
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -69,7 +71,7 @@ export default function AccountCenter({
   const [profileLoading, setProfileLoading] = useState(false);
   const [wechatBusy, setWechatBusy] = useState(false);
   const [wechatMsg, setWechatMsg] = useState<string | null>(null);
-  const phoneE164 = useMemo(() => normalizePhone(phone), [phone]);
+  const phoneE164 = useMemo(() => phoneCountryValueToE164(phoneParts), [phoneParts]);
   const hasPhone = Boolean(user?.phoneNumber);
   const wxOpenId = profile?.wxOpenId?.trim() ?? '';
   const wechatBindCode = search.get('wechatBindCode')?.trim() ?? '';
@@ -116,8 +118,9 @@ export default function AccountCenter({
   };
 
   const sendCode = async () => {
-    if (!phoneE164 || !phoneE164.startsWith('+')) {
-      setMsg('请输入手机号；马来西亚本地号码可直接写 01…，系统会转为 +60。');
+    const localErr = validatePhoneCountryParts(phoneParts);
+    if (localErr) {
+      setMsg(localErr);
       return;
     }
     setBusy(true);
@@ -129,7 +132,7 @@ export default function AccountCenter({
     } catch (e) {
       recaptchaRef.current?.clear();
       recaptchaRef.current = null;
-      setMsg(e instanceof Error ? e.message : '发送验证码失败');
+      setMsg(formatFirebasePhoneAuthError(e));
     } finally {
       setBusy(false);
     }
@@ -152,7 +155,7 @@ export default function AccountCenter({
       await claimCurrentVisitorOrders(cred.user.uid, cred.user.phoneNumber);
       navigate(returnTo, { replace: true });
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : '验证码校验失败');
+      setMsg(formatFirebasePhoneAuthError(e));
     } finally {
       setBusy(false);
     }
@@ -266,15 +269,18 @@ export default function AccountCenter({
             <p className="mb-3 text-xs leading-relaxed text-gray-500">
               充值钱包、使用余额、商户注册和管理员权限都需要手机号。验证后会进入该手机号对应的正式账号。
             </p>
-            <label className="block text-sm text-gray-800">
-              手机号
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+60123456789 或 0123456789"
-                className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-3 text-[16px] outline-none focus:border-orange-300"
+            <div className="text-sm text-gray-800">
+              <span className="mb-1 block">手机号</span>
+              <PhoneCountryInput
+                value={phoneParts}
+                onChange={setPhoneParts}
+                disabled={busy}
+                className="mt-1"
               />
-            </label>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500">
+                默认马来西亚（+60）。中国用户请选择 +86 后填写 11 位手机号；其他国家可选「其他」并填写区号。
+              </p>
+            </div>
             <button
               type="button"
               disabled={busy}

@@ -8,6 +8,16 @@ import {
 } from 'firebase/auth';
 import { PageShell } from '../components/PageShell';
 import { getAuthClient } from '../lib/firebase';
+import { PhoneCountryInput } from '../components/PhoneCountryInput';
+import {
+  DEFAULT_PHONE_COUNTRY_INPUT,
+  type PhoneCountryInputValue,
+} from '../lib/phoneCountries';
+import {
+  formatFirebasePhoneAuthError,
+  phoneCountryValueToE164,
+  validatePhoneCountryParts,
+} from '../lib/phoneE164';
 import {
   consumeSignupInvite,
   getInviteGate,
@@ -17,17 +27,6 @@ function safeReturnTo(raw: string | null): string {
   if (!raw) return '/dashboard';
   if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
   return raw;
-}
-
-function normalizePhone(raw: string): string {
-  const v = raw.replace(/\s+/g, '');
-  if (v.startsWith('+')) return `+${v.slice(1).replace(/[^\d]/g, '')}`;
-  const digits = v.replace(/[^\d]/g, '');
-  if (!digits) return '';
-  // 默认马来西亚区号：本地手机常为 01x…（如 012、017），此处省略 + 时按 +60 解析
-  if (digits.startsWith('60')) return `+${digits}`;
-  if (digits.startsWith('0')) return `+60${digits.slice(1)}`;
-  return `+60${digits}`;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -59,7 +58,9 @@ export default function Register() {
     : safeReturnTo(searchParams.get('returnTo'));
   const auth = getAuthClient();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
-  const [phone, setPhone] = useState('');
+  const [phoneParts, setPhoneParts] = useState<PhoneCountryInputValue>(
+    DEFAULT_PHONE_COUNTRY_INPUT
+  );
   const [code, setCode] = useState('');
   const [confirmResult, setConfirmResult] = useState<ConfirmationResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -69,7 +70,7 @@ export default function Register() {
   >(() => (inviteToken ? 'checking' : 'idle'));
   const [inviteErr, setInviteErr] = useState<string | null>(null);
 
-  const phoneE164 = useMemo(() => normalizePhone(phone), [phone]);
+  const phoneE164 = useMemo(() => phoneCountryValueToE164(phoneParts), [phoneParts]);
 
   useEffect(() => {
     if (!inviteToken) {
@@ -118,8 +119,9 @@ export default function Register() {
   };
 
   const sendCode = async () => {
-    if (!phoneE164 || !phoneE164.startsWith('+')) {
-      setMsg('请输入手机号：建议用国际格式 +区号号码（如 +8613800138000、+60123456789）；马来西亚本地也可写 01…（0 开头会转为 +60）。');
+    const localErr = validatePhoneCountryParts(phoneParts);
+    if (localErr) {
+      setMsg(localErr);
       return;
     }
     setBusy(true);
@@ -132,7 +134,7 @@ export default function Register() {
     } catch (e) {
       recaptchaRef.current?.clear();
       recaptchaRef.current = null;
-      setMsg(e instanceof Error ? e.message : '发送验证码失败');
+      setMsg(formatFirebasePhoneAuthError(e));
     } finally {
       setBusy(false);
     }
@@ -236,24 +238,21 @@ export default function Register() {
       }
     >
       <div className="space-y-3">
-        <label className="block text-sm text-gray-800">
-          手机号
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="例如 +8613800138000 或 +60123456789"
-            className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-3 text-sm outline-none focus:border-indigo-300"
+        <div className="text-sm text-gray-800">
+          <span className="mb-1 block">手机号</span>
+          <PhoneCountryInput
+            value={phoneParts}
+            onChange={setPhoneParts}
+            disabled={busy}
+            className="mt-1"
+            selectClassName="focus:border-indigo-300"
+            inputClassName="focus:border-indigo-300"
+            dialInputClassName="focus:border-indigo-300"
           />
-        </label>
-        <p className="text-[11px] leading-relaxed text-gray-500">
-          <strong>012</strong> 等指<strong>马来西亚本地手机常见前缀</strong>（<code className="rounded bg-gray-100 px-0.5">01x…</code>
-          ，不同运营商为 010/011/012/013/014/016/017/018/019 等）。不写 <code className="rounded bg-gray-100 px-0.5">+</code> 且以{' '}
-          <code className="rounded bg-gray-100 px-0.5">0</code> 开头时，本页会<strong>按马来西亚 +60</strong>自动补区号。
-        </p>
-        <p className="text-[11px] leading-relaxed text-gray-500">
-          <strong>其他国家/地区</strong>：请写完整<strong>国际 E.164</strong>（<code className="rounded bg-gray-100 px-0.5">+</code>
-          国家码 + 号码，中间可空格）。能否收到短信以 <strong>Firebase 手机验证</strong> 对该号码的支持为准，全球多数国家/地区可用，少数号段或风控下可能失败。
-        </p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-gray-500">
+            默认 +60 马来西亚；本地号可写 <strong>012…</strong>（会自动去掉首位 0）。中国选 +86 后填 11 位；其他国家请在下拉框选择或选「其他」填写区号。能否收到短信以 Firebase 支持为准。
+          </p>
+        </div>
         <button
           type="button"
           disabled={busy}

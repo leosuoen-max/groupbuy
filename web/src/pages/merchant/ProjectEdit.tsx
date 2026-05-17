@@ -40,11 +40,19 @@ import {
   resolveProjectDeliverySlot,
   type DeliverySlotPeriod,
 } from '../../lib/deliverySlot';
-import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../../types/firestore';
+import { computeClosesAtDate, validateRecurringSchedule } from '../../lib/recurringDeliverySchedule';
+import type { BundleToolDoc, ProjectDoc, ProjectKind, ProjectProduct } from '../../types/firestore';
 import {
   DescriptionLineEditor,
   type DescriptionLineEditorHandle,
 } from '../../components/merchant/DescriptionLineEditor';
+import {
+  RecurringProjectScheduleFields,
+  buildScheduleFromForm,
+  defaultRecurringForm,
+  recurringFormFromSchedule,
+  type RecurringFormState,
+} from '../../components/merchant/RecurringProjectScheduleFields';
 
 /** 本地草稿写入 sessionStorage 的防抖间隔（毫秒），减轻主线程 JSON 序列化压力 */
 const PROJECT_EDIT_DRAFT_DEBOUNCE_MS = 400;
@@ -64,6 +72,43 @@ function validateProjectDeliveryInput(
     return '请选择中午或傍晚配送';
   }
   return null;
+}
+
+function buildDeliverySavePatch(
+  kind: ProjectKind,
+  closesAtLocal: string,
+  oneTime: { date: string; period: DeliverySlotPeriod },
+  recurring: RecurringFormState
+): { error: string | null; patch: Parameters<typeof updateProjectDoc>[1] } {
+  if (kind === 'recurring') {
+    const schedule = buildScheduleFromForm(recurring);
+    const err = validateRecurringSchedule(schedule);
+    if (err) return { error: err, patch: {} };
+    const closes = computeClosesAtDate(schedule);
+    if (!closes) return { error: '无法计算项目截单时间', patch: {} };
+    return {
+      error: null,
+      patch: {
+        projectKind: 'recurring',
+        recurringSchedule: schedule,
+        closesAt: Timestamp.fromDate(closes),
+        deliveryTimeText: schedule.consumerNoticeText,
+      },
+    };
+  }
+  const deliveryErr = validateProjectDeliveryInput(oneTime.date, oneTime.period);
+  if (deliveryErr) return { error: deliveryErr, patch: {} };
+  const d = new Date(closesAtLocal);
+  if (Number.isNaN(d.getTime())) return { error: '截止时间无效', patch: {} };
+  return {
+    error: null,
+    patch: {
+      projectKind: 'one_time',
+      recurringSchedule: null,
+      closesAt: Timestamp.fromDate(d),
+      ...buildProjectDeliveryFields(oneTime.date.trim(), oneTime.period),
+    },
+  };
 }
 
 function tsToDatetimeLocalInput(
@@ -386,6 +431,10 @@ export default function ProjectEdit() {
   );
   const [deliveryDate, setDeliveryDate] = useState(() => defaultDeliveryDateInput());
   const [deliveryPeriod, setDeliveryPeriod] = useState<DeliverySlotPeriod>('midday');
+  const [projectKind, setProjectKind] = useState<ProjectKind>('one_time');
+  const [recurringForm, setRecurringForm] = useState<RecurringFormState>(
+    defaultRecurringForm
+  );
   const [textContent, setTextContent] = useState('');
   const [descriptionAssets, setDescriptionAssets] = useState<DescriptionAsset[]>([]);
   const [imageBlocks, setImageBlocks] = useState<ProjectImageBlock[]>([]);
@@ -601,6 +650,12 @@ export default function ProjectEdit() {
         row.data.deliveryTimeText,
         row.data.closesAt?.toDate?.() ?? null
       );
+    setProjectKind(row.data.projectKind === 'recurring' ? 'recurring' : 'one_time');
+    if (row.data.recurringSchedule) {
+      setRecurringForm(recurringFormFromSchedule(row.data.recurringSchedule));
+    } else {
+      setRecurringForm(defaultRecurringForm());
+    }
     if (slot) {
       setDeliveryDate(slot.date);
       setDeliveryPeriod(slot.period);
@@ -616,9 +671,16 @@ export default function ProjectEdit() {
     setStatus(row.data.status);
     setFeituanStatus(row.data.feituanStatus);
     setFeituanCostConfirmedAt(row.data.feituanCostConfirmedAt);
-    setClosesAt(
-      toDatetimeLocalValue(row.data.closesAt?.toDate?.() ?? new Date())
-    );
+    if (row.data.projectKind === 'recurring' && row.data.recurringSchedule) {
+      const closes = computeClosesAtDate(row.data.recurringSchedule);
+      setClosesAt(
+        toDatetimeLocalValue(closes ?? row.data.closesAt?.toDate?.() ?? new Date())
+      );
+    } else {
+      setClosesAt(
+        toDatetimeLocalValue(row.data.closesAt?.toDate?.() ?? new Date())
+      );
+    }
     const ps = row.data.products?.length
       ? row.data.products
       : [newProduct(0)];
@@ -1014,6 +1076,26 @@ export default function ProjectEdit() {
     );
   }, [mixedSortPreview, selectedCatalogMixKey]);
 
+  const projectKindLocked =
+    status !== 'draft' || feituanStatus === 'listed';
+  const recurringSchedulePreview = useMemo(() => {
+    if (projectKind !== 'recurring') return null;
+    const schedule = buildScheduleFromForm(recurringForm);
+    return {
+      schedule,
+      err: validateRecurringSchedule(schedule),
+      closesAt: computeClosesAtDate(schedule),
+      notice: schedule.consumerNoticeText,
+    };
+  }, [projectKind, recurringForm]);
+
+  useEffect(() => {
+    if (projectKind !== 'recurring') return;
+    const closes = recurringSchedulePreview?.closesAt;
+    if (!closes) return;
+    setClosesAt(toDatetimeLocalValue(closes));
+  }, [projectKind, recurringSchedulePreview?.closesAt?.getTime()]);
+
   useEffect(() => {
     if (!selectedCatalogMixKey) return;
     const ok = mixedSortPreview.some(
@@ -1345,7 +1427,12 @@ export default function ProjectEdit() {
       focusValidationTarget(promotionValidation.key);
       return;
     }
-    const deliveryErr = validateProjectDeliveryInput(deliveryDate, deliveryPeriod);
+    const { error: deliveryErr, patch: deliveryPatch } = buildDeliverySavePatch(
+      projectKind,
+      closesAt,
+      { date: deliveryDate, period: deliveryPeriod },
+      recurringForm
+    );
     if (deliveryErr) {
       setMsg(deliveryErr);
       return;
@@ -1354,11 +1441,9 @@ export default function ProjectEdit() {
     setSaving(true);
     setMsg(null);
     try {
-      const d = new Date(closesAt);
       await updateProjectDoc(resolvedPid, {
         title: title.trim() || '未命名项目',
-        closesAt: Timestamp.fromDate(d),
-        ...buildProjectDeliveryFields(deliveryDate.trim(), deliveryPeriod),
+        ...deliveryPatch,
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts.length ? normalizedProducts : [],
@@ -1398,7 +1483,12 @@ export default function ProjectEdit() {
     }
     setValidationHighlightKey(null);
     const t = title.trim();
-    const deliveryErr = validateProjectDeliveryInput(deliveryDate, deliveryPeriod);
+    const { error: deliveryErr, patch: deliveryPatch } = buildDeliverySavePatch(
+      projectKind,
+      closesAt,
+      { date: deliveryDate, period: deliveryPeriod },
+      recurringForm
+    );
     if (!t) {
       setMsg('请填写项目标题');
       return;
@@ -1414,11 +1504,9 @@ export default function ProjectEdit() {
     setPublishing(true);
     setMsg(null);
     try {
-      const d = new Date(closesAt);
       await updateProjectDoc(resolvedPid, {
         title: t,
-        closesAt: Timestamp.fromDate(d),
-        ...buildProjectDeliveryFields(deliveryDate.trim(), deliveryPeriod),
+        ...deliveryPatch,
         textContent: composeDescription(),
         imageBlocks,
         products: normalizedProducts,
@@ -1542,6 +1630,38 @@ export default function ProjectEdit() {
           项目标题
           <input className={input} value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
+        <fieldset className="block text-sm font-medium text-gray-800">
+          <legend className="mb-2">项目类型</legend>
+          <div className="flex flex-wrap gap-3 font-normal">
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50">
+              <input
+                type="radio"
+                name="projectKind"
+                checked={projectKind === 'one_time'}
+                disabled={projectKindLocked}
+                onChange={() => setProjectKind('one_time')}
+              />
+              临时项目
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-50">
+              <input
+                type="radio"
+                name="projectKind"
+                checked={projectKind === 'recurring'}
+                disabled={projectKindLocked}
+                onChange={() => setProjectKind('recurring')}
+              />
+              长期项目
+            </label>
+          </div>
+          {projectKindLocked ? (
+            <p className="mt-2 text-xs font-normal text-gray-500">
+              已发布或已上架后不可切换类型。
+            </p>
+          ) : null}
+        </fieldset>
+        {projectKind === 'one_time' ? (
+          <>
         <label className="block text-sm font-medium text-gray-800">
           截止时间（本地时间）
           <input
@@ -1593,6 +1713,21 @@ export default function ProjectEdit() {
             </p>
           ) : null}
         </fieldset>
+          </>
+        ) : (
+          <RecurringProjectScheduleFields
+            inputClass={input}
+            form={recurringForm}
+            onChange={setRecurringForm}
+            closesAtLabel={
+              recurringSchedulePreview?.closesAt
+                ? recurringSchedulePreview.closesAt.toLocaleString('zh-CN')
+                : '—'
+            }
+            validationError={recurringSchedulePreview?.err ?? null}
+            consumerNotice={recurringSchedulePreview?.notice}
+          />
+        )}
         <section className="rounded-2xl border border-gray-100 bg-gradient-to-b from-gray-50 to-white p-3.5 shadow-sm">
           <div className="mb-2 text-base font-semibold text-gray-900">项目 Banner 与说明</div>
           <div className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">

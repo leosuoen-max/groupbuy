@@ -20,6 +20,11 @@ import type { User } from 'firebase/auth';
 import { getDb, getStorageClient } from './firebase';
 import { isFeituanAdmin } from './feituanService';
 import { buildPaymentGroups } from './paymentGroups';
+import {
+  hasOrderDeliverySlotLocked,
+  resolveAndBuildDeliverySlotSnapshot,
+} from './orderDeliverySlot';
+import { isProjectRecurring } from './recurringDeliverySchedule';
 import type {
   FeituanWalletAccountDoc,
   FeituanWalletAppliedTierDoc,
@@ -794,6 +799,18 @@ export async function applyFeituanWalletPaymentToOrder(params: {
           ? 'pending'
           : 'partial_paid';
 
+    let deliverySlotPatch: { deliverySlot?: OrderDoc['deliverySlot'] } = {};
+    if (isProjectRecurring(project) && !hasOrderDeliverySlotLocked(order)) {
+      const snapshot = resolveAndBuildDeliverySlotSnapshot(
+        project,
+        now.toDate()
+      );
+      if (!snapshot) {
+        throw new Error('当前时间已超过项目截单，无法完成付款');
+      }
+      deliverySlotPatch = { deliverySlot: snapshot };
+    }
+
     tx.update(orderRef, {
       customerUserId: params.userId,
       customerPhoneMasked: wallet.phoneMasked ?? null,
@@ -810,6 +827,7 @@ export async function applyFeituanWalletPaymentToOrder(params: {
         : {}),
       statusHistory: history,
       updatedAt: serverTimestamp(),
+      ...deliverySlotPatch,
     });
 
     const prevStats = project.stats ?? {
