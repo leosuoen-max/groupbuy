@@ -704,6 +704,10 @@ export type OrderDoc = {
     period: 'midday' | 'evening';
     label: string;
   };
+  /** 饭团购物车合并付款批次号 */
+  paymentRef?: string;
+  /** 同批次订单总数（合并付 UI） */
+  paymentBatchSize?: number;
   isManualMatch: boolean;
   paymentScreenshots: unknown[];
   /** 每次卡支付一条，按时间追加；与支付组一一留痕，参见 orderCardPaymentApplications */

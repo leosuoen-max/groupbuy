@@ -857,3 +857,286 @@ export async function applyFeituanWalletPaymentToOrder(params: {
 
   return { confirmed: true, deducted };
 }
+
+export type FeituanWalletCartPaymentPlan =
+  | {
+      ok: true;
+      balance: number;
+      payAmount: number;
+      orderCount: number;
+    }
+  | {
+      ok: false;
+      reason: string;
+      balance: number;
+      payAmount: number;
+      gap: number;
+      message: string;
+    };
+
+export async function planFeituanWalletPaymentForPaymentRef(
+  orders: OrderDoc[],
+  userId: string
+): Promise<FeituanWalletCartPaymentPlan> {
+  if (!userId) {
+    return {
+      ok: false,
+      reason: 'login_required',
+      balance: 0,
+      payAmount: 0,
+      gap: 0,
+      message: '请先用手机号登录后再使用饭团钱包',
+    };
+  }
+  const account = await getFeituanWalletAccount(userId);
+  let payAmount = 0;
+  for (const order of orders) {
+    if (order.status === 'cancelled') continue;
+    const groups = buildPaymentGroups(order);
+    payAmount += groups
+      .filter((g) => g.status === 'unpaid')
+      .reduce((sum, g) => sum + Number(g.subtotal ?? 0), 0);
+  }
+  payAmount = ROUND2(payAmount);
+  if (payAmount <= 0) {
+    return {
+      ok: false,
+      reason: 'no_unpaid',
+      balance: account?.data.balance ?? 0,
+      payAmount: 0,
+      gap: 0,
+      message: '当前没有待付款金额',
+    };
+  }
+  if (!account) {
+    return {
+      ok: false,
+      reason: 'no_wallet',
+      balance: 0,
+      payAmount,
+      gap: payAmount,
+      message: '尚未开通饭团钱包，请先充值',
+    };
+  }
+  const balance = ROUND2(Number(account.data.balance ?? 0));
+  if (account.data.status !== 'active') {
+    return {
+      ok: false,
+      reason: 'disabled',
+      balance,
+      payAmount,
+      gap: payAmount,
+      message: '饭团钱包已停用',
+    };
+  }
+  if (balance + 0.0001 < payAmount) {
+    return {
+      ok: false,
+      reason: 'insufficient',
+      balance,
+      payAmount,
+      gap: ROUND2(payAmount - balance),
+      message: `钱包余额不足，差 RM ${ROUND2(payAmount - balance).toFixed(2)}`,
+    };
+  }
+  return {
+    ok: true,
+    balance,
+    payAmount,
+    orderCount: orders.filter((o) => o.status !== 'cancelled').length,
+  };
+}
+
+/** 饭团购物车：一次扣款，确认同 paymentRef 下所有待付订单 */
+export async function applyFeituanWalletPaymentToPaymentRef(params: {
+  paymentRef: string;
+  userId: string;
+  customerKey: string;
+  orderIds: string[];
+}): Promise<{ confirmed: true; deducted: number }> {
+  const db = getDb();
+  const walletRef = doc(db, ACCOUNTS_COLL, params.userId);
+  const ledgerRef = doc(collection(db, LEDGER_COLL));
+  let deducted = 0;
+
+  await runTransaction(db, async (tx) => {
+    const walletSnap = await tx.get(walletRef);
+    if (!walletSnap.exists()) throw new Error('请先充值开通饭团钱包');
+    const wallet = walletSnap.data() as FeituanWalletAccountDoc;
+    if (wallet.status !== 'active') throw new Error('钱包已停用');
+    if (wallet.userId !== params.userId) throw new Error('钱包账户不匹配');
+
+    const orderSnaps = await Promise.all(
+      params.orderIds.map((id) => tx.get(doc(db, 'orders', id)))
+    );
+    const orders: { id: string; data: OrderDoc; ref: ReturnType<typeof doc> }[] =
+      [];
+    for (let i = 0; i < orderSnaps.length; i++) {
+      const snap = orderSnaps[i]!;
+      if (!snap.exists()) throw new Error('订单不存在');
+      const data = snap.data() as OrderDoc;
+      if (data.paymentRef !== params.paymentRef) {
+        throw new Error('订单批次不一致');
+      }
+      if (data.customerKey !== params.customerKey) {
+        throw new Error('无权操作他人订单');
+      }
+      if (data.channel !== 'feituan') throw new Error('仅饭团订单可用饭团钱包');
+      if (data.status === 'cancelled') continue;
+      orders.push({ id: params.orderIds[i]!, data, ref: doc(db, 'orders', params.orderIds[i]!) });
+    }
+
+    let totalPay = 0;
+    const perOrderPay = new Map<string, number>();
+    for (const row of orders) {
+      const groups = buildPaymentGroups(row.data);
+      const unpaid = groups.filter((g) => g.status === 'unpaid');
+      const pay = ROUND2(
+        unpaid.reduce((sum, g) => sum + Number(g.subtotal ?? 0), 0)
+      );
+      if (pay > 0) {
+        perOrderPay.set(row.id, pay);
+        totalPay = ROUND2(totalPay + pay);
+      }
+    }
+    if (totalPay <= 0) throw new Error('当前没有待付款金额');
+    if (ROUND2(Number(wallet.balance ?? 0)) + 0.0001 < totalPay) {
+      throw new Error('钱包余额不足，请先充值');
+    }
+
+    const now = Timestamp.now();
+    const nextBalance = ROUND2(Number(wallet.balance ?? 0) - totalPay);
+    const nextTotalSpent = ROUND2(Number(wallet.totalSpentAmount ?? 0) + totalPay);
+
+    tx.update(walletRef, {
+      balance: nextBalance,
+      totalSpentAmount: nextTotalSpent,
+      updatedAt: serverTimestamp(),
+    });
+    tx.set(ledgerRef, {
+      userId: params.userId,
+      walletId: params.userId,
+      phoneMasked: wallet.phoneMasked ?? null,
+      type: 'order_payment',
+      delta: -totalPay,
+      balanceAfter: nextBalance,
+      orderId: orders[0]?.id ?? '',
+      orderNumber: orders.map((o) => o.data.orderNumber).join(','),
+      orderProjectId: orders[0]?.data.projectId ?? '',
+      note: `饭团购物车合并付 ${orders.length} 单 · RM ${totalPay.toFixed(2)}`,
+      createdAt: serverTimestamp(),
+    } satisfies Omit<FeituanWalletLedgerDoc, 'createdAt'> & {
+      createdAt: ReturnType<typeof serverTimestamp>;
+    });
+
+    for (const row of orders) {
+      const payAmount = perOrderPay.get(row.id) ?? 0;
+      if (payAmount <= 0) continue;
+
+      const projectRef = doc(db, 'projects', row.data.projectId);
+      const projectSnap = await tx.get(projectRef);
+      if (!projectSnap.exists()) throw new Error('项目不存在');
+      const project = projectSnap.data() as ProjectDoc;
+
+      const groupsBefore = buildPaymentGroups(row.data);
+      const unpaidGroups = groupsBefore.filter((g) => g.status === 'unpaid');
+      const autoConfirmAppendIds = new Set(
+        unpaidGroups.flatMap((g) => g.appendBatchIds)
+      );
+      const autoConfirmInitial = unpaidGroups.some((g) => g.includesInitial);
+      const hasPendingProofBefore = groupsBefore.some((g) => g.status === 'pending');
+
+      const scope = {
+        includesInitialSegment: autoConfirmInitial,
+        confirmedAppendBatchIds: [...autoConfirmAppendIds],
+      };
+      const walletPayment: OrderFeituanWalletPaymentDoc = {
+        walletId: params.userId,
+        userId: params.userId,
+        deduct: payAmount,
+        ledgerId: ledgerRef.id,
+        paymentGroupScope: scope,
+        appliedAt: now,
+      };
+      const nextAppendBatches = (row.data.appendBatches ?? []).map((batch) =>
+        batch.confirmedAt || !autoConfirmAppendIds.has(batch.id)
+          ? batch
+          : {
+              ...batch,
+              confirmedAt: now,
+              confirmedByUserId: 'feituan_wallet_auto',
+            }
+      );
+      const history = [...(row.data.statusHistory ?? [])];
+      history.push({
+        action: 'feituan_wallet_payment_applied',
+        timestamp: now,
+        userId: params.userId,
+        note: `饭团购物车合并付 RM ${payAmount.toFixed(2)}`,
+      });
+      const nextPendingAmount = ROUND2(
+        Math.max(0, Number(row.data.pendingAmount ?? 0) - payAmount)
+      );
+      const nextStatus: OrderStatus =
+        nextPendingAmount <= 0.0001
+          ? 'confirmed'
+          : hasPendingProofBefore
+            ? 'pending'
+            : 'partial_paid';
+
+      let deliverySlotPatch: { deliverySlot?: OrderDoc['deliverySlot'] } = {};
+      if (isProjectRecurring(project) && !hasOrderDeliverySlotLocked(row.data)) {
+        const snapshot = resolveAndBuildDeliverySlotSnapshot(project, now.toDate());
+        if (!snapshot) {
+          throw new Error('当前时间已超过项目截单，无法完成付款');
+        }
+        deliverySlotPatch = { deliverySlot: snapshot };
+      }
+
+      tx.update(row.ref, {
+        customerUserId: params.userId,
+        customerPhoneMasked: wallet.phoneMasked ?? null,
+        appendBatches: nextAppendBatches,
+        feituanWalletPaymentApplications: [
+          ...(row.data.feituanWalletPaymentApplications ?? []),
+          walletPayment,
+        ],
+        paidAmount: ROUND2(Number(row.data.paidAmount ?? 0) + payAmount),
+        pendingAmount: nextPendingAmount,
+        status: nextStatus,
+        ...(autoConfirmInitial && !row.data.initialPaymentConfirmedAt
+          ? { initialPaymentConfirmedAt: now }
+          : {}),
+        statusHistory: history,
+        updatedAt: serverTimestamp(),
+        ...deliverySlotPatch,
+      });
+
+      const prevStats = project.stats ?? {
+        totalOrders: 0,
+        confirmedOrders: 0,
+        pendingOrders: 0,
+        unpaidOrders: 0,
+        totalRevenue: 0,
+        confirmedRevenue: 0,
+      };
+      tx.update(projectRef, {
+        stats: {
+          ...prevStats,
+          confirmedRevenue: ROUND2((prevStats.confirmedRevenue ?? 0) + payAmount),
+          ...(nextStatus === 'confirmed' && row.data.status !== 'confirmed'
+            ? { confirmedOrders: (prevStats.confirmedOrders ?? 0) + 1 }
+            : {}),
+          ...(autoConfirmInitial && !row.data.initialPaymentConfirmedAt
+            ? { unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1) }
+            : {}),
+        },
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    deducted = totalPay;
+  });
+
+  return { confirmed: true, deducted };
+}

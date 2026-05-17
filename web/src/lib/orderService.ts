@@ -99,6 +99,8 @@ export type CreateOrderInput = {
   isManualMatch: boolean;
   lines: OrderLine[];
   bundleSelections?: BundleSelectionDraft[];
+  paymentRef?: string;
+  paymentBatchSize?: number;
 };
 
 type CreateOrderErrorCode =
@@ -435,6 +437,12 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       ...(oneTimeSlot
         ? { deliverySlot: buildOrderDeliverySlotSnapshot(oneTimeSlot) }
         : {}),
+      ...(input.paymentRef?.trim()
+        ? { paymentRef: input.paymentRef.trim() }
+        : {}),
+      ...(input.paymentBatchSize != null && input.paymentBatchSize > 0
+        ? { paymentBatchSize: input.paymentBatchSize }
+        : {}),
       isManualMatch: input.isManualMatch,
       paymentScreenshots: [],
       status,
@@ -578,6 +586,32 @@ export async function listFeituanOrdersForCustomer(input: {
       row.data = await applyOrderAutoCancellations(orderRef, row.data);
     })
   );
+  return rows;
+}
+
+export async function listOrdersByPaymentRef(input: {
+  paymentRef: string;
+  customerKey: string;
+}): Promise<OrderRow[]> {
+  const ref = input.paymentRef.trim();
+  if (!ref) return [];
+  const db = getDb();
+  const snap = await getDocs(
+    query(collection(db, 'orders'), where('paymentRef', '==', ref))
+  );
+  const rows: OrderRow[] = [];
+  for (const d of snap.docs) {
+    const data = d.data() as OrderDoc;
+    if (data.customerKey !== input.customerKey) continue;
+    const orderRef = doc(db, 'orders', d.id);
+    const next = await applyOrderAutoCancellations(orderRef, data);
+    rows.push({ id: d.id, data: next });
+  }
+  rows.sort((a, b) => {
+    const ta = a.data.createdAt?.toMillis?.() ?? 0;
+    const tb = b.data.createdAt?.toMillis?.() ?? 0;
+    return ta - tb;
+  });
   return rows;
 }
 
@@ -778,6 +812,92 @@ export async function customerUploadPaymentScreenshot(input: {
       uploadedAt.toDate()
     );
   }
+
+  const paymentRef = order.paymentRef?.trim();
+  if (paymentRef && isFirstPaymentScreenshot) {
+    await propagateScreenshotToPaymentRefSiblings({
+      paymentRef,
+      customerKey: input.customerKey,
+      excludeOrderId: input.orderFirestoreId,
+      entry,
+      uploadedAt,
+    });
+  }
+}
+
+async function propagateScreenshotToPaymentRefSiblings(input: {
+  paymentRef: string;
+  customerKey: string;
+  excludeOrderId: string;
+  entry: Record<string, unknown>;
+  uploadedAt: Timestamp;
+}): Promise<void> {
+  const siblings = await listOrdersByPaymentRef({
+    paymentRef: input.paymentRef,
+    customerKey: input.customerKey,
+  });
+  const db = getDb();
+  for (const row of siblings) {
+    if (row.id === input.excludeOrderId) continue;
+    const order = row.data;
+    if (order.status === 'cancelled') continue;
+    const existing = Array.isArray(order.paymentScreenshots)
+      ? order.paymentScreenshots
+      : [];
+    if (existing.length > 0) continue;
+
+    const orderRef = doc(db, 'orders', row.id);
+    const projectSnap = await getDoc(doc(db, 'projects', order.projectId));
+    const project = projectSnap.exists()
+      ? (projectSnap.data() as ProjectDoc)
+      : null;
+
+    const prev = [...existing, withDefaultScreenshotFlagIfUrl({ ...input.entry })];
+    const hist = [...(order.statusHistory ?? [])];
+    hist.push({
+      action: 'screenshot_uploaded_cart_batch',
+      timestamp: Timestamp.now(),
+      note: '合并付款凭证同步',
+    });
+    const nextOrder: OrderDoc = { ...order, paymentScreenshots: prev };
+    const nextStatus = deriveDisplayOrderStatus(nextOrder);
+    await updateDoc(orderRef, {
+      paymentScreenshots: prev,
+      statusHistory: hist,
+      updatedAt: serverTimestamp(),
+      ...(nextStatus !== order.status ? { status: nextStatus } : {}),
+    });
+    if (
+      project &&
+      isProjectRecurring(project) &&
+      !hasOrderDeliverySlotLocked(order)
+    ) {
+      await lockOrderDeliverySlotIfNeeded(
+        orderRef,
+        { ...order, paymentScreenshots: prev },
+        project,
+        input.uploadedAt.toDate()
+      );
+    }
+  }
+}
+
+/** 饭团购物车合并付：上传凭证（首单上传后同步到同 paymentRef 各单） */
+export async function customerUploadPaymentScreenshotForPaymentRef(input: {
+  paymentRef: string;
+  customerKey: string;
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  file: File;
+}): Promise<void> {
+  await customerUploadPaymentScreenshot({
+    orderFirestoreId: input.orderFirestoreId,
+    projectId: input.projectId,
+    orderNumber: input.orderNumber,
+    customerKey: input.customerKey,
+    file: input.file,
+  });
 }
 
 /** 顾客删除一张付款截图（传错可删）；删光且原为待核实则回到待付款 */

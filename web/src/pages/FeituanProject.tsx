@@ -25,6 +25,8 @@ import {
   type OrderRow,
 } from '../lib/orderService';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
+import { notifyFeituanCartUpdated } from '../hooks/useFeituanCartCount';
+import { upsertFeituanCartProject } from '../lib/feituanCartStorage';
 import {
   isBundleToolPastScheduledOff,
   isProjectProductSellable,
@@ -184,6 +186,7 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
   const [appendTarget, setAppendTarget] = useState<OrderRow | null>(null);
   const [appendErr, setAppendErr] = useState<string | null>(null);
   const [appendSubmitting, setAppendSubmitting] = useState(false);
+  const [cartToast, setCartToast] = useState<string | null>(null);
   const [qty, setQty] = useState<Record<string, number>>({});
   const [bundleBuilder, setBundleBuilder] = useState<Record<string, BundleDraft>>({});
   const [bundleCart, setBundleCart] = useState<BundleSelectionDraft[]>([]);
@@ -467,6 +470,28 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
       ...prev,
       [tool.id]: { schemeId: prev[tool.id]?.schemeId ?? '', selectedBySeries: {} },
     }));
+  };
+
+  const addToFeituanCart = () => {
+    if (isAdminPreview || !project || !shop || orderLines.length === 0) return;
+    const nextCart = upsertFeituanCartProject({
+      projectId: project.id,
+      projectTitle: project.data.title?.trim() || '未命名项目',
+      shopId: project.data.shopId,
+      shopSlug: shop.data.slug,
+      shopName: shop.data.name?.trim() || '店铺',
+      lines: orderLines,
+      bundleSelections: bundleCart,
+      cartDraft: { ...qty },
+      subtotal: total,
+    });
+    notifyFeituanCartUpdated();
+    setQty({});
+    setBundleCart([]);
+    setBundleBuilder({});
+    setOpenBundleToolId(null);
+    setCartToast(`已加入饭团购物车（共 ${nextCart.projects.length} 个项目）`);
+    window.setTimeout(() => setCartToast(null), 2500);
   };
 
   const goOrder = () => {
@@ -885,8 +910,16 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
               </div>
             </section>
 
+            {cartToast ? (
+              <div className="pointer-events-none fixed inset-x-0 top-16 z-50 flex justify-center px-4">
+                <p className="rounded-full bg-gray-900/90 px-4 py-2 text-sm text-white shadow-lg">
+                  {cartToast}
+                </p>
+              </div>
+            ) : null}
             <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
-              <div className={`pointer-events-auto flex w-full gap-2 px-4 ${H5_COLUMN_CLASS}`}>
+              <div className={`pointer-events-auto flex w-full flex-col gap-2 px-4 ${H5_COLUMN_CLASS}`}>
+                <div className="flex gap-2">
                 <Link
                   to="/feituan"
                   className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3.5 py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 sm:px-[18px]"
@@ -895,39 +928,63 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
                   主页
                 </Link>
                 <Link
-                  to="/feituan/my-orders"
-                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3.5 py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 sm:px-[18px]"
+                  to="/feituan/cart"
+                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3 py-2 text-sm font-semibold text-[#111]"
                   style={{ borderColor: DESIGN_BORDER }}
                 >
-                  我的订单
+                  购物车
                 </Link>
-                <button
-                  type="button"
-                  className="flex min-h-[46px] flex-1 items-center justify-center rounded-full px-4 py-3 text-[15px] font-semibold text-white shadow-[0_2px_10px_rgba(249,115,22,0.25)] transition disabled:bg-gray-300 disabled:text-gray-100 disabled:shadow-none"
-                  style={{
-                    backgroundColor:
-                      shopHomeData.status === 'open' && totalQty > 0
-                        ? shopHomeData.themeColor
-                        : undefined,
-                  }}
-                  disabled={
-                    shopHomeData.status !== 'open' ||
-                    totalQty === 0 ||
-                    appendSubmitting ||
-                    (isAppendMode && !appendTarget)
-                  }
-                  onClick={goOrder}
-                >
-                  {appendSubmitting
-                    ? '加购中…'
-                    : isAppendMode
-                      ? totalQty > 0
-                        ? `确认加购 · ${totalQty} 件 · ${formatMYR(total)}`
-                        : '请选择商品'
+                </div>
+                {isAppendMode ? (
+                  <button
+                    type="button"
+                    className="flex min-h-[46px] w-full items-center justify-center rounded-full px-4 py-3 text-[15px] font-semibold text-white disabled:bg-gray-300"
+                    style={{
+                      backgroundColor:
+                        shopHomeData.status === 'open' && totalQty > 0
+                          ? shopHomeData.themeColor
+                          : undefined,
+                    }}
+                    disabled={
+                      shopHomeData.status !== 'open' ||
+                      totalQty === 0 ||
+                      appendSubmitting ||
+                      !appendTarget
+                    }
+                    onClick={goOrder}
+                  >
+                    {appendSubmitting
+                      ? '加购中…'
                       : totalQty > 0
-                        ? `填写订单 · ${totalQty} 件 · ${formatMYR(total)}`
+                        ? `确认加购 · ${totalQty} 件 · ${formatMYR(total)}`
                         : '请选择商品'}
-                </button>
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="flex min-h-[46px] flex-1 items-center justify-center rounded-full border border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-gray-900 disabled:opacity-50"
+                      disabled={shopHomeData.status !== 'open' || totalQty === 0}
+                      onClick={addToFeituanCart}
+                    >
+                      加入购物车
+                    </button>
+                    <button
+                      type="button"
+                      className="flex min-h-[46px] flex-1 items-center justify-center rounded-full px-3 py-3 text-sm font-semibold text-white disabled:bg-gray-300"
+                      style={{
+                        backgroundColor:
+                          shopHomeData.status === 'open' && totalQty > 0
+                            ? shopHomeData.themeColor
+                            : undefined,
+                      }}
+                      disabled={shopHomeData.status !== 'open' || totalQty === 0}
+                      onClick={goOrder}
+                    >
+                      {totalQty > 0 ? `付款 · ${formatMYR(total)}` : '请选择商品'}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1345,18 +1402,39 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
                 <span className="text-gray-600">已选 {totalQty} 件</span>
                 <span className="font-bold text-gray-900">{formatMYR(total)}</span>
               </div>
-              <button
-                type="button"
-                disabled={orderLines.length === 0 || appendSubmitting || (isAppendMode && !appendTarget)}
-                onClick={goOrder}
-                className="h-11 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
-              >
-                {appendSubmitting
-                  ? '加购中…'
-                  : isAppendMode
-                    ? '确认加购'
-                    : '填写订单'}
-              </button>
+              {isAppendMode ? (
+                <button
+                  type="button"
+                  disabled={
+                    orderLines.length === 0 ||
+                    appendSubmitting ||
+                    !appendTarget
+                  }
+                  onClick={goOrder}
+                  className="h-11 w-full rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
+                >
+                  {appendSubmitting ? '加购中…' : '确认加购'}
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={orderLines.length === 0}
+                    onClick={addToFeituanCart}
+                    className="h-11 flex-1 rounded-xl border border-orange-200 bg-white text-sm font-semibold text-orange-800 disabled:bg-gray-100"
+                  >
+                    加入购物车
+                  </button>
+                  <button
+                    type="button"
+                    disabled={orderLines.length === 0}
+                    onClick={goOrder}
+                    className="h-11 flex-1 rounded-xl bg-orange-600 text-sm font-semibold text-white disabled:bg-gray-300"
+                  >
+                    付款
+                  </button>
+                </div>
+              )}
             </section>
           )}
         </div>

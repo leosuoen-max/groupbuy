@@ -40,6 +40,9 @@ import AccountCenter from './pages/AccountCenter';
 import FeituanWallet from './pages/FeituanWallet';
 import FeituanWalletAdmin from './pages/FeituanWalletAdmin';
 import FeituanWalletTopup from './pages/FeituanWalletTopup';
+import FeituanCart from './pages/FeituanCart';
+import FeituanCartCheckout from './pages/FeituanCartCheckout';
+import FeituanCartPayment from './pages/FeituanCartPayment';
 
 export function AppRoutes() {
   return (
@@ -93,6 +96,9 @@ export function AppRoutes() {
       <Route path="/feituan/wallet" element={<FeituanWallet />} />
       <Route path="/feituan/wallet/topup" element={<FeituanWalletTopup />} />
       <Route path="/feituan/my-orders" element={<FeituanMyOrders />} />
+      <Route path="/feituan/cart" element={<FeituanCart />} />
+      <Route path="/feituan/cart-checkout" element={<FeituanCartCheckout />} />
+      <Route path="/feituan/cart-payment/:paymentRef" element={<FeituanCartPayment />} />
       <Route path="/feituan/projects/:projectId" element={<FeituanProject />} />
       <Route path="/feituan/projects/:projectId/order" element={<OrderForm />} />
       <Route

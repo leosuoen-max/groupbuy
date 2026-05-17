@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useFeituanCartCount } from '../../hooks/useFeituanCartCount';
 import { FEITUAN_HOME } from '../../lib/feituanHomeTheme';
 
 const C = FEITUAN_HOME;
@@ -10,6 +11,22 @@ function MoreDotsIcon() {
       <circle cx={5} cy={12} r={1.8} />
       <circle cx={12} cy={12} r={1.8} />
       <circle cx={19} cy={12} r={1.8} />
+    </svg>
+  );
+}
+
+function CartIcon() {
+  return (
+    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M6 6h15l-1.5 9h-11L6 6z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
+      <path d="M6 6L5 3H2" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+      <circle cx={9} cy={20} r={1.5} fill="currentColor" />
+      <circle cx={17} cy={20} r={1.5} fill="currentColor" />
     </svg>
   );
 }
@@ -113,6 +130,7 @@ function FloatingAction({ label, onClick, to, children }: FloatingActionProps) {
 /** 右下角悬浮：更多 + 我的订单 */
 export function FeituanHomeBottomNav() {
   const [moreOpen, setMoreOpen] = useState(false);
+  const cartCount = useFeituanCartCount();
 
   return (
     <>
@@ -121,6 +139,19 @@ export function FeituanHomeBottomNav() {
         style={{ bottom: 'max(1rem, calc(env(safe-area-inset-bottom) + 0.75rem))' }}
         aria-label="快捷操作"
       >
+        <div className="pointer-events-auto relative">
+          <FloatingAction label="购物车" to="/feituan/cart">
+            <CartIcon />
+          </FloatingAction>
+          {cartCount > 0 ? (
+            <span
+              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+              style={{ backgroundColor: FEITUAN_HOME.primary }}
+            >
+              {cartCount > 9 ? '9+' : cartCount}
+            </span>
+          ) : null}
+        </div>
         <div className="pointer-events-auto">
           <FloatingAction label="更多" onClick={() => setMoreOpen(true)}>
             <MoreDotsIcon />
