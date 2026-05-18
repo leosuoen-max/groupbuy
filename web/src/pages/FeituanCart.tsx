@@ -17,6 +17,7 @@ import {
   updateFeituanCartProject,
 } from '../lib/feituanCartStorage';
 import { formatMYR } from '../lib/formatMYR';
+import { FEITUAN_TAB_BAR_OFFSET, feituanPageBottomPaddingClass } from '../lib/feituanBottomNav';
 import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
 import { formatEstimatedDeliveryHint, isProjectRecurring } from '../lib/recurringDeliverySchedule';
 import { getProject } from '../lib/projectService';
@@ -139,8 +140,13 @@ export default function FeituanCart() {
     void reload();
   };
 
+  const bottomPad =
+    cart.projects.length > 0
+      ? 'pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))]'
+      : feituanPageBottomPaddingClass;
+
   return (
-    <div className="min-h-svh bg-[#f6f7f8] pb-28">
+    <div className={`min-h-svh bg-[#f6f7f8] ${bottomPad}`}>
       <header
         className="sticky top-0 z-30 border-b bg-white/95 px-4 py-3 backdrop-blur"
         style={{ borderColor: FEITUAN_HOME.primaryBorder }}
@@ -278,8 +284,11 @@ export default function FeituanCart() {
 
       {cart.projects.length > 0 ? (
         <div
-          className="fixed inset-x-0 bottom-0 z-30 border-t bg-white pb-[calc(10px+env(safe-area-inset-bottom))] pt-3"
-          style={{ borderColor: FEITUAN_HOME.primaryBorder }}
+          className="fixed inset-x-0 z-45 border-t bg-white pt-3 pb-3"
+          style={{
+            borderColor: FEITUAN_HOME.primaryBorder,
+            bottom: FEITUAN_TAB_BAR_OFFSET,
+          }}
         >
           <div className="mx-auto flex max-w-xl items-center gap-3 px-4">
             <div className="min-w-0 flex-1">

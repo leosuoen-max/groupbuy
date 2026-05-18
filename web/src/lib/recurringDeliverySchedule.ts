@@ -32,7 +32,11 @@ function addCalendarDays(dateStr: string, delta: number): string {
   return formatDateInputValue(d);
 }
 
-function compareSlots(a: ProjectDeliverySlot, b: ProjectDeliverySlot): number {
+/** 配送档先后：日期更早、同日中午早于傍晚 */
+export function compareDeliverySlots(
+  a: ProjectDeliverySlot,
+  b: ProjectDeliverySlot
+): number {
   const da = parseDeliveryDateLocal(a.date)?.getTime() ?? 0;
   const db = parseDeliveryDateLocal(b.date)?.getTime() ?? 0;
   if (da !== db) return da - db;
@@ -55,7 +59,7 @@ export function enumerateDeliverySlots(
   let cur = first;
   for (let guard = 0; guard < 5000; guard++) {
     slots.push({ ...cur });
-    if (compareSlots(cur, last) >= 0) break;
+    if (compareDeliverySlots(cur, last) >= 0) break;
     cur = nextSlotInSequence(cur, schedule);
   }
   return slots;
@@ -194,12 +198,30 @@ export function buildRecurringConsumerNoticeText(
   return `销售日期：${sales}；配送：${delivery}；配送截单：${cutoff}`;
 }
 
+/** 饭团主页：项目名称下的简短配送说明 */
+export function buildRecurringConsumerNoticeTextForHome(
+  schedule: RecurringDeliveryScheduleDoc
+): string {
+  const sales = `${formatSalesDateLabel(schedule.salesStartDate)} – ${formatSalesDateLabel(schedule.salesEndDate)}`;
+  const midday = schedule.middayCutoffTime.trim();
+  const evening = (schedule.eveningCutoffTime ?? '').trim();
+
+  if (schedule.frequency === 'twice_daily') {
+    return `销售日期：${sales}；配送：每天配送 2 次（中午、傍晚）；配送截单： ${midday} 前付款中午配送；${evening || '—'} 前付款下午配送`;
+  }
+  if (schedule.onceDailyPeriod === 'evening') {
+    const t = evening || midday;
+    return `销售日期：${sales}；配送：每天配送 1 次（傍晚）；配送截单： ${t} 前付款下午配送`;
+  }
+  return `销售日期：${sales}；配送：每天配送 1 次（中午）；配送截单： ${midday} 前付款中午配送`;
+}
+
 export function listSlotsAfter(
   current: ProjectDeliverySlot,
   schedule: RecurringDeliveryScheduleDoc
 ): ProjectDeliverySlot[] {
   const all = enumerateDeliverySlots(schedule);
-  return all.filter((s) => compareSlots(s, current) > 0);
+  return all.filter((s) => compareDeliverySlots(s, current) > 0);
 }
 
 export function isProjectRecurring(
@@ -250,16 +272,16 @@ export function validateRecurringSchedule(
     date: schedule.lastDeliveryDate,
     period: schedule.lastDeliveryPeriod,
   };
-  if (compareSlots(first, last) > 0) {
+  if (compareDeliverySlots(first, last) > 0) {
     return '最后一次配送须不早于第一次配送';
   }
   const slots = enumerateDeliverySlots(schedule);
   if (!slots.length) return '配送期配置无效';
-  if (compareSlots(slots[0]!, first) !== 0) {
+  if (compareDeliverySlots(slots[0]!, first) !== 0) {
     return '第一次配送与配送序列起点不一致';
   }
   const tail = slots[slots.length - 1]!;
-  if (compareSlots(tail, last) !== 0) {
+  if (compareDeliverySlots(tail, last) !== 0) {
     return '最后一次配送与配送序列终点不一致';
   }
   return null;

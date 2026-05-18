@@ -22,7 +22,10 @@ import {
   orderHasPaymentScreenshots,
   withDefaultScreenshotFlagIfUrl,
 } from './paymentScreenshotHelpers';
-import { buildPaymentGroups } from './paymentGroups';
+import {
+  buildPaymentGroups,
+  listCancellableUnpaidPaymentGroups,
+} from './paymentGroups';
 import { deriveDisplayOrderStatus } from './paymentGroupView';
 import {
   computeImageFileMd5Hex,
@@ -190,26 +193,19 @@ function orderHasPaymentAction(order: OrderDoc): boolean {
   return false;
 }
 
-async function autoCancelRecurringUnpaidPastClose(
+async function autoCancelUnpaidPastProjectClose(
   orderRef: ReturnType<typeof doc>,
   order: OrderDoc,
   project: ProjectDoc
 ): Promise<OrderDoc> {
   if (order.status === 'cancelled') return order;
-  if (!isProjectRecurring(project)) return order;
-  if (orderHasPaymentAction(order)) return order;
-  if (order.status !== 'unpaid') return order;
-
-  const schedule = getRecurringSchedule(project);
-  if (!schedule) return order;
-  const closes = computeClosesAtDate(schedule);
-  if (!closes || Date.now() < closes.getTime()) return order;
+  if (!isUnpaidPastProjectClose(order, project)) return order;
 
   const hist = [...(order.statusHistory ?? [])];
   hist.push({
-    action: 'auto_cancel_recurring_unpaid_past_close',
+    action: 'auto_cancel_unpaid_past_close',
     timestamp: Timestamp.now(),
-    note: '超过项目最后截单时间仍未付款',
+    note: '超过项目截单时间仍未付款',
   });
   const next: OrderDoc = {
     ...order,
@@ -217,9 +213,33 @@ async function autoCancelRecurringUnpaidPastClose(
     statusHistory: hist,
     updatedAt: Timestamp.now(),
   };
+
+  const db = getDb();
+  const projectRef = doc(db, 'projects', order.projectId);
+  const lines = order.lines ?? [];
+  const nextProducts = restoreProductStock(project.products, lines);
+  const prevStats = project.stats ?? {
+    totalOrders: 0,
+    confirmedOrders: 0,
+    pendingOrders: 0,
+    unpaidOrders: 0,
+    totalRevenue: 0,
+    confirmedRevenue: 0,
+  };
+  const totalAmt = Number(order.totalAmount) || 0;
+
   await updateDoc(orderRef, {
     status: 'cancelled',
     statusHistory: hist,
+    updatedAt: serverTimestamp(),
+  });
+  await updateDoc(projectRef, {
+    products: nextProducts,
+    stats: {
+      ...prevStats,
+      unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
+      totalRevenue: Math.max(0, (prevStats.totalRevenue ?? 0) - totalAmt),
+    },
     updatedAt: serverTimestamp(),
   });
   return next;
@@ -232,7 +252,7 @@ async function applyOrderAutoCancellations(
   let next = await autoCancelExpiredTimedPromoOrder(orderRef, order);
   const projectRow = await getProject(next.projectId);
   if (projectRow) {
-    next = await autoCancelRecurringUnpaidPastClose(
+    next = await autoCancelUnpaidPastProjectClose(
       orderRef,
       next,
       projectRow.data
@@ -292,6 +312,57 @@ function applyStockDeduction(project: ProjectDoc, lines: OrderLine[]): ProjectDo
     product.stock -= line.quantity;
   }
   return nextProducts;
+}
+
+function restoreProductStock(
+  products: ProjectDoc['products'],
+  lines: OrderLineDoc[]
+): ProjectDoc['products'] {
+  const nextProducts = [...(products ?? [])].map((p) => ({ ...p }));
+  for (const line of lines) {
+    if (String(line.productId ?? '').startsWith('bundle:')) continue;
+    const idx = nextProducts.findIndex((p) => p.id === line.productId);
+    if (idx < 0) continue;
+    const product = nextProducts[idx]!;
+    product.stock += line.quantity;
+  }
+  return nextProducts;
+}
+
+function projectCloseTimeMs(project: ProjectDoc): number | null {
+  const fromField = project.closesAt?.toDate?.();
+  if (fromField) return fromField.getTime();
+  if (!isProjectRecurring(project)) return null;
+  const schedule = getRecurringSchedule(project);
+  if (!schedule) return null;
+  const closes = computeClosesAtDate(schedule);
+  return closes ? closes.getTime() : null;
+}
+
+function isUnpaidPastProjectClose(order: OrderDoc, project: ProjectDoc): boolean {
+  if (order.status !== 'unpaid') return false;
+  if (orderHasPaymentAction(order)) return false;
+  const closeMs = projectCloseTimeMs(project);
+  if (closeMs == null) return false;
+  return Date.now() > closeMs;
+}
+
+function resolveOrderStatusAfterAmountChange(
+  order: OrderDoc,
+  newTotal: number,
+  newPending: number
+): OrderStatus {
+  const paid = Number(order.paidAmount) || 0;
+  if (newPending <= 0.001 && paid >= newTotal - 0.001) return 'confirmed';
+  if (paid > 0.001) return 'partial_paid';
+  const draft: OrderDoc = {
+    ...order,
+    totalAmount: newTotal,
+    pendingAmount: newPending,
+  };
+  const groups = buildPaymentGroups(draft);
+  if (groups.some((g) => g.status === 'pending')) return 'pending';
+  return 'unpaid';
 }
 
 function applyBundleStockDeduction(
@@ -1398,6 +1469,184 @@ export async function customerAppendLinesToOrder(input: {
       },
       updatedAt: serverTimestamp(),
     });
+  });
+}
+
+export type CancelUnpaidPaymentGroupResult = {
+  /** 取消待付款后无已确认/待确认组，整单作废 */
+  cancelledWholeOrder: boolean;
+  cancelledGroupIds: string[];
+  cancelledAmount: number;
+};
+
+/**
+ * 顾客取消订单内全部可取消的待付款支付组（宪法 8.1 组级取消）。
+ * 若取消后不存在已确认/待确认组，则整单 cancelled；否则仅去掉待付款组对应订货。
+ */
+export async function customerCancelUnpaidPaymentGroup(input: {
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  customerKey: string;
+}): Promise<CancelUnpaidPaymentGroupResult> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const projectRef = doc(db, 'projects', input.projectId);
+
+  return runTransaction(db, async (tx) => {
+    const projectSnap = await tx.get(projectRef);
+    if (!projectSnap.exists()) throw new Error('项目不存在');
+    const project = projectSnap.data() as ProjectDoc;
+
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists()) throw new Error('订单不存在');
+    let order = orderSnap.data() as OrderDoc;
+
+    if (
+      order.projectId !== input.projectId ||
+      order.orderNumber !== input.orderNumber
+    ) {
+      throw new Error('订单信息不匹配');
+    }
+    if (order.customerKey !== input.customerKey) {
+      throw new Error('仅下单本人可取消（请使用同一浏览器）');
+    }
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+
+    const allGroups = buildPaymentGroups(order);
+    const cancellableUnpaid = listCancellableUnpaidPaymentGroups(order);
+    if (cancellableUnpaid.length === 0) {
+      throw new Error('没有可取消的待付款');
+    }
+
+    const otherGroups = allGroups.filter(
+      (g) => g.status === 'confirmed' || g.status === 'pending'
+    );
+    const cancelWholeOrder = otherGroups.length === 0;
+    const cancelledGroupIds = cancellableUnpaid.map((g) => g.id);
+    const cancelledAmount = cancellableUnpaid.reduce(
+      (s, g) => s + (Number(g.subtotal) || 0),
+      0
+    );
+    const linesToRestore = cancellableUnpaid.flatMap((g) => g.lines);
+
+    const prevStats = project.stats ?? {
+      totalOrders: 0,
+      confirmedOrders: 0,
+      pendingOrders: 0,
+      unpaidOrders: 0,
+      totalRevenue: 0,
+      confirmedRevenue: 0,
+    };
+    const hist = [...(order.statusHistory ?? [])];
+    const now = Timestamp.now();
+    const paid = Number(order.paidAmount) || 0;
+
+    if (cancelWholeOrder) {
+      const nextProducts = restoreProductStock(project.products, linesToRestore);
+      hist.push({
+        action: 'customer_cancel_unpaid_payment_groups',
+        timestamp: now,
+        note: `groups=${cancelledGroupIds.join(',')};whole_order=1`,
+      });
+      tx.update(orderRef, {
+        status: 'cancelled' as const,
+        statusHistory: hist,
+        updatedAt: serverTimestamp(),
+      });
+      tx.update(projectRef, {
+        products: nextProducts,
+        stats: {
+          ...prevStats,
+          ...(order.status === 'unpaid'
+            ? {
+                unpaidOrders: Math.max(0, (prevStats.unpaidOrders ?? 0) - 1),
+              }
+            : {}),
+          totalRevenue: Math.max(
+            0,
+            (prevStats.totalRevenue ?? 0) - cancelledAmount
+          ),
+        },
+        updatedAt: serverTimestamp(),
+      });
+      return {
+        cancelledWholeOrder: true,
+        cancelledGroupIds,
+        cancelledAmount,
+      };
+    }
+
+    if (cancellableUnpaid.some((g) => g.includesInitial)) {
+      throw new Error('待付款组数据异常，请联系商户处理');
+    }
+
+    const removeIds = new Set(
+      cancellableUnpaid.flatMap((g) => g.appendBatchIds)
+    );
+    if (removeIds.size === 0) {
+      throw new Error('没有可取消的待付款内容');
+    }
+
+    const prevBatches = [...(order.appendBatches ?? [])];
+    const removedBatches = prevBatches.filter((b) => removeIds.has(b.id));
+    if (removedBatches.length === 0) {
+      throw new Error('找不到待取消的待付款订货');
+    }
+    if (removedBatches.some((b) => b.confirmedAt)) {
+      throw new Error('已确认的订货不能取消');
+    }
+
+    const removedLines = removedBatches.flatMap((b) => b.lines ?? []);
+    const remainingBatches = prevBatches.filter((b) => !removeIds.has(b.id));
+    const baseLines =
+      order.initialLines?.length ? order.initialLines : order.lines ?? [];
+    const mergedLines = [
+      ...baseLines,
+      ...remainingBatches.flatMap((b) => b.lines ?? []),
+    ];
+    const newTotal = computeTotal(mergedLines);
+    const newPending = Math.max(0, newTotal - paid);
+    const nextStatus = resolveOrderStatusAfterAmountChange(
+      order,
+      newTotal,
+      newPending
+    );
+
+    hist.push({
+      action: 'customer_cancel_unpaid_payment_groups',
+      timestamp: now,
+      note: `groups=${cancelledGroupIds.join(',')};batches=${[...removeIds].join(',')}`,
+    });
+
+    const nextProducts = restoreProductStock(project.products, removedLines);
+
+    tx.update(orderRef, {
+      lines: mergedLines,
+      appendBatches: remainingBatches,
+      totalAmount: newTotal,
+      pendingAmount: newPending,
+      status: nextStatus,
+      statusHistory: hist,
+      updatedAt: serverTimestamp(),
+    });
+    tx.update(projectRef, {
+      products: nextProducts,
+      stats: {
+        ...prevStats,
+        totalRevenue: Math.max(
+          0,
+          (prevStats.totalRevenue ?? 0) - cancelledAmount
+        ),
+      },
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      cancelledWholeOrder: false,
+      cancelledGroupIds,
+      cancelledAmount,
+    };
   });
 }
 

@@ -168,6 +168,42 @@ export function inferDeliverySlotFromLegacy(
   return { date, period };
 }
 
+/** 项目最后一次配送档（饭团主页排序用） */
+export function getProjectLastDeliverySlot(
+  project: Pick<
+    ProjectDoc,
+    | 'projectKind'
+    | 'deliveryDate'
+    | 'deliveryPeriod'
+    | 'deliveryTimeText'
+    | 'recurringSchedule'
+  > & {
+    closesAt?: ProjectDoc['closesAt'];
+  }
+): ProjectDeliverySlot | null {
+  if (isProjectRecurring(project)) {
+    const schedule = getRecurringSchedule(project);
+    if (!schedule) return null;
+    return {
+      date: schedule.lastDeliveryDate,
+      period: schedule.lastDeliveryPeriod,
+    };
+  }
+  if (
+    hasProjectDeliverySlotConfigured(project) &&
+    project.deliveryPeriod
+  ) {
+    return {
+      date: project.deliveryDate!.trim(),
+      period: project.deliveryPeriod,
+    };
+  }
+  return inferDeliverySlotFromLegacy(
+    project.deliveryTimeText,
+    project.closesAt?.toDate?.() ?? null
+  );
+}
+
 export function resolveProjectDeliverySlot(
   project: Pick<
     ProjectDoc,

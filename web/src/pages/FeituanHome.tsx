@@ -6,7 +6,13 @@ import { FeituanHomePageHeader } from '../components/feituan/FeituanHomePageHead
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { useWechatShareCard } from '../hooks/useWechatShareCard';
 import { resolveProjectDeliveryLabel } from '../lib/deliverySlot';
+import { feituanPageBottomPaddingClass } from '../lib/feituanBottomNav';
 import { FEITUAN_HOME } from '../lib/feituanHomeTheme';
+import {
+  buildRecurringConsumerNoticeTextForHome,
+  getRecurringSchedule,
+  isProjectRecurring,
+} from '../lib/recurringDeliverySchedule';
 import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
 import { getFeituanHomeShareUrl } from '../lib/shareLink';
@@ -99,8 +105,22 @@ function TimingBadgeBox({ children }: { children: ReactNode }) {
 
 function ProjectTimingBadge({ project }: { project: ProjectRow }) {
   const close = fmtCloseTime(project);
-  const delivery = deliveryTimeLabel(project);
+  const recurring = isProjectRecurring(project.data);
+  const delivery = recurring ? '' : deliveryTimeLabel(project);
   if (!close && !delivery) return null;
+
+  if (recurring) {
+    if (!close) return null;
+    return (
+      <TimingBadgeBox>
+        <p className="whitespace-nowrap">
+          截单：
+          <span style={{ color: C.brandViolet }}>{close}</span>
+        </p>
+      </TimingBadgeBox>
+    );
+  }
+
   return (
     <TimingBadgeBox>
       {close ? (
@@ -115,6 +135,12 @@ function ProjectTimingBadge({ project }: { project: ProjectRow }) {
       </p>
     </TimingBadgeBox>
   );
+}
+
+function recurringHomeNotice(project: ProjectRow): string | null {
+  const schedule = getRecurringSchedule(project.data);
+  if (!schedule) return null;
+  return buildRecurringConsumerNoticeTextForHome(schedule);
 }
 
 async function loadShopsById(projects: ProjectRow[]): Promise<Map<string, ShopRow | null>> {
@@ -200,7 +226,10 @@ export default function FeituanHome() {
   const listedText = rows.length > 0 ? `正在开团 · ${rows.length} 个饭团项目` : '正在开团';
 
   return (
-    <main className="min-h-svh" style={{ backgroundColor: C.primaryBg }}>
+    <main
+      className={`min-h-svh ${feituanPageBottomPaddingClass}`}
+      style={{ backgroundColor: C.primaryBg }}
+    >
       <FeituanHomePageHeader onShare={() => setShareSheetOpen(true)} />
       <div className="px-4 pt-1">
         <h2 className="mb-3 text-base font-bold leading-tight" style={{ color: C.textMain }}>
@@ -229,6 +258,7 @@ export default function FeituanHome() {
             compactWechatShareText(project.data.textContent, 72) ||
             firstProductNames(project) ||
             '点击查看饭团详情。';
+          const recurringNotice = recurringHomeNotice(project);
           return (
             <Link
               key={project.id}
@@ -240,19 +270,29 @@ export default function FeituanHome() {
               }}
             >
               <div className="px-3.5 pb-3.5 pt-3">
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium" style={{ color: C.primary }}>
-                      {shop?.data.name ?? '店铺'}
-                    </p>
-                    <h3
-                      className="mt-0.5 line-clamp-1 text-[17px] font-extrabold leading-tight"
-                      style={{ color: C.textMain }}
-                    >
-                      {project.data.title || '未命名项目'}
-                    </h3>
+                <div className="mb-2 space-y-1.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium" style={{ color: C.primary }}>
+                        {shop?.data.name ?? '店铺'}
+                      </p>
+                      <h3
+                        className="mt-0.5 line-clamp-1 text-[17px] font-extrabold leading-tight"
+                        style={{ color: C.textMain }}
+                      >
+                        {project.data.title || '未命名项目'}
+                      </h3>
+                    </div>
+                    <ProjectTimingBadge project={project} />
                   </div>
-                  <ProjectTimingBadge project={project} />
+                  {recurringNotice ? (
+                    <p
+                      className="text-[11px] leading-snug"
+                      style={{ color: C.textSub }}
+                    >
+                      {recurringNotice}
+                    </p>
+                  ) : null}
                 </div>
 
                 {images.length > 0 ? <ProjectImageMosaic images={images} /> : null}
@@ -275,15 +315,7 @@ export default function FeituanHome() {
           );
         })}
       </div>
-      {/* 底板延伸：与 main 同色，仅增高可滚区域，避让右下角悬浮按钮 */}
-      <div
-        aria-hidden
-        className="mt-6 shrink-0"
-        style={{
-          minHeight:
-            'max(calc(9.5rem * 2 / 3), calc(7.75rem * 2 / 3 + env(safe-area-inset-bottom, 0px)))',
-        }}
-      />
+      <div aria-hidden className="mt-6 h-4 shrink-0" />
       {wechatShareDebug ? (
         <div className="fixed inset-x-2 bottom-2 z-[9999] max-h-[45vh] overflow-auto rounded-xl bg-black/90 p-3 text-[11px] leading-relaxed text-lime-100 shadow-2xl">
           {wechatShareDebug.error || wechatShareDebug.wxError ? (

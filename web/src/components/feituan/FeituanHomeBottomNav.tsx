@@ -1,23 +1,38 @@
 import { useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useFeituanCartCount } from '../../hooks/useFeituanCartCount';
+import { useFeituanMessageCount } from '../../hooks/useFeituanMessageCount';
 import { FEITUAN_HOME } from '../../lib/feituanHomeTheme';
+import { FeituanMoreSheet } from './FeituanMoreSheet';
 
 const C = FEITUAN_HOME;
 
-function MoreDotsIcon() {
+function MoreDotsIcon({ active }: { active?: boolean }) {
   return (
-    <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <circle cx={5} cy={12} r={1.8} />
-      <circle cx={12} cy={12} r={1.8} />
-      <circle cx={19} cy={12} r={1.8} />
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx={5} cy={12} r={active ? 2 : 1.8} />
+      <circle cx={12} cy={12} r={active ? 2 : 1.8} />
+      <circle cx={19} cy={12} r={active ? 2 : 1.8} />
+    </svg>
+  );
+}
+
+function MessageIcon() {
+  return (
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H9l-4.2 3.15c-.55.41-1.3.02-1.3-.65V15H6.5A2.5 2.5 0 0 1 4 12.5v-7Z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
 function CartIcon() {
   return (
-    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" aria-hidden>
       <path
         d="M6 6h15l-1.5 9h-11L6 6z"
         stroke="currentColor"
@@ -33,134 +48,118 @@ function CartIcon() {
 
 function OrdersIcon() {
   return (
-    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" aria-hidden>
       <rect x={5} y={3} width={14} height={18} rx={2} stroke="currentColor" strokeWidth={1.8} />
       <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
-      <circle cx={16.5} cy={16.5} r={2.5} fill="currentColor" />
     </svg>
   );
 }
 
-type FeituanMoreSheetProps = {
-  open: boolean;
-  onClose: () => void;
-};
-
-function FeituanMoreSheet({ open, onClose }: FeituanMoreSheetProps) {
-  if (!open) return null;
-
-  const links = [
-    { to: '/feituan/wallet', label: '饭团钱包' },
-    { to: '/feituan/account', label: '账号中心' },
-  ] as const;
-
-  return (
-    <div className="pointer-events-auto fixed inset-0 z-50 bg-black/25">
-      <button
-        type="button"
-        className="absolute inset-0 h-full w-full"
-        aria-label="关闭"
-        onClick={onClose}
-      />
-      <div
-        className="absolute inset-x-0 bottom-0 mx-auto w-full max-w-xl rounded-t-2xl bg-white p-4 shadow-2xl"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="feituan-more-title"
-      >
-        <p id="feituan-more-title" className="mb-3 text-center text-sm font-semibold text-gray-900">
-          更多
-        </p>
-        <div className="space-y-2">
-          {links.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              onClick={onClose}
-              className="flex w-full items-center justify-center rounded-xl border py-3 text-sm font-semibold active:bg-gray-50"
-              style={{ borderColor: C.primaryBorder, color: C.primary }}
-            >
-              {item.label}
-            </Link>
-          ))}
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full rounded-xl py-2.5 text-sm text-gray-600 active:bg-gray-50"
-          >
-            取消
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+function formatBadge(n: number): string {
+  if (n <= 0) return '';
+  return n > 99 ? '99+' : String(n);
 }
 
-type FloatingActionProps = {
+
+type TabItemProps = {
   label: string;
+  active?: boolean;
+  badge?: number;
   onClick?: () => void;
   to?: string;
   children: ReactNode;
 };
 
-function FloatingAction({ label, onClick, to, children }: FloatingActionProps) {
-  const circleClass =
-    'flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/82 text-gray-800 shadow-[0_2px_12px_rgba(15,143,95,0.14)] backdrop-blur-sm active:scale-95';
-
-  const inner = to ? (
-    <Link to={to} className={circleClass} aria-label={label}>
-      {children}
-    </Link>
-  ) : (
-    <button type="button" onClick={onClick} className={circleClass} aria-label={label}>
-      {children}
-    </button>
-  );
-
-  return (
-    <div className="flex flex-col items-center gap-1">
-      {inner}
-      <span className="text-[10px] font-medium leading-none" style={{ color: C.textSub }}>
+function TabItem({ label, active, badge, onClick, to, children }: TabItemProps) {
+  const color = active ? C.primary : C.textMain;
+  const inner = (
+    <>
+      <span className="relative inline-flex">
+        <span style={{ color }}>{children}</span>
+        {badge && badge > 0 ? (
+          <span
+            className="absolute -right-2.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white"
+            style={{ backgroundColor: '#FF5000' }}
+          >
+            {formatBadge(badge)}
+          </span>
+        ) : null}
+      </span>
+      <span
+        className="mt-0.5 text-[11px] font-medium leading-none"
+        style={{ color: active ? C.primary : C.textSub }}
+      >
         {label}
       </span>
-    </div>
+    </>
+  );
+
+  const className =
+    'flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 py-1 active:opacity-70';
+
+  if (to) {
+    return (
+      <Link to={to} className={className} aria-label={label} aria-current={active ? 'page' : undefined}>
+        {inner}
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} className={className} aria-label={label}>
+      {inner}
+    </button>
   );
 }
 
-/** 右下角悬浮：更多 + 我的订单 */
+function isCartPath(pathname: string): boolean {
+  return (
+    pathname === '/feituan/cart' ||
+    pathname.startsWith('/feituan/cart-checkout') ||
+    pathname.startsWith('/feituan/cart-payment/')
+  );
+}
+
+/** 饭团底部固定 Tab 栏：更多、消息、购物车、我的订单 */
 export function FeituanHomeBottomNav() {
   const [moreOpen, setMoreOpen] = useState(false);
   const cartCount = useFeituanCartCount();
+  const messageCount = useFeituanMessageCount();
+  const { pathname } = useLocation();
+
+  const messagesActive = pathname === '/feituan/messages';
+  const cartActive = isCartPath(pathname);
+  const ordersActive = pathname === '/feituan/my-orders';
 
   return (
     <>
       <nav
-        className="pointer-events-none fixed right-3 z-40 flex flex-col items-center gap-4"
-        style={{ bottom: 'max(1rem, calc(env(safe-area-inset-bottom) + 0.75rem))' }}
-        aria-label="快捷操作"
+        className="pointer-events-auto fixed inset-x-0 bottom-0 z-40 border-t bg-white"
+        style={{
+          borderColor: C.primaryBorder,
+          boxShadow: C.navShadow,
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        }}
+        aria-label="饭团导航"
       >
-        <div className="pointer-events-auto relative">
-          <FloatingAction label="购物车" to="/feituan/cart">
+        <div className="mx-auto flex h-[3.25rem] max-w-xl items-stretch px-1">
+          <TabItem label="更多" onClick={() => setMoreOpen(true)}>
+            <MoreDotsIcon active={moreOpen} />
+          </TabItem>
+          <TabItem
+            label="消息"
+            to="/feituan/messages"
+            active={messagesActive}
+            badge={messageCount}
+          >
+            <MessageIcon />
+          </TabItem>
+          <TabItem label="购物车" to="/feituan/cart" active={cartActive} badge={cartCount}>
             <CartIcon />
-          </FloatingAction>
-          {cartCount > 0 ? (
-            <span
-              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
-              style={{ backgroundColor: FEITUAN_HOME.primary }}
-            >
-              {cartCount > 9 ? '9+' : cartCount}
-            </span>
-          ) : null}
-        </div>
-        <div className="pointer-events-auto">
-          <FloatingAction label="更多" onClick={() => setMoreOpen(true)}>
-            <MoreDotsIcon />
-          </FloatingAction>
-        </div>
-        <div className="pointer-events-auto">
-          <FloatingAction label="我的订单" to="/feituan/my-orders">
+          </TabItem>
+          <TabItem label="我的订单" to="/feituan/my-orders" active={ordersActive}>
             <OrdersIcon />
-          </FloatingAction>
+          </TabItem>
         </div>
       </nav>
       <FeituanMoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} />

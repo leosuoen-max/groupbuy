@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ShopShareSheet } from '../components/customer/ShopShareSheet';
+import {
+  FeituanProjectBottomBar,
+  FeituanProjectTopBar,
+} from '../components/feituan/FeituanProjectChrome';
 import { PageShell } from '../components/PageShell';
 import { ProductCard } from '../components/customer/ProductCard';
 import { ShopContentBlocks } from '../components/customer/ShopContentBlocks';
@@ -12,13 +17,16 @@ import { shopHomeAnnouncementHasVisibleBody } from '../lib/shopDescriptionMixedL
 import { isFeituanAdmin } from '../lib/feituanService';
 import { getProject, type ProjectRow } from '../lib/projectService';
 import { getShopById, type ShopRow } from '../lib/shopService';
-import { buildWechatShareCardFromProject } from '../lib/wechatShareMeta';
+import { getFeituanHomeShareUrl } from '../lib/shareLink';
+import {
+  buildFeituanHomeShareCard,
+  buildWechatShareCardFromProject,
+} from '../lib/wechatShareMeta';
 import { formatMYR } from '../lib/formatMYR';
 import { formatRemainingShort } from '../lib/countdown';
 import { resolveProjectDeliveryLabel } from '../lib/deliverySlot';
 import { isProjectRecurring } from '../lib/recurringDeliverySchedule';
 import { FEITUAN_TW } from '../lib/feituanHomeTheme';
-import { DESIGN_BORDER, H5_COLUMN_CLASS } from '../lib/shopTheme';
 import {
   customerAppendLinesToOrder,
   getOrderByNumber,
@@ -194,17 +202,54 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
   const [bundleBuilder, setBundleBuilder] = useState<Record<string, BundleDraft>>({});
   const [bundleCart, setBundleCart] = useState<BundleSelectionDraft[]>([]);
   const [openBundleToolId, setOpenBundleToolId] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [shareSheetCopied, setShareSheetCopied] = useState(false);
   const now = useTick(30_000);
-  const wechatShareCard = useMemo(
+  const feituanHomeShareCard = useMemo(
     () =>
       project
-        ? buildWechatShareCardFromProject(project.id, project.data, shop?.data, {
-            prefix: '大马饭团',
-          })
+        ? buildFeituanHomeShareCard([{ project: project.data, shop: shop?.data ?? null }])
         : null,
     [project, shop?.data]
   );
+  const wechatShareCard = useMemo(
+    () =>
+      isAdminPreview && project
+        ? buildWechatShareCardFromProject(project.id, project.data, shop?.data, {
+            prefix: '大马饭团',
+          })
+        : feituanHomeShareCard,
+    [feituanHomeShareCard, isAdminPreview, project, shop?.data]
+  );
   const { debug: wechatShareDebug } = useWechatShareCard(wechatShareCard);
+  const shareUrl = feituanHomeShareCard?.link?.trim() || getFeituanHomeShareUrl();
+  const shareHeadline = feituanHomeShareCard?.title?.trim() || '大马饭团 · 今日团';
+
+  const handleShareSheetCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareSheetCopied(true);
+      window.setTimeout(() => setShareSheetCopied(false), 1600);
+    } catch {
+      window.prompt('复制链接：', shareUrl);
+    }
+  }, [shareUrl]);
+
+  const handleShareSheetSystemShare = useCallback(async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: shareHeadline,
+          text: feituanHomeShareCard?.desc,
+          url: shareUrl,
+        });
+        setShareSheetOpen(false);
+      }
+    } catch {
+      /* 用户取消 */
+    }
+  }, [feituanHomeShareCard?.desc, shareHeadline, shareUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -546,10 +591,16 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
       <div className="pb-36">
         {shopHomeData ? (
           <>
+            <FeituanProjectTopBar
+              onShare={() => setShareSheetOpen(true)}
+              moreOpen={moreOpen}
+              onMoreOpen={() => setMoreOpen(true)}
+              onMoreClose={() => setMoreOpen(false)}
+            />
             <ShopHeader
               data={shopHomeData}
-              onShare={() => undefined}
-              onOpenMore={() => undefined}
+              onShare={() => setShareSheetOpen(true)}
+              onOpenMore={() => setMoreOpen(true)}
               hideActions
             />
             <ShopProjectStatusCard
@@ -922,82 +973,35 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
             </section>
 
             {cartToast ? (
-              <div className="pointer-events-none fixed inset-x-0 top-16 z-50 flex justify-center px-4">
+              <div
+                className="pointer-events-none fixed inset-x-0 z-[55] flex justify-center px-4"
+                style={{ top: 'calc(max(0.5rem, env(safe-area-inset-top)) + 2.75rem)' }}
+              >
                 <p className="rounded-full bg-gray-900/90 px-4 py-2 text-sm text-white shadow-lg">
                   {cartToast}
                 </p>
               </div>
             ) : null}
-            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center border-t border-[#ececec] bg-white pb-[calc(10px+env(safe-area-inset-bottom,0px))] pt-2.5">
-              <div className={`pointer-events-auto flex w-full flex-col gap-2 px-4 ${H5_COLUMN_CLASS}`}>
-                <div className="flex gap-2">
-                <Link
-                  to="/feituan"
-                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3.5 py-2.5 text-sm font-semibold text-[#111] transition active:bg-gray-50 sm:px-[18px]"
-                  style={{ borderColor: DESIGN_BORDER }}
-                >
-                  主页
-                </Link>
-                <Link
-                  to="/feituan/cart"
-                  className="inline-flex shrink-0 items-center justify-center rounded-full border bg-white px-3 py-2 text-sm font-semibold text-[#111]"
-                  style={{ borderColor: DESIGN_BORDER }}
-                >
-                  购物车
-                </Link>
-                </div>
-                {isAppendMode ? (
-                  <button
-                    type="button"
-                    className="flex min-h-[46px] w-full items-center justify-center rounded-full px-4 py-3 text-[15px] font-semibold text-white disabled:bg-gray-300"
-                    style={{
-                      backgroundColor:
-                        shopHomeData.status === 'open' && totalQty > 0
-                          ? shopHomeData.themeColor
-                          : undefined,
-                    }}
-                    disabled={
-                      shopHomeData.status !== 'open' ||
-                      totalQty === 0 ||
-                      appendSubmitting ||
-                      !appendTarget
-                    }
-                    onClick={goOrder}
-                  >
-                    {appendSubmitting
-                      ? '加购中…'
-                      : totalQty > 0
-                        ? `确认加购 · ${totalQty} 件 · ${formatMYR(total)}`
-                        : '请选择商品'}
-                  </button>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className="flex min-h-[46px] flex-1 items-center justify-center rounded-full border border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-gray-900 disabled:opacity-50"
-                      disabled={shopHomeData.status !== 'open' || totalQty === 0}
-                      onClick={addToFeituanCart}
-                    >
-                      加入购物车
-                    </button>
-                    <button
-                      type="button"
-                      className="flex min-h-[46px] flex-1 items-center justify-center rounded-full px-3 py-3 text-sm font-semibold text-white disabled:bg-gray-300"
-                      style={{
-                        backgroundColor:
-                          shopHomeData.status === 'open' && totalQty > 0
-                            ? shopHomeData.themeColor
-                            : undefined,
-                      }}
-                      disabled={shopHomeData.status !== 'open' || totalQty === 0}
-                      onClick={goOrder}
-                    >
-                      {totalQty > 0 ? `付款 · ${formatMYR(total)}` : '请选择商品'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+            <FeituanProjectBottomBar
+              themeColor={shopHomeData.themeColor}
+              shopOpen={shopHomeData.status === 'open'}
+              isAppendMode={isAppendMode}
+              totalQty={totalQty}
+              total={total}
+              appendSubmitting={appendSubmitting}
+              appendTargetReady={Boolean(appendTarget)}
+              onAddToCart={addToFeituanCart}
+              onPay={goOrder}
+            />
+            <ShopShareSheet
+              open={shareSheetOpen}
+              onClose={() => setShareSheetOpen(false)}
+              headline={shareHeadline}
+              copied={shareSheetCopied}
+              onCopyLink={() => void handleShareSheetCopyLink()}
+              showSystemShare={typeof navigator !== 'undefined' && Boolean(navigator.share)}
+              onSystemShare={() => void handleShareSheetSystemShare()}
+            />
           </>
         ) : (
           <main className="px-4 py-5">

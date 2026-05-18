@@ -228,3 +228,19 @@ export function batchTimeStr(batch: OrderAppendBatchDoc): string {
   if (!d) return '';
   return d.toLocaleString();
 }
+
+/** 顾客可取消的全部待付款组（无截图、无卡/钱包自动扣款） */
+export function listCancellableUnpaidPaymentGroups(
+  order: OrderDoc
+): PaymentGroup[] {
+  return buildPaymentGroups(order).filter(
+    (g) =>
+      g.status === 'unpaid' &&
+      g.proofs.length === 0 &&
+      !g.hasCardAuto
+  );
+}
+
+export function hasCancellableUnpaidPaymentGroups(order: OrderDoc): boolean {
+  return listCancellableUnpaidPaymentGroups(order).length > 0;
+}

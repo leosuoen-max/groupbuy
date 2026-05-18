@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { FeituanHomeBottomNav } from '../components/feituan/FeituanHomeBottomNav';
 import { PageShell } from '../components/PageShell';
+import { feituanPageBottomPaddingClass } from '../lib/feituanBottomNav';
+import { notifyFeituanMessagesUpdated } from '../hooks/useFeituanMessageCount';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
@@ -108,7 +111,10 @@ export default function FeituanMyOrders() {
           if (!cancelled) setError(toLoadErrorMessage(err, '加载饭团订单失败，请重试。'));
         })
         .finally(() => {
-          if (!cancelled) setLoading(false);
+          if (!cancelled) {
+            setLoading(false);
+            notifyFeituanMessagesUpdated();
+          }
         });
     });
     return () => {
@@ -116,24 +122,25 @@ export default function FeituanMyOrders() {
     };
   }, [authLoading, user]);
 
-  if (loading) {
-    return (
-      <PageShell title="我的饭团订单" subtitle="加载中">
-        <p className="text-sm text-gray-600">正在读取订单…</p>
+  const shell = (children: ReactNode, subtitle: string) => (
+    <div className={feituanPageBottomPaddingClass}>
+      <PageShell title="我的饭团订单" subtitle={subtitle}>
+        {children}
       </PageShell>
-    );
+      <FeituanHomeBottomNav />
+    </div>
+  );
+
+  if (loading) {
+    return shell(<p className="text-sm text-gray-600">正在读取订单…</p>, '加载中');
   }
 
   if (error) {
-    return (
-      <PageShell title="我的饭团订单" subtitle="加载失败">
-        <p className="text-sm text-red-600">{error}</p>
-      </PageShell>
-    );
+    return shell(<p className="text-sm text-red-600">{error}</p>, '加载失败');
   }
 
-  return (
-    <PageShell title="我的饭团订单" subtitle={rows.length ? `共 ${rows.length} 单` : '暂无订单'}>
+  return shell(
+    <>
       {rows.length === 0 ? (
         <div className="space-y-3 text-sm text-gray-600">
           <p>还没有饭团订单。微信里从服务号进入饭团下单后，这里会显示你的订单。</p>
@@ -212,6 +219,7 @@ export default function FeituanMyOrders() {
           </Link>
         </div>
       )}
-    </PageShell>
+    </>,
+    rows.length ? `共 ${rows.length} 单` : '暂无订单'
   );
 }

@@ -43,6 +43,7 @@ import FeituanWalletTopup from './pages/FeituanWalletTopup';
 import FeituanCart from './pages/FeituanCart';
 import FeituanCartCheckout from './pages/FeituanCartCheckout';
 import FeituanCartPayment from './pages/FeituanCartPayment';
+import FeituanMessages from './pages/FeituanMessages';
 
 export function AppRoutes() {
   return (
@@ -96,6 +97,7 @@ export function AppRoutes() {
       <Route path="/feituan/wallet" element={<FeituanWallet />} />
       <Route path="/feituan/wallet/topup" element={<FeituanWalletTopup />} />
       <Route path="/feituan/my-orders" element={<FeituanMyOrders />} />
+      <Route path="/feituan/messages" element={<FeituanMessages />} />
       <Route path="/feituan/cart" element={<FeituanCart />} />
       <Route path="/feituan/cart-checkout" element={<FeituanCartCheckout />} />
       <Route path="/feituan/cart-payment/:paymentRef" element={<FeituanCartPayment />} />

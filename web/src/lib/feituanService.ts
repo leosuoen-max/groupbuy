@@ -11,6 +11,7 @@ import {
 import { getDb } from './firebase';
 import { hasProjectDeliverySlotConfigured } from './deliverySlot';
 import { isPlatformAdmin } from './registeredUserService';
+import { compareFeituanHomeProjects } from './feituanHomeProjectSort';
 import { getProject, type ProjectRow } from './projectService';
 import type { BundleToolDoc, ProjectDoc, ProjectProduct } from '../types/firestore';
 
@@ -249,11 +250,7 @@ export async function listListedFeituanProjects(): Promise<ProjectRow[]> {
       const closes = row.data.closesAt?.toDate?.();
       return closes ? closes.getTime() > now : true;
     })
-    .sort((a, b) => {
-      const ta = a.data.feituanReviewedAt?.toMillis?.() ?? 0;
-      const tb = b.data.feituanReviewedAt?.toMillis?.() ?? 0;
-      return tb - ta;
-    });
+    .sort(compareFeituanHomeProjects);
 }
 
 export function isFeituanListedProject(project: ProjectDoc | null | undefined): boolean {

@@ -26,6 +26,7 @@ import {
   showExtraAddressUnderDeliveryPoint,
 } from '../../lib/orderDeliveryHelpers';
 import {
+  customerCancelUnpaidPaymentGroup,
   customerDeletePaymentScreenshot,
   customerUpdateOrderContact,
   customerUpdateOrderDeliverySlot,
@@ -52,7 +53,10 @@ import {
   parseScreenshotEntries,
   type ParsedScreenshotEntry,
 } from '../../lib/paymentScreenshotHelpers';
-import { buildPaymentGroups } from '../../lib/paymentGroups';
+import {
+  buildPaymentGroups,
+  hasCancellableUnpaidPaymentGroups,
+} from '../../lib/paymentGroups';
 import {
   cardApplicationsForPaymentGroup,
   listOrderCardPaymentApplications,
@@ -266,6 +270,8 @@ export default function OrderDetail() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelMsg, setCancelMsg] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -768,6 +774,44 @@ export default function OrderDetail() {
       });
   };
 
+  const handleCancelUnpaidPaymentGroup = () => {
+    if (!orderRow || !order) return;
+    if (!hasCancellableUnpaidPaymentGroups(order)) return;
+    if (
+      !window.confirm(
+        '确定取消全部待付款？已确认收款的支付组不受影响；取消后对应库存将恢复。此操作不可撤销。'
+      )
+    ) {
+      return;
+    }
+    setCancelBusy(true);
+    setCancelMsg(null);
+    void customerCancelUnpaidPaymentGroup({
+      orderFirestoreId: orderRow.id,
+      projectId: order.projectId,
+      orderNumber: order.orderNumber,
+      customerKey,
+    })
+      .then(async (res) => {
+        const row = await getOrderByNumber(
+          order.projectId,
+          decodeURIComponent(orderId)
+        );
+        applyOrderRow(row);
+        setCancelMsg(
+          res.cancelledWholeOrder
+            ? '订单已取消'
+            : `已取消待付款（${res.cancelledGroupIds.length} 个支付组）`
+        );
+      })
+      .catch((err: unknown) => {
+        setCancelMsg(toLoadErrorMessage(err, '取消失败，请重试。'));
+      })
+      .finally(() => {
+        setCancelBusy(false);
+      });
+  };
+
   if (loading) {
     return (
       <PageShell title="订单详情" subtitle="加载中">
@@ -814,6 +858,10 @@ export default function OrderDetail() {
   const shots = parseScreenshotEntries(order.paymentScreenshots);
   const hasShots = orderHasPaymentScreenshots(order.paymentScreenshots);
   const paymentGroups = buildPaymentGroups(order);
+  const showCancelUnpaid =
+    isFeituanOrder &&
+    order.status !== 'cancelled' &&
+    hasCancellableUnpaidPaymentGroups(order);
   const displayStatus = deriveDisplayOrderStatus(order, paymentGroups);
   const confirmedAmount = sumGroupAmountByStatus(paymentGroups, 'confirmed');
   const unpaidAmount = sumGroupAmountByStatus(paymentGroups, 'unpaid');
@@ -1769,10 +1817,24 @@ export default function OrderDetail() {
           ) : null}
 
         <div className="mt-2 border-t border-gray-100 pt-6">
-          <div className="flex gap-3">
+          {cancelMsg ? (
+            <p
+              className={`mb-3 text-sm ${
+                cancelMsg.includes('失败') ? 'text-red-600' : 'text-emerald-700'
+              }`}
+            >
+              {cancelMsg}
+            </p>
+          ) : null}
+          <div className="flex gap-2 sm:gap-3">
             <Link
               to={homeHref}
-              className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl border-2 border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+              aria-label={isFeituanOrder ? '返回饭团主页' : '返回首页'}
+              className={`group inline-flex min-h-[3.25rem] items-center justify-center rounded-2xl border-2 border-gray-200 bg-white shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2 ${
+                showCancelUnpaid
+                  ? 'w-[3.25rem] shrink-0 px-0'
+                  : 'flex-1 gap-2 px-4 py-3 text-sm font-semibold text-gray-800'
+              }`}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -1789,8 +1851,20 @@ export default function OrderDetail() {
                   d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"
                 />
               </svg>
-              <span>{isFeituanOrder ? '返回饭团主页' : '返回首页'}</span>
+              {!showCancelUnpaid ? (
+                <span>{isFeituanOrder ? '返回饭团主页' : '返回首页'}</span>
+              ) : null}
             </Link>
+            {showCancelUnpaid ? (
+              <button
+                type="button"
+                disabled={cancelBusy}
+                onClick={handleCancelUnpaidPaymentGroup}
+                className="inline-flex min-h-[3.25rem] flex-1 items-center justify-center rounded-2xl border-2 border-red-200 bg-red-50 px-3 py-3 text-sm font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:opacity-60 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
+              >
+                {cancelBusy ? '取消中…' : '取消订单'}
+              </button>
+            ) : null}
             <Link
               to={myOrdersHref}
               className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-indigo-600 to-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/25 transition hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
