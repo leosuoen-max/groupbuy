@@ -241,6 +241,7 @@ export default function FeituanWallet() {
                     {row.data.orderProjectId && row.data.orderNumber ? (
                       <Link
                         to={`/feituan/projects/${encodeURIComponent(row.data.orderProjectId)}/orders/${encodeURIComponent(row.data.orderNumber)}`}
+                        state={{ returnTo: '/feituan/wallet' }}
                         className="mt-1 inline-flex text-orange-600 underline-offset-2 hover:underline"
                       >
                         查看订单 #{row.data.orderNumber}

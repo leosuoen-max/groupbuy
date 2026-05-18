@@ -688,6 +688,9 @@ export default function OrderForm() {
       await new Promise((resolve) => window.setTimeout(resolve, timedPromoPaymentDueAt ? 1200 : 280));
       navigate(`${base}/orders/${encodeURIComponent(orderNumber)}`, {
         replace: true,
+        state: {
+          returnTo: `${location.pathname}${location.search}`,
+        },
       });
     } catch (error) {
       if (error instanceof CreateOrderError) {
@@ -894,7 +897,7 @@ export default function OrderForm() {
       {activeStep === 1 && isFeituanOrder ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">填写订单</h2>
-          <section className={FEITUAN_TW.formSection}>
+          <section className={FEITUAN_TW.formSectionPlain}>
             <div className="space-y-2.5">
               <label className="flex items-center gap-2">
                 <span className={feituanLabelCls}>姓名：</span>
@@ -964,7 +967,7 @@ export default function OrderForm() {
             </div>
           </section>
 
-          <section className={FEITUAN_TW.formSection}>
+          <section className={FEITUAN_TW.formSectionPlain}>
             <p className={`mb-2 text-sm font-semibold ${FEITUAN_TW.text}`}>配送点</p>
             {feituanDeliveryConflictVersusLast ? (
               <div className="mb-2 space-y-2">
@@ -1027,13 +1030,7 @@ export default function OrderForm() {
                 </div>
               </div>
             ) : null}
-            <div
-              className="min-h-[5.5rem] rounded-xl border border-dashed px-3 py-3"
-              style={{
-                borderColor: FEITUAN_HOME.primaryBorder,
-                backgroundColor: FEITUAN_HOME.primaryBg,
-              }}
-            >
+            <div className="min-h-[5.5rem] rounded-xl border border-dashed border-[#D8F0E4] bg-white px-3 py-3">
               {points.length === 0 ? (
                 <p className="text-center text-sm leading-relaxed text-gray-500">
                   当前项目尚未配置配送点。填写地址不少于 2 个字后，将自动选择「未指定配送点」。

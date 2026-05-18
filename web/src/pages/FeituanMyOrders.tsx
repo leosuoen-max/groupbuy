@@ -255,6 +255,7 @@ export default function FeituanMyOrders() {
                     </div>
                     <Link
                       to={`/feituan/projects/${encodeURIComponent(o.projectId)}/orders/${encodeURIComponent(o.orderNumber)}`}
+                      state={{ returnTo: '/feituan/my-orders' }}
                       className="shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white"
                     >
                       查看详情

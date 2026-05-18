@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { RecurringDeliverySlotChooser } from '../../components/customer/RecurringDeliverySlotChooser';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
@@ -232,8 +232,13 @@ function buildDeliveryUpdateFromDraft(
   };
 }
 
+type OrderDetailLocationState = {
+  returnTo?: string;
+};
+
 export default function OrderDetail() {
   useWechatNotifySession();
+  const location = useLocation();
   const { user, loading: authLoading } = useAuthUser();
   const { shopSlug = '', projectId = '', orderId = '' } = useParams<{
     shopSlug?: string;
@@ -248,6 +253,11 @@ export default function OrderDetail() {
     : `/shop/${encodeURIComponent(shopSlug)}/${encodeURIComponent(projectId)}`;
   const homeHref = isFeituanOrder ? '/feituan' : base;
   const myOrdersHref = isFeituanOrder ? '/feituan/my-orders' : `${base}/my-orders`;
+  const feituanBackHref = useMemo(() => {
+    const st = location.state as OrderDetailLocationState | null;
+    if (st?.returnTo?.trim()) return st.returnTo.trim();
+    return base;
+  }, [base, location.state]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -834,7 +844,12 @@ export default function OrderDetail() {
 
   if (loading) {
     return (
-      <PageShell title="订单详情" subtitle="加载中">
+      <PageShell
+        title="订单详情"
+        subtitle="加载中"
+        historyBack={isFeituanOrder}
+        backHref={isFeituanOrder ? feituanBackHref : undefined}
+      >
         <p className="text-sm text-gray-600">正在读取订单详情…</p>
       </PageShell>
     );
@@ -842,7 +857,12 @@ export default function OrderDetail() {
 
   if (error) {
     return (
-      <PageShell title="订单详情" subtitle="加载失败">
+      <PageShell
+        title="订单详情"
+        subtitle="加载失败"
+        historyBack={isFeituanOrder}
+        backHref={isFeituanOrder ? feituanBackHref : undefined}
+      >
         <p className="text-sm text-red-600">{error}</p>
       </PageShell>
     );
@@ -850,7 +870,12 @@ export default function OrderDetail() {
 
   if (!order || !orderRow) {
     return (
-      <PageShell title="订单详情" subtitle="未找到订单">
+      <PageShell
+        title="订单详情"
+        subtitle="未找到订单"
+        historyBack={isFeituanOrder}
+        backHref={isFeituanOrder ? feituanBackHref : undefined}
+      >
         <p className="text-sm text-gray-600">
           可能尚未提交，或订单号不匹配。
         </p>
@@ -1003,7 +1028,12 @@ export default function OrderDetail() {
   );
 
   return (
-    <PageShell title={`订单 #${order.orderNumber}`} subtitle={order.projectTitle}>
+    <PageShell
+      title={`订单 #${order.orderNumber}`}
+      subtitle={order.projectTitle}
+      historyBack={isFeituanOrder}
+      backHref={isFeituanOrder ? feituanBackHref : undefined}
+    >
       <div className="space-y-4 text-sm text-gray-800">
         {!projectOpen ? (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">

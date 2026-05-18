@@ -17,10 +17,12 @@ import { listListedFeituanProjects } from '../lib/feituanService';
 import type { ProjectRow } from '../lib/projectService';
 import { getFeituanHomeShareUrl } from '../lib/shareLink';
 import { getShopById, type ShopRow } from '../lib/shopService';
+import { buildFeituanHomeMosaicPlans } from '../lib/feituanHomeMosaic';
 import {
   buildFeituanHomeShareCard,
   compactWechatShareText,
 } from '../lib/wechatShareMeta';
+import { FeituanHomeProjectMosaic } from '../components/feituan/FeituanHomeProjectMosaic';
 
 const C = FEITUAN_HOME;
 
@@ -39,22 +41,6 @@ function formatWechatShareSetupError(raw: string | null): string {
     return 'Cloud Functions 未配置 WECHAT_APP_ID / WECHAT_APP_SECRET';
   }
   return msg.length > 120 ? `${msg.slice(0, 119)}…` : msg;
-}
-
-function projectImages(p: ProjectRow): string[] {
-  const urls: string[] = [];
-  const push = (raw: string | undefined | null) => {
-    const url = raw?.trim();
-    if (url && !urls.includes(url)) urls.push(url);
-  };
-  push(p.data.imageBlocks?.find((b) => b.isCoverImage)?.url);
-  for (const block of p.data.imageBlocks ?? []) push(block.url);
-  for (const product of [...(p.data.products ?? [])].sort(
-    (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
-  )) {
-    push(product.imageUrl);
-  }
-  return urls.slice(0, 6);
 }
 
 function firstProductNames(p: ProjectRow): string {
@@ -224,6 +210,10 @@ export default function FeituanHome() {
   }, []);
 
   const listedText = rows.length > 0 ? `正在开团 · ${rows.length} 个饭团项目` : '正在开团';
+  const mosaicPlans = useMemo(
+    () => buildFeituanHomeMosaicPlans(rows.map((r) => r.project)),
+    [rows]
+  );
 
   return (
     <main
@@ -251,8 +241,8 @@ export default function FeituanHome() {
         </div>
       ) : null}
       <div className="space-y-3">
-        {rows.map(({ project, shop }) => {
-          const images = projectImages(project);
+        {rows.map(({ project, shop }, cardIndex) => {
+          const mosaicPlan = mosaicPlans[cardIndex] ?? null;
           const href = `/feituan/projects/${encodeURIComponent(project.id)}`;
           const intro =
             compactWechatShareText(project.data.textContent, 72) ||
@@ -295,7 +285,7 @@ export default function FeituanHome() {
                   ) : null}
                 </div>
 
-                {images.length > 0 ? <ProjectImageMosaic images={images} /> : null}
+                {mosaicPlan ? <FeituanHomeProjectMosaic plan={mosaicPlan} /> : null}
 
                 <p className="line-clamp-2 text-[13px] leading-relaxed" style={{ color: C.textSub }}>
                   {intro}
@@ -340,82 +330,5 @@ export default function FeituanHome() {
         onSystemShare={() => void handleShareSheetSystemShare()}
       />
     </main>
-  );
-}
-
-function ProjectImageMosaic({ images }: { images: string[] }) {
-  const mosaicBg = { backgroundColor: C.primaryBg };
-  const count = images.length;
-  if (count === 1) {
-    return (
-      <div className="mb-2 overflow-hidden rounded-2xl" style={mosaicBg}>
-        <img src={images[0]} alt="" className="h-28 w-full object-cover" loading="lazy" />
-      </div>
-    );
-  }
-
-  if (count === 2) {
-    return (
-      <div className="mb-2 grid h-28 grid-cols-2 gap-1.5 overflow-hidden rounded-2xl" style={mosaicBg}>
-        {images.map((img) => (
-          <img key={img} src={img} alt="" className="h-28 w-full object-cover" loading="lazy" />
-        ))}
-      </div>
-    );
-  }
-
-  if (count === 3) {
-    return (
-      <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl" style={mosaicBg}>
-        <img src={images[0]} alt="" className="col-span-3 h-28 w-full object-cover" loading="lazy" />
-        <div className="col-span-2 grid h-28 grid-rows-2 gap-1.5">
-          {images.slice(1, 3).map((img) => (
-            <img key={img} src={img} alt="" className="h-full min-h-0 w-full object-cover" loading="lazy" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (count === 4) {
-    return (
-      <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl" style={mosaicBg}>
-        <img src={images[0]} alt="" className="col-span-3 h-28 w-full object-cover" loading="lazy" />
-        <div className="col-span-2 grid h-28 grid-cols-2 grid-rows-2 gap-1.5">
-          {images.slice(1, 4).map((img, idx) => (
-            <img
-              key={img}
-              src={img}
-              alt=""
-              className={`${idx === 0 ? 'col-span-2' : ''} h-full min-h-0 w-full object-cover`}
-              loading="lazy"
-            />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const smallImages = images.slice(1, count >= 6 ? 6 : 5);
-  return (
-    <div className="mb-2 grid h-28 grid-cols-5 gap-1.5 overflow-hidden rounded-2xl" style={mosaicBg}>
-      <img
-        src={images[0]}
-        alt=""
-        className="col-span-3 h-28 w-full object-cover"
-        loading="lazy"
-      />
-      <div className="col-span-2 grid h-28 grid-cols-2 gap-1.5">
-        {smallImages.map((img, idx) => (
-          <img
-            key={img}
-            src={img}
-            alt=""
-            className={`${smallImages.length === 5 && idx === 0 ? 'row-span-2' : ''} h-full min-h-0 w-full object-cover`}
-            loading="lazy"
-          />
-        ))}
-      </div>
-    </div>
   );
 }

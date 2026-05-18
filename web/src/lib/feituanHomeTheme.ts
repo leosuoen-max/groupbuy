@@ -65,6 +65,8 @@ export const FEITUAN_TW = {
   inputInline:
     'block w-full rounded-lg border border-[#D8F0E4] bg-white px-2.5 py-1.5 text-sm text-[#0F8F5F] outline-none placeholder:text-[#0F8F5F]/35 focus:border-[#0F8F5F] focus:ring-2 focus:ring-[#0F8F5F]/25',
   formSection: 'rounded-xl border border-[#D8F0E4] bg-[#E6F8EF]/70 px-3 py-2.5',
+  /** 填写订单等：白底、保留绿色描边与文字 */
+  formSectionPlain: 'rounded-xl border border-[#D8F0E4] bg-white px-3 py-2.5',
   flowPage: 'min-h-svh bg-[#f6f7f8]',
   flowMain: 'mx-auto max-w-xl space-y-3 px-4 py-3 text-sm',
   backLink: 'text-sm font-medium text-[#0F8F5F] hover:underline',

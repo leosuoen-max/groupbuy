@@ -567,7 +567,12 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
         .then(() => {
           navigate(
             `/feituan/projects/${encodeURIComponent(project.id)}/orders/${encodeURIComponent(appendTarget.data.orderNumber)}`,
-            { replace: true }
+            {
+              replace: true,
+              state: {
+                returnTo: `/feituan/projects/${encodeURIComponent(project.id)}`,
+              },
+            }
           );
         })
         .catch((e: unknown) => {

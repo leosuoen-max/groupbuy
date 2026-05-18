@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuthUser } from './useAuthUser';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
-import { countFeituanActionableMessages } from '../lib/feituanMessageCount';
+import { computeFeituanTabBadgeFromRows } from '../lib/feituanMessages';
 import { listFeituanOrdersForCustomer } from '../lib/orderService';
 import { getWechatNotifyOAuthStateId } from '../lib/wechatService';
 
@@ -12,12 +12,13 @@ export function useFeituanMessageCount(): number {
   const refresh = useCallback(async () => {
     if (authLoading) return;
     try {
+      const customerKey = getOrCreateCustomerKey();
       const rows = await listFeituanOrdersForCustomer({
-        customerKey: getOrCreateCustomerKey(),
+        customerKey,
         customerUserId: user?.phoneNumber ? user.uid : undefined,
         wechatNotifyOAuthStateId: getWechatNotifyOAuthStateId(),
       });
-      setCount(countFeituanActionableMessages(rows.map((r) => r.data)));
+      setCount(computeFeituanTabBadgeFromRows(rows, customerKey));
     } catch {
       setCount(0);
     }
@@ -28,9 +29,11 @@ export function useFeituanMessageCount(): number {
     const onRefresh = () => void refresh();
     window.addEventListener('feituan-messages-updated', onRefresh);
     window.addEventListener('focus', onRefresh);
+    window.addEventListener('storage', onRefresh);
     return () => {
       window.removeEventListener('feituan-messages-updated', onRefresh);
       window.removeEventListener('focus', onRefresh);
+      window.removeEventListener('storage', onRefresh);
     };
   }, [refresh]);
 

@@ -1,10 +1,14 @@
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 type PageShellProps = {
   title: string;
   subtitle?: string;
   children?: React.ReactNode;
   hideBack?: boolean;
+  /** 使用浏览器历史返回（文案默认「上一页」） */
+  historyBack?: boolean;
+  backLabel?: string;
+  backHref?: string;
 };
 
 const link = 'text-indigo-600 underline-offset-2 hover:underline';
@@ -35,16 +39,48 @@ function pageBackTarget(pathname: string): { href: string; label: string } {
   return { href: '/', label: '商户入口' };
 }
 
-export function PageShell({ title, subtitle, children, hideBack }: PageShellProps) {
+export function PageShell({
+  title,
+  subtitle,
+  children,
+  hideBack,
+  historyBack = false,
+  backLabel,
+  backHref,
+}: PageShellProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const back = pageBackTarget(location.pathname);
+  const label = backLabel ?? (historyBack ? '上一页' : back.label);
+  const href = backHref ?? back.href;
+
   return (
     <main className="min-h-[60vh] w-full px-4 py-5">
       {!hideBack ? (
         <p className="mb-3">
-          <Link to={back.href} className={link}>
-            ← {back.label}
-          </Link>
+          {historyBack ? (
+            <button
+              type="button"
+              className={`${link} cursor-pointer bg-transparent p-0`}
+              onClick={() => {
+                if (backHref) {
+                  navigate(backHref);
+                  return;
+                }
+                if (window.history.length > 1) {
+                  navigate(-1);
+                  return;
+                }
+                navigate(back.href);
+              }}
+            >
+              ← {label}
+            </button>
+          ) : (
+            <Link to={href} className={link}>
+              ← {label}
+            </Link>
+          )}
         </p>
       ) : null}
       <h1 className="mb-2 text-xl font-semibold text-gray-900">{title}</h1>
