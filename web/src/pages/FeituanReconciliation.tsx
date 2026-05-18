@@ -11,9 +11,7 @@ import { isFeituanAdmin } from '../lib/feituanService';
 import { listActiveFeituanDeliveryPoints } from '../lib/feituanDeliveryService';
 import { formatMYR } from '../lib/formatMYR';
 import {
-  buildDeliveryPointLookup,
   DEFAULT_BUCKET_SELECTION,
-  deliveryPointReconciliationLabel,
   linesInSelectedBuckets,
   listOrderPaymentGroups,
   orderMatchesBucketSelection,
@@ -24,12 +22,20 @@ import {
   type GroupBucket,
 } from '../lib/reconciliationGroups';
 import {
+  buildDeliveryDetailCsv,
+  buildDeliveryManifest,
+  buildDeliveryManifestCopyText,
+  buildDeliveryManifestCsv,
+  buildFeituanDeliveryPointMap,
+  listDeliverySlotOptionsFromOrders,
+  orderMatchesDeliverySlotKey,
+  resolveDeliveryPointGroup,
+  type DeliveryPointGroup,
+} from '../lib/feituanDeliveryReconciliation';
+import {
   buildProductionCopyText,
   buildProductionCsv,
   buildProductionTotals,
-  buildReconciliationCopyText,
-  buildReconciliationCsv,
-  buildReconciliationTotals,
 } from '../lib/reconciliationSummary';
 import {
   buildProfitCopyText,
@@ -42,7 +48,6 @@ import { listFeituanOrders, type OrderRow } from '../lib/orderService';
 import { parseScreenshotEntries } from '../lib/paymentScreenshotHelpers';
 import { getProject } from '../lib/projectService';
 import type {
-  DeliveryPointDoc,
   OrderDoc,
   OrderLineDoc,
   OrderStatus,
@@ -50,12 +55,12 @@ import type {
 } from '../types/firestore';
 import type { MockDeliveryPoint } from '../types/orderDraft';
 
-type ViewMode = 'reconciliation' | 'production' | 'profit';
+type ViewMode = 'delivery' | 'production' | 'profit';
 
-type ReconciliationTableItem = {
+type DeliveryTableItem = {
   row: OrderRow;
   groups: ReturnType<typeof listOrderPaymentGroups>;
-  dpDisplay: string;
+  dp: DeliveryPointGroup;
   scopedAmt: number;
 };
 
@@ -84,18 +89,6 @@ function formatLinesCell(lines: OrderLineDoc[], mode: 'all' | 'first'): string {
       : `${f.name}×${f.quantity}`;
   }
   return lines.map((l) => `${l.name}×${l.quantity}`).join('、');
-}
-
-function splitDpLabel(label: string): { code: string; name: string } {
-  const raw = label.trim();
-  const m = raw.match(/^\[([^\]]+)\]\s*(.+)$/);
-  if (m) {
-    return {
-      code: m[1]?.trim() ?? '',
-      name: m[2]?.trim() ?? '',
-    };
-  }
-  return { code: '', name: raw };
 }
 
 function parseDateTimeMs(yyyyMmDdHhMm: string): number | null {
@@ -148,22 +141,6 @@ function formatOrderTime(o: OrderDoc): { dateStr: string; clockStr: string } {
   };
 }
 
-function toDeliveryPointRows(
-  points: MockDeliveryPoint[]
-): Array<{ id: string; data: DeliveryPointDoc }> {
-  return points.map((p) => ({
-    id: p.id,
-    data: {
-      code: p.code,
-      shortName: p.name,
-      name: p.name,
-      detailAddress: p.detailAddress,
-      imageUrl: p.imageUrl,
-      isActive: true,
-    } as DeliveryPointDoc,
-  }));
-}
-
 function viewButtonClass(active: boolean): string {
   return `rounded-full px-3 py-1 text-xs font-medium ${
     active ? 'bg-gray-900 text-white' : 'border border-gray-200 bg-white text-gray-600'
@@ -177,6 +154,7 @@ export default function FeituanReconciliation() {
   const projectFilter = searchParams.get('project') ?? '';
   const proofStart = searchParams.get('proofStart') ?? '';
   const proofEnd = searchParams.get('proofEnd') ?? '';
+  const deliverySlotKey = searchParams.get('deliverySlot') ?? '';
 
   const [allowed, setAllowed] = useState<boolean | null>(null);
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -191,7 +169,7 @@ export default function FeituanReconciliation() {
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
   const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
-  const [viewMode, setViewMode] = useState<ViewMode>('reconciliation');
+  const [viewMode, setViewMode] = useState<ViewMode>('delivery');
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -245,26 +223,46 @@ export default function FeituanReconciliation() {
     return () => window.clearTimeout(timer);
   }, [authLoading, refresh, user]);
 
-  const deliveryPointLookup = useMemo(
-    () => buildDeliveryPointLookup(toDeliveryPointRows(deliveryPoints)),
+  const feituanPointById = useMemo(
+    () => buildFeituanDeliveryPointMap(deliveryPoints),
     [deliveryPoints]
   );
 
-  const scopedOrders = useMemo(() => {
+  const projectScopedOrders = useMemo(() => {
     const pid = projectFilter.trim();
+    return orders.filter((r) => !pid || r.data.projectId === pid);
+  }, [orders, projectFilter]);
+
+  const scopedOrders = useMemo(() => {
     const startMs = parseDateTimeMs(proofStart);
     const endMs = parseDateTimeMs(proofEnd);
     if (startMs != null && endMs != null && startMs > endMs) return [];
-    return orders.filter((r) => {
-      if (pid && r.data.projectId !== pid) return false;
+    return projectScopedOrders.filter((r) => {
       if (startMs == null && endMs == null) return true;
       return hasPaymentActivityInRange(r.data, startMs, endMs);
     });
-  }, [orders, projectFilter, proofEnd, proofStart]);
+  }, [projectScopedOrders, proofEnd, proofStart]);
 
-  const totals = useMemo(
-    () => buildReconciliationTotals(scopedOrders),
-    [scopedOrders]
+  const deliverySlotOptions = useMemo(
+    () => listDeliverySlotOptionsFromOrders(projectScopedOrders),
+    [projectScopedOrders]
+  );
+
+  const selectedSlotLabel =
+    deliverySlotOptions.find((x) => x.key === deliverySlotKey)?.label ?? deliverySlotKey;
+
+  const deliveryScopedOrders = useMemo(() => {
+    if (!deliverySlotKey.trim()) return [];
+    return projectScopedOrders.filter(
+      (r) =>
+        r.data.status !== 'cancelled' &&
+        orderMatchesDeliverySlotKey(r.data, deliverySlotKey)
+    );
+  }, [deliverySlotKey, projectScopedOrders]);
+
+  const deliveryManifest = useMemo(
+    () => buildDeliveryManifest(deliveryScopedOrders, bucketSelection, feituanPointById),
+    [bucketSelection, deliveryScopedOrders, feituanPointById]
   );
 
   const productionTotals = useMemo(
@@ -276,20 +274,6 @@ export default function FeituanReconciliation() {
   const profitTotals = useMemo(
     () => buildProfitTotals(scopedOrders, bucketSelection, projectsMap),
     [bucketSelection, projectsMap, scopedOrders]
-  );
-
-  const feituanWalletAmount = useMemo(
-    () =>
-      scopedOrders.reduce(
-        (sum, row) =>
-          sum +
-          listOrderFeituanWalletPaymentApplications(row.data).reduce(
-            (s, app) => s + (Number(app.deduct) || 0),
-            0
-          ),
-        0
-      ),
-    [scopedOrders]
   );
 
   const projectOptions = useMemo(() => {
@@ -307,38 +291,46 @@ export default function FeituanReconciliation() {
       ? projectOptions.find((x) => x[0] === projectFilter)![1]
       : '全部项目';
 
-  const tableRows = useMemo(() => {
-    const acc: ReconciliationTableItem[] = [];
-    for (const r of scopedOrders) {
-      if (r.data.status === 'cancelled') continue;
+  const deliveryTableRows = useMemo(() => {
+    if (!deliverySlotKey.trim()) return [];
+    const acc: DeliveryTableItem[] = [];
+    for (const r of deliveryScopedOrders) {
       const groups = listOrderPaymentGroups(r.data);
       if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
-      const dpDisplay = deliveryPointReconciliationLabel(r.data, deliveryPointLookup);
       acc.push({
         row: r,
         groups,
-        dpDisplay,
+        dp: resolveDeliveryPointGroup(r.data, feituanPointById),
         scopedAmt: scopedGroupAmount(groups, bucketSelection),
       });
     }
     acc.sort((a, b) => {
-      const c = a.dpDisplay.localeCompare(b.dpDisplay, 'zh-CN');
+      const c = a.dp.sortKey.localeCompare(b.dp.sortKey, 'zh-CN');
       if (c !== 0) return c;
       const ta = a.row.data.createdAt?.toMillis?.() ?? 0;
       const tb = b.row.data.createdAt?.toMillis?.() ?? 0;
       return ta - tb;
     });
     return acc;
-  }, [bucketSelection, deliveryPointLookup, scopedOrders]);
+  }, [bucketSelection, deliveryScopedOrders, deliverySlotKey, feituanPointById]);
 
   const sectionsByDp = useMemo(() => {
-    const m = new Map<string, ReconciliationTableItem[]>();
-    for (const item of tableRows) {
-      if (!m.has(item.dpDisplay)) m.set(item.dpDisplay, []);
-      m.get(item.dpDisplay)!.push(item);
+    const m = new Map<string, DeliveryTableItem[]>();
+    for (const item of deliveryTableRows) {
+      const key = item.dp.sortKey;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(item);
     }
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'));
-  }, [tableRows]);
+  }, [deliveryTableRows]);
+
+  useEffect(() => {
+    if (!deliverySlotKey.trim()) return;
+    if (deliverySlotOptions.some((x) => x.key === deliverySlotKey)) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('deliverySlot');
+    setSearchParams(next, { replace: true });
+  }, [deliverySlotKey, deliverySlotOptions, searchParams, setSearchParams]);
 
   const bucketFileSuffix = useMemo(() => {
     const parts: string[] = [];
@@ -350,14 +342,11 @@ export default function FeituanReconciliation() {
 
   const handleCopy = async () => {
     const text =
-      viewMode === 'reconciliation'
-        ? buildReconciliationCopyText({
-            shopName: '大马饭团',
+      viewMode === 'delivery'
+        ? buildDeliveryManifestCopyText({
+            slotLabel: selectedSlotLabel || '未选配送档',
             projectLabel,
-            rows: scopedOrders,
-            totals,
-            bucketSelection,
-            deliveryPointLookup,
+            zones: deliveryManifest,
           })
         : viewMode === 'production'
           ? buildProductionCopyText({
@@ -381,8 +370,16 @@ export default function FeituanReconciliation() {
 
   const handleExportCsv = () => {
     const csv = '\ufeff' + (
-      viewMode === 'reconciliation'
-        ? buildReconciliationCsv(scopedOrders, bucketSelection, deliveryPointLookup)
+      viewMode === 'delivery'
+        ? [
+            buildDeliveryManifestCsv(deliveryManifest),
+            '',
+            buildDeliveryDetailCsv(
+              deliveryScopedOrders,
+              bucketSelection,
+              feituanPointById
+            ),
+          ].join('\n')
         : viewMode === 'production'
           ? buildProductionCsv(productionTotals)
           : buildProfitCsv(profitTotals)
@@ -391,12 +388,13 @@ export default function FeituanReconciliation() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
+    const slotSuffix = deliverySlotKey.replace(':', '-') || '未选档';
     a.download =
-      viewMode === 'reconciliation'
-        ? `饭团对账单-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
+      viewMode === 'delivery'
+        ? `饭团配送统计-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
         : viewMode === 'production'
           ? `饭团生产统计-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
-          : `饭团成本利润-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
+          : `饭团财务统计-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -426,7 +424,7 @@ export default function FeituanReconciliation() {
   }
 
   return (
-    <PageShell title="饭团对账" subtitle="金额核对、生产统计与成本利润">
+    <PageShell title="饭团对账" subtitle="配送统计、生产统计与财务统计">
       {err ? (
         <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {err}
@@ -434,17 +432,21 @@ export default function FeituanReconciliation() {
       ) : null}
 
       <p className="mb-4 text-xs text-gray-600">
-        清单按「支付组」统计金额（首单 / 加购各一档）；汇总卡片为当前项目与时间筛选下的全量组口径，清单可通过下方标签筛选包含哪些组。
+        {viewMode === 'delivery'
+          ? '配送统计按配送档汇总清单与明细；须先选择配送档。明细金额仍按支付组（首单 / 加购）统计，可通过「清单包含」筛选。'
+          : viewMode === 'production'
+            ? '生产统计按凭证/自动确认时间与项目筛选，清单包含控制计入的支付组。'
+            : '财务统计按凭证/自动确认时间与项目筛选，成本按饭团管理员录入的采购成本计算。'}
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-gray-700">视图：</span>
         <button
           type="button"
-          className={viewButtonClass(viewMode === 'reconciliation')}
-          onClick={() => setViewMode('reconciliation')}
+          className={viewButtonClass(viewMode === 'delivery')}
+          onClick={() => setViewMode('delivery')}
         >
-          金额对账
+          配送统计
         </button>
         <button
           type="button"
@@ -458,7 +460,7 @@ export default function FeituanReconciliation() {
           className={viewButtonClass(viewMode === 'profit')}
           onClick={() => setViewMode('profit')}
         >
-          成本利润统计
+          财务统计
         </button>
       </div>
 
@@ -484,95 +486,45 @@ export default function FeituanReconciliation() {
             ))}
           </select>
         </label>
-        <ProofDatetimeFilterFields
-          searchParams={searchParams}
-          setSearchParams={setSearchParams}
-          proofStart={proofStart}
-          proofEnd={proofEnd}
-          startLabel="凭证/自动确认时间起"
-          endLabel="凭证/自动确认时间止"
-          hint="时间筛选按顾客上传截图、免凭证确认、饭团钱包/次卡自动确认时间统计。若要表示「5月4日24:00」，请填写次日 00:00。"
-        />
+        {viewMode === 'delivery' ? (
+          <label className="mt-3 block text-sm text-gray-800">
+            配送档
+            <select
+              className="mt-1 block w-full max-w-md rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              value={deliverySlotKey}
+              onChange={(e) => {
+                const v = e.target.value;
+                const next = new URLSearchParams(searchParams);
+                if (v) next.set('deliverySlot', v);
+                else next.delete('deliverySlot');
+                setSearchParams(next);
+              }}
+            >
+              <option value="">请选择配送档</option>
+              {deliverySlotOptions.map((opt) => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-gray-500">
+              选项来自当前项目筛选下已有订单的配送档；无档订单（如长期项目未付款）不会出现在列表中。
+            </span>
+          </label>
+        ) : (
+          <ProofDatetimeFilterFields
+            searchParams={searchParams}
+            setSearchParams={setSearchParams}
+            proofStart={proofStart}
+            proofEnd={proofEnd}
+            startLabel="凭证/自动确认时间起"
+            endLabel="凭证/自动确认时间止"
+            hint="时间筛选按顾客上传截图、免凭证确认、饭团钱包/次卡自动确认时间统计。若要表示「5月4日24:00」，请填写次日 00:00。"
+          />
+        )}
       </div>
 
-      {viewMode === 'reconciliation' ? (
-        <>
-          <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-              <div className="text-xs font-medium text-emerald-800">已确认到账（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-emerald-900">
-                {formatMYR(totals.confirmedAmount)}
-              </div>
-              <div className="text-xs text-emerald-800">{totals.confirmedCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <div className="text-xs font-medium text-amber-900">待确认金额（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-amber-950">
-                {formatMYR(totals.pendingAmount)}
-              </div>
-              <div className="text-xs text-amber-900">{totals.pendingCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-              <div className="text-xs font-medium text-red-900">待付款（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-red-950">
-                {formatMYR(totals.unpaidAmount)}
-              </div>
-              <div className="text-xs text-red-900">{totals.unpaidCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-              <div className="text-xs font-medium text-gray-700">订单总额（未取消）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-gray-900">
-                {formatMYR(totals.totalActiveAmount)}
-              </div>
-              <div className="text-xs text-gray-600">{totals.activeCount} 单</div>
-            </div>
-          </div>
-
-          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
-            <div className="font-medium">已确认构成（组口径）</div>
-            <div className="mt-2 space-y-1.5 tabular-nums">
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">饭团钱包自动确认</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(feituanWalletAmount)}
-                </strong>
-              </p>
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">卡/店铺钱包代扣</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(totals.confirmedWalletAmount + totals.confirmedPassDeductAmount)}
-                </strong>
-              </p>
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">免凭证金额</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(totals.confirmedWaivedNoProofAmount)}
-                </strong>
-              </p>
-            </div>
-            <p className="mt-2 text-xs text-indigo-900/80">
-              用于核对已确认组中的自动确认、免凭证与人工凭证构成。
-            </p>
-          </div>
-
-          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
-            <div className="font-medium">声称已付（业务侧）</div>
-            <div className="mt-1 tabular-nums">
-              {formatMYR(totals.claimedPaidAmount)} · {totals.claimedPaidCount} 单
-            </div>
-            <p className="mt-1 text-xs text-indigo-900/90">
-              含已上传截图或状态为待确认/已确认/部分付款的订单，便于与收款流水对照。
-            </p>
-          </div>
-
-          {totals.effectiveRatePercent != null ? (
-            <p className="mb-4 text-sm text-gray-700">
-              有效订单率（订单状态已确认 / 未取消单数）：
-              <strong>{totals.effectiveRatePercent}%</strong>
-            </p>
-          ) : null}
-        </>
-      ) : viewMode === 'production' ? (
+      {viewMode === 'production' ? (
         <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
             <div className="text-xs font-medium text-indigo-800">总出品份数</div>
@@ -593,7 +545,7 @@ export default function FeituanReconciliation() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : viewMode === 'profit' ? (
         <div className="mb-5 space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
@@ -642,7 +594,7 @@ export default function FeituanReconciliation() {
             </div>
           </div>
           <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
-            利润统计复用上方「筛选项目」「凭证/自动确认时间」与「清单包含」所选支付组。
+            财务统计复用上方「筛选项目」「凭证/自动确认时间」与「清单包含」所选支付组。
             成本按饭团管理员确认的项目商品/套餐方案采购成本计算；未填则该行成本按 0。
           </p>
           {profitTotals.missingProjectCount > 0 ? (
@@ -657,7 +609,7 @@ export default function FeituanReconciliation() {
             </p>
           ) : null}
         </div>
-      )}
+      ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-gray-700">清单包含：</span>
@@ -679,7 +631,7 @@ export default function FeituanReconciliation() {
         ))}
       </div>
 
-      {viewMode === 'reconciliation' ? (
+      {viewMode === 'delivery' ? (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-gray-700">商品展示：</span>
           <button
@@ -703,22 +655,21 @@ export default function FeituanReconciliation() {
         <ActionButton type="button" variant="primary" onClick={() => void handleCopy()}>
           {copyOk
             ? '已复制'
-            : viewMode === 'reconciliation'
-              ? '复制对账清单'
+            : viewMode === 'delivery'
+              ? '复制配送清单'
               : viewMode === 'production'
                 ? '复制生产清单'
-                : '复制利润统计'}
+                : '复制财务统计'}
         </ActionButton>
         <ActionButton type="button" variant="secondary" onClick={handleExportCsv}>
           导出 CSV
         </ActionButton>
       </div>
 
-      {viewMode === 'reconciliation' ? (
+      {viewMode === 'delivery' ? (
         <p className="mb-4 text-xs text-gray-500">
-          配送点列优先展示<strong className="font-medium text-gray-700">编号 + 简称</strong>
-          ；无绑定 ID 的历史订单仍显示收货时的快照名称。手机宽度有限时可<strong className="font-medium text-gray-700">左右滑动</strong>
-          查看整表。
+          配送点列上行：<strong className="font-medium text-gray-700">配送区名 + 编号</strong>
+          ，下行为配送点名称。无法在库中匹配的配送点 ID 归入「未知配送点」。明细表可左右滑动查看。
         </p>
       ) : viewMode === 'production' ? (
         <p className="mb-4 text-xs text-gray-500">
@@ -730,18 +681,73 @@ export default function FeituanReconciliation() {
         </p>
       )}
 
-      {viewMode === 'reconciliation' && tableRows.length === 0 ? (
+      {viewMode === 'delivery' && !deliverySlotKey ? (
         <EmptyStateCard
-          title="当前筛选范围暂无订单"
-          hint="可放宽时间窗口、切换项目，或勾选更多「清单包含」标签。"
+          title="请先选择配送档"
+          hint="在上方选择配送档后，将显示配送清单与配送明细。选项来自当前项目下已有订单。"
+        />
+      ) : viewMode === 'delivery' &&
+        deliveryTableRows.length === 0 &&
+        deliveryManifest.length === 0 ? (
+        <EmptyStateCard
+          title="当前配送档暂无订单"
+          hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
         />
       ) : viewMode === 'profit' && profitTotals.rows.length === 0 ? (
         <EmptyStateCard
           title="当前筛选下无明细"
           hint="请勾选「清单包含」中的支付组，或放宽项目/时间筛选。"
         />
-      ) : viewMode === 'reconciliation' ? (
-        <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
+      ) : viewMode === 'delivery' ? (
+        <>
+          <section className="mb-6 rounded-xl border border-gray-100 bg-white">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">配送清单</h3>
+              <p className="mt-0.5 text-xs text-gray-500">
+                {selectedSlotLabel} · {projectLabel} · 按订单计数
+              </p>
+            </div>
+            {deliveryManifest.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-500">当前筛选下无配送订单。</p>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {deliveryManifest.map((zone) => (
+                  <li key={zone.zoneKey} className="px-4 py-3">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {zone.zoneName}
+                      <span className="ml-2 text-xs font-normal tabular-nums text-gray-500">
+                        {zone.orderCount} 单
+                      </span>
+                    </p>
+                    <ul className="mt-2 space-y-1.5 pl-1">
+                      {zone.points.map((p) => (
+                        <li
+                          key={p.pointKey}
+                          className="flex items-baseline justify-between gap-3 text-sm text-gray-700"
+                        >
+                          <span className="min-w-0">
+                            {p.code ? (
+                              <span className="font-mono text-xs font-semibold text-gray-900">
+                                {p.code}
+                              </span>
+                            ) : null}
+                            {p.code ? <span className="mx-1.5 text-gray-300">·</span> : null}
+                            <span className="break-words">{p.name}</span>
+                          </span>
+                          <span className="shrink-0 tabular-nums text-gray-600">
+                            {p.orderCount} 单
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">配送明细</h3>
+          <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
           <table className="w-full min-w-[42rem] table-fixed border-collapse text-left text-sm">
             <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
               <tr>
@@ -763,7 +769,7 @@ export default function FeituanReconciliation() {
                       <div className="h-px w-full bg-gray-200" />
                     </td>
                   </tr>
-                  {items.map(({ row, groups, scopedAmt, dpDisplay }) => {
+                  {items.map(({ row, groups, scopedAmt, dp }) => {
                     const o = row.data;
                     const { dateStr, clockStr } = formatOrderTime(o);
                     const scopedLines = linesInSelectedBuckets(groups, bucketSelection);
@@ -771,7 +777,6 @@ export default function FeituanReconciliation() {
                     const detailUrl = `/admin/feituan/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`;
                     const missingProof = orderNeedsMissingProofLabel(o);
                     const flag = proofRiskDisplayTone(o);
-                    const dpParts = splitDpLabel(dpDisplay);
                     return (
                       <tr
                         key={row.id}
@@ -786,15 +791,11 @@ export default function FeituanReconciliation() {
                           }
                         }}
                       >
-                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={sectionKey}>
-                          {dpParts.code ? (
-                            <span className="inline-flex flex-col">
-                              <span className="font-extrabold text-gray-900">{dpParts.code}</span>
-                              <span className="line-clamp-1 break-words">{dpParts.name}</span>
-                            </span>
-                          ) : (
-                            <span className="line-clamp-2 break-words">{dpParts.name}</span>
-                          )}
+                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={dp.line1}>
+                          <span className="inline-flex flex-col">
+                            <span className="font-extrabold text-gray-900">{dp.line1}</span>
+                            <span className="line-clamp-1 break-words">{dp.line2}</span>
+                          </span>
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 align-top text-xs tabular-nums leading-tight text-gray-700">
                           <span className="inline-flex flex-col">
@@ -858,6 +859,7 @@ export default function FeituanReconciliation() {
             </tbody>
           </table>
         </div>
+        </>
       ) : viewMode === 'production' ? (
         <div className="grid gap-4 md:grid-cols-2">
           <section className="rounded-xl border border-gray-200 bg-white">

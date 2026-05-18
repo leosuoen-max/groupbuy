@@ -1826,15 +1826,13 @@ export default function OrderDetail() {
               {cancelMsg}
             </p>
           ) : null}
-          <div className="flex gap-2 sm:gap-3">
-            <Link
-              to={homeHref}
-              aria-label={isFeituanOrder ? '返回饭团主页' : '返回首页'}
-              className={`group inline-flex min-h-[3.25rem] items-center justify-center rounded-2xl border-2 border-gray-200 bg-white shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2 ${
-                showCancelUnpaid
-                  ? 'w-[3.25rem] shrink-0 px-0'
-                  : 'flex-1 gap-2 px-4 py-3 text-sm font-semibold text-gray-800'
-              }`}
+          {showCancelUnpaid ? (
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div className="flex min-w-0 gap-2 sm:gap-3">
+                <Link
+                  to={homeHref}
+                  aria-label={isFeituanOrder ? '返回饭团主页' : '返回首页'}
+                  className="group inline-flex h-[3.25rem] w-[3.25rem] shrink-0 items-center justify-center rounded-2xl border-2 border-gray-200 bg-white shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -1851,23 +1849,19 @@ export default function OrderDetail() {
                   d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"
                 />
               </svg>
-              {!showCancelUnpaid ? (
-                <span>{isFeituanOrder ? '返回饭团主页' : '返回首页'}</span>
-              ) : null}
             </Link>
-            {showCancelUnpaid ? (
-              <button
-                type="button"
-                disabled={cancelBusy}
-                onClick={handleCancelUnpaidPaymentGroup}
-                className="inline-flex min-h-[3.25rem] flex-1 items-center justify-center rounded-2xl border-2 border-red-200 bg-red-50 px-3 py-3 text-sm font-semibold text-red-700 transition hover:border-red-300 hover:bg-red-100 disabled:opacity-60 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
-              >
-                {cancelBusy ? '取消中…' : '取消订单'}
-              </button>
-            ) : null}
-            <Link
-              to={myOrdersHref}
-              className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-indigo-600 to-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/25 transition hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
+                <button
+                  type="button"
+                  disabled={cancelBusy}
+                  onClick={handleCancelUnpaidPaymentGroup}
+                  className="inline-flex min-h-[3.25rem] min-w-0 flex-1 items-center justify-center rounded-2xl border-2 border-gray-200 bg-white px-3 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md disabled:opacity-60 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                >
+                  {cancelBusy ? '取消中…' : '取消订单'}
+                </button>
+              </div>
+              <Link
+                to={myOrdersHref}
+                className="group inline-flex min-h-[3.25rem] w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-indigo-600 to-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/25 transition hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -1886,7 +1880,54 @@ export default function OrderDetail() {
               </svg>
               <span>我的订单</span>
             </Link>
-          </div>
+            </div>
+          ) : (
+            <div className="flex gap-2 sm:gap-3">
+              <Link
+                to={homeHref}
+                aria-label={isFeituanOrder ? '返回饭团主页' : '返回首页'}
+                className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl border-2 border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-800 shadow-sm transition hover:border-gray-300 hover:bg-gray-50 hover:shadow-md active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={1.5}
+                  stroke="currentColor"
+                  className="h-5 w-5 shrink-0 text-gray-500 transition group-hover:text-gray-700"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"
+                  />
+                </svg>
+                <span>{isFeituanOrder ? '返回饭团主页' : '返回首页'}</span>
+              </Link>
+              <Link
+                to={myOrdersHref}
+                className="group inline-flex min-h-[3.25rem] flex-1 items-center justify-center gap-2 rounded-2xl bg-gradient-to-b from-indigo-600 to-indigo-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-900/25 transition hover:from-indigo-500 hover:to-indigo-600 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={1.5}
+                  stroke="currentColor"
+                  className="h-5 w-5 shrink-0 text-indigo-100"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"
+                  />
+                </svg>
+                <span>我的订单</span>
+              </Link>
+            </div>
+          )}
         </div>
       </div>
       {qrPreview ? (

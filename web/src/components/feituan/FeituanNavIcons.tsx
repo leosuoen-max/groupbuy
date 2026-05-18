@@ -6,6 +6,12 @@ type IconProps = {
 const DEFAULT_SIZE = 18;
 const STROKE = 1.75;
 
+/** 参考四图标分享：左下弯弧 + 右上折线箭头 */
+const FEITUAN_SHARE_ARROW = {
+  arc: 'M6.5 16.8c1.4-4.8 5.4-7.8 9.8-7.3 2.6.3 4.7 1.6 5.9 3.6',
+  head: 'M16.2 6.2h4.3v4.3M16.2 6.2l5.1-5.1',
+} as const;
+
 /** 返回：左箭头 */
 export function FeituanNavBackIcon({ size = DEFAULT_SIZE, className }: IconProps) {
   return (
@@ -28,38 +34,18 @@ export function FeituanNavBackIcon({ size = DEFAULT_SIZE, className }: IconProps
   );
 }
 
-/** 饭团首页顶栏分享：弯弧箭头，尺寸由外层圆钮 CSS 控制 */
-export function FeituanHomeShareIcon({ size, className }: IconProps) {
-  const stroke = 2.35;
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden
-      width={size}
-      height={size}
-      className={size != null ? className : (className ?? 'h-[58%] w-[58%]')}
-    >
-      <path
-        d="M6.75 17c1.55-5.1 5.35-8.15 10.1-7.45 2.55.35 4.55 1.55 5.65 3.55"
-        stroke="currentColor"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M16 6.75h4.5v4.5M16 6.75l5.25-5.25"
-        stroke="currentColor"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
+/** iOS 分享：托盘 + 向上箭头（略内缩，小尺寸下不顶边） */
+const FEITUAN_IOS_SHARE_PATHS = {
+  tray: 'M7.25 14.5V17.25a1.75 1.75 0 001.75 1.75h6a1.75 1.75 0 001.75-1.75V14.5',
+  arrow: 'M12 6.25v7.25M9.25 9.5 12 6.25l2.75 3.25',
+} as const;
 
-/** 分享：左下弯弧 + 右上箭头（淘宝商品页） */
-export function FeituanNavShareIcon({ size = DEFAULT_SIZE, className }: IconProps) {
+/** 饭团首页顶栏分享（适配 h-11 圆钮，iOS 分享图标） */
+export function FeituanHomeShareIcon({
+  size = 22,
+  className,
+}: IconProps) {
+  const stroke = 2;
   return (
     <svg
       width={size}
@@ -70,19 +56,85 @@ export function FeituanNavShareIcon({ size = DEFAULT_SIZE, className }: IconProp
       aria-hidden
     >
       <path
-        d="M6.5 16.8c1.4-4.8 5.4-7.8 9.8-7.3 2.6.3 4.7 1.6 5.9 3.6"
+        d={FEITUAN_IOS_SHARE_PATHS.arrow}
         stroke="currentColor"
-        strokeWidth={STROKE}
+        strokeWidth={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="M16.2 6.2h4.3v4.3M16.2 6.2l5.1-5.1"
+        d={FEITUAN_IOS_SHARE_PATHS.tray}
         stroke="currentColor"
-        strokeWidth={STROKE}
+        strokeWidth={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function FeituanShareArrowGraphic({
+  size = DEFAULT_SIZE,
+  className,
+  strokeWidth = STROKE,
+}: IconProps & { strokeWidth?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden
+    >
+      <path
+        d={FEITUAN_SHARE_ARROW.arc}
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d={FEITUAN_SHARE_ARROW.head}
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** 分享：左下弯弧 + 右上箭头（与参考四图标一致） */
+export function FeituanNavShareIcon({ size = DEFAULT_SIZE, className }: IconProps) {
+  return <FeituanShareArrowGraphic size={size} className={className} />;
+}
+
+/** 饭团底栏 Tab 购物车（与 FeituanHomeBottomNav 一致） */
+export function FeituanBottomTabCartIcon({ size = 18, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden
+    >
+      <path
+        d="M6 6h15l-1.5 9h-11L6 6z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6 6L5 3H2"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+      />
+      <circle cx={9} cy={20} r={1.5} fill="currentColor" />
+      <circle cx={17} cy={20} r={1.5} fill="currentColor" />
     </svg>
   );
 }

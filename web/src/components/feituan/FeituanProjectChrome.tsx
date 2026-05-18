@@ -2,12 +2,12 @@ import { Link } from 'react-router-dom';
 import { useFeituanCartCount } from '../../hooks/useFeituanCartCount';
 import { H5_COLUMN_CLASS } from '../../lib/shopTheme';
 import { formatMYR } from '../../lib/formatMYR';
-import { feituanFloatNavBtnProps } from './feituanFloatNavButton';
+import { feituanProjectFloatNavBtnProps } from './feituanFloatNavButton';
 import {
+  FeituanBottomTabCartIcon,
+  FeituanHomeShareIcon,
   FeituanNavBackIcon,
-  FeituanNavCartIcon,
   FeituanNavMoreIcon,
-  FeituanNavShareIcon,
 } from './FeituanNavIcons';
 import { FeituanMoreSheet } from './FeituanMoreSheet';
 
@@ -40,20 +40,20 @@ export function FeituanProjectTopBar({
         <div
           className={`pointer-events-auto mx-auto flex items-center justify-between px-3 py-1.5 ${H5_COLUMN_CLASS}`}
         >
-          <Link to="/feituan" {...feituanFloatNavBtnProps()} aria-label="返回饭团主页">
+          <Link to="/feituan" {...feituanProjectFloatNavBtnProps()} aria-label="返回饭团主页">
             <FeituanNavBackIcon />
           </Link>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              {...feituanFloatNavBtnProps()}
+              {...feituanProjectFloatNavBtnProps()}
               aria-label="分享饭团主页"
               onClick={onShare}
             >
-              <FeituanNavShareIcon />
+              <FeituanHomeShareIcon size={17} />
             </button>
-            <Link to="/feituan/cart" {...feituanFloatNavBtnProps()} aria-label="购物车">
-              <FeituanNavCartIcon />
+            <Link to="/feituan/cart" {...feituanProjectFloatNavBtnProps()} aria-label="购物车">
+              <FeituanBottomTabCartIcon size={18} />
               {cartCount > 0 ? (
                 <span className="absolute -right-1.5 -top-1.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-[#FF5000] px-0.5 text-[9px] font-bold leading-none text-white ring-2 ring-white/50">
                   {formatBadge(cartCount)}
@@ -62,11 +62,11 @@ export function FeituanProjectTopBar({
             </Link>
             <button
               type="button"
-              {...feituanFloatNavBtnProps()}
+              {...feituanProjectFloatNavBtnProps()}
               aria-label="更多"
               onClick={onMoreOpen}
             >
-              <FeituanNavMoreIcon />
+              <FeituanNavMoreIcon size={20} />
             </button>
           </div>
         </div>
