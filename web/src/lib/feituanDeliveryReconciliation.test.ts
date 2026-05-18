@@ -59,6 +59,26 @@ describe('feituanDeliveryReconciliation', () => {
     expect(g.zoneName).toBe('未知配送点');
   });
 
+  it('merchant scope groups points under shop zone', () => {
+    const pointById = new Map([
+      [
+        'dp1',
+        {
+          id: 'dp1',
+          name: '甲点',
+          code: 'A1',
+        },
+      ],
+    ]);
+    const g = resolveDeliveryPointGroup(
+      orderRow({ orderNumber: '1', deliveryPointId: 'dp1' }).data,
+      pointById,
+      { shopZoneKey: 'shop:s1', shopZoneName: '测试店' }
+    );
+    expect(g.zoneName).toBe('测试店');
+    expect(g.line1).toBe('测试店 A1');
+  });
+
   it('manifest only includes zones with orders', () => {
     const pointById = new Map([
       [

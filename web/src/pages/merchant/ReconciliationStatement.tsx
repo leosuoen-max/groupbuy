@@ -11,8 +11,6 @@ import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   DEFAULT_BUCKET_SELECTION,
-  buildDeliveryPointLookup,
-  deliveryPointReconciliationLabel,
   proofRiskDisplayTone,
   linesInSelectedBuckets,
   listOrderPaymentGroups,
@@ -23,9 +21,6 @@ import {
   type GroupBucket,
 } from '../../lib/reconciliationGroups';
 import {
-  buildReconciliationCopyText,
-  buildReconciliationCsv,
-  buildReconciliationTotals,
   buildProductionCopyText,
   buildProductionCsv,
   buildProductionTotals,
@@ -35,6 +30,20 @@ import {
   buildProfitCsv,
   buildProfitTotals,
 } from '../../lib/reconciliationProfit';
+import {
+  buildDeliveryDetailCsv,
+  buildDeliveryManifest,
+  buildDeliveryManifestCopyText,
+  buildDeliveryManifestCsv,
+  buildMerchantDeliveryPointMap,
+  listDeliverySlotOptionsFromOrders,
+  orderMatchesDeliverySlotKey,
+  OTHER_DELIVERY_ZONE_KEY,
+  resolveDeliveryPointGroup,
+  type DeliveryPointGroup,
+  type DeliveryReconciliationScope,
+} from '../../lib/feituanDeliveryReconciliation';
+import { listOrderCardPaymentApplications } from '../../lib/orderCardPaymentApplications';
 import { getProject } from '../../lib/projectService';
 import type { ProjectDoc } from '../../types/firestore';
 import { parseScreenshotEntries } from '../../lib/paymentScreenshotHelpers';
@@ -76,28 +85,12 @@ function formatLinesCell(lines: OrderLineDoc[], mode: 'all' | 'first'): string {
   return lines.map((l) => `${l.name}×${l.quantity}`).join('、');
 }
 
-function splitDpLabel(label: string): { code: string; name: string } {
-  const raw = label.trim();
-  const m = raw.match(/^\[([^\]]+)\]\s*(.+)$/);
-  if (m) {
-    return {
-      code: m[1]?.trim() ?? '',
-      name: m[2]?.trim() ?? '',
-    };
-  }
-  return { code: '', name: raw };
-}
-
-/** 「其他地址」订单合并到同一分组用的稳定 key */
-const SECTION_MANUAL_OTHER = '__manual_other_address__';
-
 function stripManualDispatchPrefix(text: string): string {
   return text
     .replace(/^其他[（(]将按地址手动匹配[）)]\s*[:：]\s*/u, '')
     .trim();
 }
 
-/** 对账单第一列：手动匹配订单只展示顾客填写的地址 */
 function manualOrderAddressDisplay(o: OrderDoc): string {
   const addr = o.customerAddress?.trim();
   if (addr) return addr;
@@ -106,14 +99,49 @@ function manualOrderAddressDisplay(o: OrderDoc): string {
   return stripped || snap || '—';
 }
 
-type ReconciliationTableItem = {
+type DeliveryTableItem = {
   row: OrderRow;
   groups: ReturnType<typeof listOrderPaymentGroups>;
-  dp: string;
-  dpDisplay: string;
-  sectionKey: string;
+  dp: DeliveryPointGroup;
   scopedAmt: number;
 };
+
+function formatOrderTime(o: OrderDoc): { dateStr: string; clockStr: string } {
+  const d = o.createdAt?.toDate?.();
+  if (!d) return { dateStr: '—', clockStr: '—' };
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    dateStr: `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    clockStr: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}
+
+function inRange(t: number | undefined, startMs: number | null, endMs: number | null): boolean {
+  if (typeof t !== 'number') return false;
+  if (startMs != null && t < startMs) return false;
+  if (endMs != null && t > endMs) return false;
+  return true;
+}
+
+function hasPaymentActivityInRange(
+  order: OrderDoc,
+  startMs: number | null,
+  endMs: number | null
+): boolean {
+  const proofs = parseScreenshotEntries(order.paymentScreenshots);
+  if (
+    proofs.some(
+      (x) =>
+        Boolean(x.url || x.waivedNoScreenshot) &&
+        inRange(x.uploadedAt?.toMillis?.(), startMs, endMs)
+    )
+  ) {
+    return true;
+  }
+  return listOrderCardPaymentApplications(order).some((x) =>
+    inRange(x.appliedAt?.toMillis?.(), startMs, endMs)
+  );
+}
 
 export default function ReconciliationStatement() {
   const { shopSlug = '' } = useParams<{ shopSlug: string }>();
@@ -125,6 +153,7 @@ export default function ReconciliationStatement() {
   const projectFilter = searchParams.get('project') ?? '';
   const proofStart = searchParams.get('proofStart') ?? '';
   const proofEnd = searchParams.get('proofEnd') ?? '';
+  const deliverySlotKey = searchParams.get('deliverySlot') ?? '';
 
   const [err, setErr] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
@@ -133,9 +162,9 @@ export default function ReconciliationStatement() {
   const [loading, setLoading] = useState(true);
   const [copyOk, setCopyOk] = useState(false);
   const [manualModalOpen, setManualModalOpen] = useState(false);
-  const [manualModalItems, setManualModalItems] = useState<
-    ReconciliationTableItem[]
-  >([]);
+  const [manualModalItems, setManualModalItems] = useState<DeliveryTableItem[]>(
+    []
+  );
   const [manualModalBusyId, setManualModalBusyId] = useState<string | null>(null);
   const [manualModalErr, setManualModalErr] = useState<string | null>(null);
   const [manualDpChoice, setManualDpChoice] = useState<Record<string, string>>({});
@@ -143,9 +172,9 @@ export default function ReconciliationStatement() {
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
   const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
-  const [viewMode, setViewMode] = useState<
-    'reconciliation' | 'production' | 'profit'
-  >('reconciliation');
+  const [viewMode, setViewMode] = useState<'delivery' | 'production' | 'profit'>(
+    'delivery'
+  );
   const [projectDocsMap, setProjectDocsMap] = useState<
     Map<string, ProjectDoc>
   >(() => new Map());
@@ -195,43 +224,61 @@ export default function ReconciliationStatement() {
     return Number.isNaN(ms) ? null : ms;
   }
 
-  function hasProofInRange(
-    paymentScreenshots: unknown,
-    startMs: number | null,
-    endMs: number | null
-  ): boolean {
-    const list = parseScreenshotEntries(paymentScreenshots);
-    if (list.length === 0) return false;
-    return list.some((x) => {
-      if (!(x.url || x.waivedNoScreenshot)) return false;
-      const t = x.uploadedAt?.toMillis?.();
-      if (typeof t !== 'number') return false;
-      if (startMs != null && t < startMs) return false;
-      if (endMs != null && t > endMs) return false;
-      return true;
-    });
-  }
-
-  const deliveryPointLookup = useMemo(
-    () => buildDeliveryPointLookup(deliveryPoints),
+  const merchantPointById = useMemo(
+    () => buildMerchantDeliveryPointMap(deliveryPoints),
     [deliveryPoints]
   );
 
-  const scopedOrders = useMemo(() => {
+  const deliveryScope = useMemo((): DeliveryReconciliationScope => {
+    const shopId = m.shop?.id?.trim();
+    return {
+      ...(shopId ? { shopZoneKey: `shop:${shopId}` } : {}),
+      ...(shopName.trim() ? { shopZoneName: shopName.trim() } : {}),
+    };
+  }, [m.shop?.id, shopName]);
+
+  const projectScopedOrders = useMemo(() => {
     const pid = projectFilter.trim();
+    return orders.filter((r) => !pid || r.data.projectId === pid);
+  }, [orders, projectFilter]);
+
+  const scopedOrders = useMemo(() => {
     const startMs = parseDateTimeMs(proofStart);
     const endMs = parseDateTimeMs(proofEnd);
     if (startMs != null && endMs != null && startMs > endMs) return [];
-    return orders.filter((r) => {
-      if (pid && r.data.projectId !== pid) return false;
+    return projectScopedOrders.filter((r) => {
       if (startMs == null && endMs == null) return true;
-      return hasProofInRange(r.data.paymentScreenshots, startMs, endMs);
+      return hasPaymentActivityInRange(r.data, startMs, endMs);
     });
-  }, [orders, projectFilter, proofStart, proofEnd]);
+  }, [projectScopedOrders, proofEnd, proofStart]);
 
-  const totals = useMemo(
-    () => buildReconciliationTotals(scopedOrders),
-    [scopedOrders]
+  const deliverySlotOptions = useMemo(
+    () => listDeliverySlotOptionsFromOrders(projectScopedOrders),
+    [projectScopedOrders]
+  );
+
+  const selectedSlotLabel =
+    deliverySlotOptions.find((x) => x.key === deliverySlotKey)?.label ??
+    deliverySlotKey;
+
+  const deliveryScopedOrders = useMemo(() => {
+    if (!deliverySlotKey.trim()) return [];
+    return projectScopedOrders.filter(
+      (r) =>
+        r.data.status !== 'cancelled' &&
+        orderMatchesDeliverySlotKey(r.data, deliverySlotKey)
+    );
+  }, [deliverySlotKey, projectScopedOrders]);
+
+  const deliveryManifest = useMemo(
+    () =>
+      buildDeliveryManifest(
+        deliveryScopedOrders,
+        bucketSelection,
+        merchantPointById,
+        deliveryScope
+      ),
+    [bucketSelection, deliveryScopedOrders, deliveryScope, merchantPointById]
   );
   const productionTotals = useMemo(
     () =>
@@ -295,64 +342,66 @@ export default function ReconciliationStatement() {
       ? projectOptions.find((x) => x[0] === projectFilter)![1]
       : '全部项目';
 
-  const tableRows = useMemo(() => {
-    const acc: ReconciliationTableItem[] = [];
-    for (const r of scopedOrders) {
-      if (r.data.status === 'cancelled') continue;
+  const deliveryTableRows = useMemo(() => {
+    if (!deliverySlotKey.trim()) return [];
+    const acc: DeliveryTableItem[] = [];
+    for (const r of deliveryScopedOrders) {
       const groups = listOrderPaymentGroups(r.data);
       if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
-      const dp = deliveryPointReconciliationLabel(r.data, deliveryPointLookup);
-      const manual = r.data.isManualMatch === true;
-      const sectionKey = manual ? SECTION_MANUAL_OTHER : dp;
-      const dpDisplay = manual
-        ? manualOrderAddressDisplay(r.data)
-        : dp;
       acc.push({
         row: r,
         groups,
-        dp,
-        dpDisplay,
-        sectionKey,
+        dp: resolveDeliveryPointGroup(r.data, merchantPointById, deliveryScope),
         scopedAmt: scopedGroupAmount(groups, bucketSelection),
       });
     }
     acc.sort((a, b) => {
-      const c = a.sectionKey.localeCompare(b.sectionKey, 'zh-CN');
+      const c = a.dp.sortKey.localeCompare(b.dp.sortKey, 'zh-CN');
       if (c !== 0) return c;
       const ta = a.row.data.createdAt?.toMillis?.() ?? 0;
       const tb = b.row.data.createdAt?.toMillis?.() ?? 0;
       return ta - tb;
     });
     return acc;
-  }, [scopedOrders, bucketSelection, deliveryPointLookup]);
+  }, [
+    bucketSelection,
+    deliveryScopedOrders,
+    deliveryScope,
+    deliverySlotKey,
+    merchantPointById,
+  ]);
 
   const sectionsByDp = useMemo(() => {
-    const m = new Map<string, ReconciliationTableItem[]>();
-    for (const item of tableRows) {
-      if (!m.has(item.sectionKey)) m.set(item.sectionKey, []);
-      m.get(item.sectionKey)!.push(item);
+    const m = new Map<string, DeliveryTableItem[]>();
+    for (const item of deliveryTableRows) {
+      const key = item.dp.sortKey;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(item);
     }
     return [...m.entries()].sort((a, b) => {
-      if (a[0] === SECTION_MANUAL_OTHER && b[0] !== SECTION_MANUAL_OTHER) {
-        return 1;
-      }
-      if (b[0] === SECTION_MANUAL_OTHER && a[0] !== SECTION_MANUAL_OTHER) {
-        return -1;
-      }
+      const manualA = a[1][0]?.dp.zoneKey === OTHER_DELIVERY_ZONE_KEY;
+      const manualB = b[1][0]?.dp.zoneKey === OTHER_DELIVERY_ZONE_KEY;
+      if (manualA && !manualB) return 1;
+      if (manualB && !manualA) return -1;
       return a[0].localeCompare(b[0], 'zh-CN');
     });
-  }, [tableRows]);
+  }, [deliveryTableRows]);
+
+  useEffect(() => {
+    if (!deliverySlotKey.trim()) return;
+    if (deliverySlotOptions.some((x) => x.key === deliverySlotKey)) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('deliverySlot');
+    setSearchParams(next, { replace: true });
+  }, [deliverySlotKey, deliverySlotOptions, searchParams, setSearchParams]);
 
   const handleCopy = async () => {
     const text =
-      viewMode === 'reconciliation'
-        ? buildReconciliationCopyText({
-            shopName,
+      viewMode === 'delivery'
+        ? buildDeliveryManifestCopyText({
+            slotLabel: selectedSlotLabel || '未选配送档',
             projectLabel,
-            rows: scopedOrders,
-            totals,
-            bucketSelection,
-            deliveryPointLookup,
+            zones: deliveryManifest,
           })
         : viewMode === 'production'
           ? buildProductionCopyText({
@@ -384,8 +433,17 @@ export default function ReconciliationStatement() {
 
   const handleExportCsv = () => {
     const csv = '\ufeff' + (
-      viewMode === 'reconciliation'
-        ? buildReconciliationCsv(scopedOrders, bucketSelection, deliveryPointLookup)
+      viewMode === 'delivery'
+        ? [
+            buildDeliveryManifestCsv(deliveryManifest),
+            '',
+            buildDeliveryDetailCsv(
+              deliveryScopedOrders,
+              bucketSelection,
+              merchantPointById,
+              deliveryScope
+            ),
+          ].join('\n')
         : viewMode === 'production'
           ? buildProductionCsv(productionTotals)
           : buildProfitCsv(profitTotals)
@@ -394,12 +452,13 @@ export default function ReconciliationStatement() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
+    const slotSuffix = deliverySlotKey.replace(':', '-') || '未选档';
     a.download =
-      viewMode === 'reconciliation'
-        ? `对账单-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
+      viewMode === 'delivery'
+        ? `配送统计-${slug}-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
         : viewMode === 'production'
           ? `生产统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
-          : `成本利润-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
+          : `财务统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -421,7 +480,7 @@ export default function ReconciliationStatement() {
     [deliveryPoints]
   );
 
-  const openManualMatchModal = useCallback((items: ReconciliationTableItem[]) => {
+  const openManualMatchModal = useCallback((items: DeliveryTableItem[]) => {
     setManualModalErr(null);
     setManualDpChoice({});
     setManualModalItems(items);
@@ -429,7 +488,7 @@ export default function ReconciliationStatement() {
   }, []);
 
   const runManualAssign = useCallback(
-    async (item: ReconciliationTableItem, deliveryPointId: string | null) => {
+    async (item: DeliveryTableItem, deliveryPointId: string | null) => {
       if (!user) return;
       setManualModalErr(null);
       setManualModalBusyId(item.row.id);
@@ -487,7 +546,7 @@ export default function ReconciliationStatement() {
   }
 
   return (
-    <PageShell title="对账单" subtitle={`${shopName} · 与收款流水对账用`}>
+    <PageShell title="对账单" subtitle={`${shopName} · 本店订单配送与财务统计`}>
       {err ? (
         <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {err}
@@ -495,7 +554,11 @@ export default function ReconciliationStatement() {
       ) : null}
 
       <p className="mb-4 text-xs text-gray-600">
-        清单按「付款组」统计金额（首单 / 加购各一档）；汇总卡片为当前项目与时间筛选下的全量组口径，清单可通过下方标签筛选包含哪些组。
+        {viewMode === 'delivery'
+          ? '配送统计按配送档汇总本店清单与明细；须先选择配送档。明细金额仍按支付组统计，可通过「清单包含」筛选。'
+          : viewMode === 'production'
+            ? '生产统计按凭证时间与项目筛选本店订单，清单包含控制计入的支付组。'
+            : '财务统计按凭证时间与项目筛选本店订单；成本请在项目编辑中维护采购成本。'}
       </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -503,13 +566,13 @@ export default function ReconciliationStatement() {
         <button
           type="button"
           className={`rounded-full px-3 py-1 text-xs font-medium ${
-            viewMode === 'reconciliation'
+            viewMode === 'delivery'
               ? 'bg-gray-900 text-white'
               : 'border border-gray-200 bg-white text-gray-600'
           }`}
-          onClick={() => setViewMode('reconciliation')}
+          onClick={() => setViewMode('delivery')}
         >
-          金额对账
+          配送统计
         </button>
         <button
           type="button"
@@ -531,7 +594,7 @@ export default function ReconciliationStatement() {
           }`}
           onClick={() => setViewMode('profit')}
         >
-          成本利润统计
+          财务统计
         </button>
       </div>
 
@@ -557,95 +620,45 @@ export default function ReconciliationStatement() {
             ))}
           </select>
         </label>
-        <ProofDatetimeFilterFields
-          searchParams={searchParams}
-          setSearchParams={setSearchParams}
-          proofStart={proofStart}
-          proofEnd={proofEnd}
-          startLabel="凭证时间起（精确到分钟）"
-          endLabel="凭证时间止（精确到分钟）"
-          hint="时间筛选按「付款凭证提交时间」统计，包含顾客上传截图与商户免提交凭证。若要表示「5月4日24:00」，请填写次日 00:00。"
-        />
+        {viewMode === 'delivery' ? (
+          <label className="mt-3 block text-sm text-gray-800">
+            配送档
+            <select
+              className="mt-1 block w-full max-w-md rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              value={deliverySlotKey}
+              onChange={(e) => {
+                const v = e.target.value;
+                const next = new URLSearchParams(searchParams);
+                if (v) next.set('deliverySlot', v);
+                else next.delete('deliverySlot');
+                setSearchParams(next);
+              }}
+            >
+              <option value="">请选择配送档</option>
+              {deliverySlotOptions.map((opt) => (
+                <option key={opt.key} value={opt.key}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-gray-500">
+              选项来自当前项目筛选下本店已有订单的配送档；无档订单不会出现在列表中。
+            </span>
+          </label>
+        ) : (
+          <ProofDatetimeFilterFields
+            searchParams={searchParams}
+            setSearchParams={setSearchParams}
+            proofStart={proofStart}
+            proofEnd={proofEnd}
+            startLabel="凭证时间起（精确到分钟）"
+            endLabel="凭证时间止（精确到分钟）"
+            hint="时间筛选按「付款凭证提交时间」统计，包含顾客上传截图与商户免提交凭证。若要表示「5月4日24:00」，请填写次日 00:00。"
+          />
+        )}
       </div>
 
-      {viewMode === 'reconciliation' ? (
-        <>
-          <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-              <div className="text-xs font-medium text-emerald-800">已确认到账（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-emerald-900">
-                {formatMYR(totals.confirmedAmount)}
-              </div>
-              <div className="text-xs text-emerald-800">{totals.confirmedCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <div className="text-xs font-medium text-amber-900">待确认金额（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-amber-950">
-                {formatMYR(totals.pendingAmount)}
-              </div>
-              <div className="text-xs text-amber-900">{totals.pendingCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
-              <div className="text-xs font-medium text-red-900">待付款（组口径）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-red-950">
-                {formatMYR(totals.unpaidAmount)}
-              </div>
-              <div className="text-xs text-red-900">{totals.unpaidCount} 单</div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-              <div className="text-xs font-medium text-gray-700">订单总额（未取消）</div>
-              <div className="mt-1 whitespace-nowrap text-xl font-bold tabular-nums text-gray-900">
-                {formatMYR(totals.totalActiveAmount)}
-              </div>
-              <div className="text-xs text-gray-600">{totals.activeCount} 单</div>
-            </div>
-          </div>
-
-          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
-            <div className="font-medium">已确认构成（组口径）</div>
-            <div className="mt-2 space-y-1.5 tabular-nums">
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">钱包支付金额</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(totals.confirmedWalletAmount)}
-                </strong>
-              </p>
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">次卡代扣金额</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(totals.confirmedPassDeductAmount)}
-                </strong>
-              </p>
-              <p className="flex items-center justify-between gap-3">
-                <span className="text-indigo-900/90">免凭证金额</span>
-                <strong className="text-base text-indigo-950">
-                  {formatMYR(totals.confirmedWaivedNoProofAmount)}
-                </strong>
-              </p>
-            </div>
-            <p className="mt-2 text-xs text-indigo-900/80">
-              仅统计已确认组中的钱包/次卡/商户免凭证三类构成。
-            </p>
-          </div>
-
-          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-950">
-            <div className="font-medium">声称已付（业务侧）</div>
-            <div className="mt-1 tabular-nums">
-              {formatMYR(totals.claimedPaidAmount)} · {totals.claimedPaidCount} 单
-            </div>
-            <p className="mt-1 text-xs text-indigo-900/90">
-              含已上传截图或状态为待确认/已确认/部分付款的订单，便于与通道侧「客户声称已付」对照。
-            </p>
-          </div>
-
-          {totals.effectiveRatePercent != null ? (
-            <p className="mb-4 text-sm text-gray-700">
-              有效订单率（订单状态已确认 / 未取消单数）：
-              <strong>{totals.effectiveRatePercent}%</strong>
-            </p>
-          ) : null}
-        </>
-      ) : viewMode === 'production' ? (
+      {viewMode === 'production' ? (
         <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
             <div className="text-xs font-medium text-indigo-800">总出品份数</div>
@@ -666,7 +679,7 @@ export default function ReconciliationStatement() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : viewMode === 'profit' ? (
         <div className="mb-5 space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
@@ -720,7 +733,7 @@ export default function ReconciliationStatement() {
             </div>
           </div>
           <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
-            利润统计复用上方「筛选项目」「凭证时间」与「清单包含」所选付款组（含待付款、待确认、已确认）。
+            财务统计复用上方「筛选项目」「凭证时间」与「清单包含」所选付款组（含待付款、待确认、已确认）。
             请在项目编辑中为商品与套餐方案填写<strong className="font-medium text-gray-800">采购成本</strong>
             ；未填则该行成本按 0，并在下方表格旁提示缺失笔数。
             早鸟/特惠让价按<strong className="font-medium text-gray-800">当前菜单标价</strong>
@@ -738,7 +751,7 @@ export default function ReconciliationStatement() {
             </p>
           ) : null}
         </div>
-      )}
+      ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-gray-700">清单包含：</span>
@@ -764,7 +777,7 @@ export default function ReconciliationStatement() {
         ))}
       </div>
 
-      {viewMode === 'reconciliation' ? (
+      {viewMode === 'delivery' ? (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-gray-700">商品展示：</span>
           <button
@@ -796,21 +809,20 @@ export default function ReconciliationStatement() {
         <ActionButton type="button" variant="primary" onClick={() => void handleCopy()}>
           {copyOk
             ? '已复制'
-            : viewMode === 'reconciliation'
-              ? '复制对账清单'
+            : viewMode === 'delivery'
+              ? '复制配送清单'
               : viewMode === 'production'
                 ? '复制生产清单'
-                : '复制利润统计'}
+                : '复制财务统计'}
         </ActionButton>
         <ActionButton type="button" variant="secondary" onClick={handleExportCsv}>
           导出 CSV
         </ActionButton>
       </div>
-      {viewMode === 'reconciliation' ? (
+      {viewMode === 'delivery' ? (
         <p className="mb-4 text-xs text-gray-500">
-          配送点列优先展示<strong className="font-medium text-gray-700">编号 + 简称</strong>
-          （与配送点管理一致）；无绑定 ID 的历史订单仍显示收货时的快照名称。手机宽度有限时可<strong className="font-medium text-gray-700">左右滑动</strong>
-          查看整表。
+          本店配送点列上行：<strong className="font-medium text-gray-700">店铺名 + 编号</strong>
+          （无配送区时归入本店），下行为配送点名称。无法匹配的 ID 归入「未知配送点」。明细可左右滑动查看。
         </p>
       ) : viewMode === 'production' ? (
         <p className="mb-4 text-xs text-gray-500">
@@ -823,18 +835,73 @@ export default function ReconciliationStatement() {
         </p>
       )}
 
-      {viewMode === 'reconciliation' && tableRows.length === 0 ? (
+      {viewMode === 'delivery' && !deliverySlotKey ? (
         <EmptyStateCard
-          title="当前筛选范围暂无订单"
-          hint="可放宽时间窗口、切换项目，或勾选更多「清单包含」标签。"
+          title="请先选择配送档"
+          hint="在上方选择配送档后，将显示本店配送清单与配送明细。"
+        />
+      ) : viewMode === 'delivery' &&
+        deliveryTableRows.length === 0 &&
+        deliveryManifest.length === 0 ? (
+        <EmptyStateCard
+          title="当前配送档暂无订单"
+          hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
         />
       ) : viewMode === 'profit' && profitTotals.rows.length === 0 ? (
         <EmptyStateCard
           title="当前筛选下无明细"
           hint="请勾选「清单包含」中的付款组，或放宽项目/时间筛选。"
         />
-      ) : viewMode === 'reconciliation' ? (
-        <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
+      ) : viewMode === 'delivery' ? (
+        <>
+          <section className="mb-6 rounded-xl border border-gray-100 bg-white">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">配送清单</h3>
+              <p className="mt-0.5 text-xs text-gray-500">
+                {selectedSlotLabel} · {projectLabel} · 本店 · 按订单计数
+              </p>
+            </div>
+            {deliveryManifest.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-500">当前筛选下无配送订单。</p>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {deliveryManifest.map((zone) => (
+                  <li key={zone.zoneKey} className="px-4 py-3">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {zone.zoneName}
+                      <span className="ml-2 text-xs font-normal tabular-nums text-gray-500">
+                        {zone.orderCount} 单
+                      </span>
+                    </p>
+                    <ul className="mt-2 space-y-1.5 pl-1">
+                      {zone.points.map((p) => (
+                        <li
+                          key={p.pointKey}
+                          className="flex items-baseline justify-between gap-3 text-sm text-gray-700"
+                        >
+                          <span className="min-w-0">
+                            {p.code ? (
+                              <span className="font-mono text-xs font-semibold text-gray-900">
+                                {p.code}
+                              </span>
+                            ) : null}
+                            {p.code ? <span className="mx-1.5 text-gray-300">·</span> : null}
+                            <span className="break-words">{p.name}</span>
+                          </span>
+                          <span className="shrink-0 tabular-nums text-gray-600">
+                            {p.orderCount} 单
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <h3 className="mb-2 text-sm font-semibold text-gray-900">配送明细</h3>
+          <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white [-webkit-overflow-scrolling:touch]">
           <table className="w-full min-w-[42rem] table-fixed border-collapse text-left text-sm">
             <thead className="bg-gray-50 text-xs font-semibold text-gray-700">
               <tr>
@@ -849,9 +916,12 @@ export default function ReconciliationStatement() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {sectionsByDp.map(([sectionKey, items]) => (
+              {sectionsByDp.map(([sectionKey, items]) => {
+                const isManualSection =
+                  items[0]?.dp.zoneKey === OTHER_DELIVERY_ZONE_KEY;
+                return (
                 <Fragment key={sectionKey}>
-                  {sectionKey === SECTION_MANUAL_OTHER ? (
+                  {isManualSection ? (
                     <tr className="bg-gray-50/90">
                       <td colSpan={8} className="px-2 py-2">
                         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-2">
@@ -878,22 +948,14 @@ export default function ReconciliationStatement() {
                       </td>
                     </tr>
                   )}
-                  {items.map(({ row, groups, scopedAmt, dpDisplay }) => {
+                  {items.map(({ row, groups, scopedAmt, dp }) => {
                     const o = row.data;
-                    const d = o.createdAt?.toDate?.();
-                    const pad = (n: number) => String(n).padStart(2, '0');
-                    const dateStr = d
-                      ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-                      : '—';
-                    const clockStr = d
-                      ? `${pad(d.getHours())}:${pad(d.getMinutes())}`
-                      : '—';
+                    const { dateStr, clockStr } = formatOrderTime(o);
                     const scopedLines = linesInSelectedBuckets(groups, bucketSelection);
                     const contentStr = formatLinesCell(scopedLines, lineMode);
                     const detailUrl = `${baseDash}/order/${encodeURIComponent(o.projectId)}/${encodeURIComponent(o.orderNumber)}`;
                     const missingProof = orderNeedsMissingProofLabel(o);
                     const flag = proofRiskDisplayTone(o);
-                    const dpParts = splitDpLabel(dpDisplay);
                     return (
                       <tr
                         key={row.id}
@@ -908,15 +970,11 @@ export default function ReconciliationStatement() {
                           }
                         }}
                       >
-                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={dpDisplay}>
-                          {dpParts.code ? (
-                            <span className="inline-flex flex-col">
-                              <span className="font-extrabold text-gray-900">{dpParts.code}</span>
-                              <span className="line-clamp-1 break-words">{dpParts.name}</span>
-                            </span>
-                          ) : (
-                            <span className="line-clamp-2 break-words">{dpParts.name}</span>
-                          )}
+                        <td className="w-[17%] align-top px-2 py-2 text-[11px] leading-tight text-gray-700" title={dp.line1}>
+                          <span className="inline-flex flex-col">
+                            <span className="font-extrabold text-gray-900">{dp.line1}</span>
+                            <span className="line-clamp-1 break-words">{dp.line2}</span>
+                          </span>
                         </td>
                         <td className="whitespace-nowrap px-2 py-2 align-top text-xs tabular-nums leading-tight text-gray-700">
                           <span className="inline-flex flex-col">
@@ -976,10 +1034,12 @@ export default function ReconciliationStatement() {
                     );
                   })}
                 </Fragment>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         </div>
+        </>
       ) : viewMode === 'production' ? (
         <div className="grid gap-4 md:grid-cols-2">
           <section className="rounded-xl border border-gray-200 bg-white">

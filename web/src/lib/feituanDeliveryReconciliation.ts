@@ -7,9 +7,26 @@ import {
   type BucketSelection,
 } from './reconciliationGroups';
 import { compareDeliverySlots } from './recurringDeliverySchedule';
-import type { OrderDoc } from '../types/firestore';
+import type { DeliveryPointDoc, OrderDoc } from '../types/firestore';
 import type { MockDeliveryPoint } from '../types/orderDraft';
 import type { OrderRow } from './orderService';
+
+/** 配送统计用的配送点目录项（饭团区/点或商户配送点） */
+export type DeliveryPointCatalogEntry = {
+  id: string;
+  code?: string;
+  name: string;
+  zoneId?: string;
+  zoneName?: string;
+};
+
+/** 商户等无配送区时，将点位归入店铺级虚拟区 */
+export type DeliveryReconciliationScope = {
+  shopZoneKey?: string;
+  shopZoneName?: string;
+};
+
+export type DeliveryPointCatalogMap = Map<string, DeliveryPointCatalogEntry>;
 
 export const UNKNOWN_DELIVERY_ZONE_KEY = '__unknown__';
 export const OTHER_DELIVERY_ZONE_KEY = '__other__';
@@ -92,15 +109,39 @@ export function listDeliverySlotOptionsFromOrders(
 
 export function buildFeituanDeliveryPointMap(
   points: MockDeliveryPoint[]
-): Map<string, MockDeliveryPoint> {
-  const m = new Map<string, MockDeliveryPoint>();
-  for (const p of points) m.set(p.id, p);
+): DeliveryPointCatalogMap {
+  const m: DeliveryPointCatalogMap = new Map();
+  for (const p of points) {
+    m.set(p.id, {
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      zoneId: p.zoneId,
+      zoneName: p.zoneName,
+    });
+  }
+  return m;
+}
+
+export function buildMerchantDeliveryPointMap(
+  rows: Array<{ id: string; data: DeliveryPointDoc }>
+): DeliveryPointCatalogMap {
+  const m: DeliveryPointCatalogMap = new Map();
+  for (const r of rows) {
+    const name = (r.data.shortName ?? r.data.name ?? '').trim() || '—';
+    m.set(r.id, {
+      id: r.id,
+      code: r.data.code,
+      name,
+    });
+  }
   return m;
 }
 
 export function resolveDeliveryPointGroup(
   order: OrderDoc,
-  pointById: Map<string, MockDeliveryPoint>
+  pointById: DeliveryPointCatalogMap,
+  scope?: DeliveryReconciliationScope
 ): DeliveryPointGroup {
   if (order.isManualMatch || !order.deliveryPointId?.trim()) {
     const name = order.deliveryPointSnapshot?.name?.trim() || '未指定配送点';
@@ -134,11 +175,29 @@ export function resolveDeliveryPointGroup(
     };
   }
 
-  const zoneName = point.zoneName?.trim() || '未知配送点';
-  const zoneKey = point.zoneId?.trim() || UNKNOWN_DELIVERY_ZONE_KEY;
+  const hasZone = Boolean(point.zoneId?.trim() || point.zoneName?.trim());
+  const zoneName = point.zoneName?.trim()
+    || (!hasZone && scope?.shopZoneName?.trim()
+      ? scope.shopZoneName.trim()
+      : '未知配送点');
+  const zoneKey = point.zoneId?.trim()
+    || (!hasZone && scope?.shopZoneKey?.trim()
+      ? scope.shopZoneKey.trim()
+      : UNKNOWN_DELIVERY_ZONE_KEY);
   const code = point.code?.trim() ?? '';
   const name = point.name?.trim() || '—';
-  const line1 = code ? `${zoneName} ${code}` : zoneName;
+  const showZonePrefix =
+    zoneKey !== UNKNOWN_DELIVERY_ZONE_KEY &&
+    zoneKey !== OTHER_DELIVERY_ZONE_KEY &&
+    zoneName !== name;
+  const line1 =
+    showZonePrefix && code
+      ? `${zoneName} ${code}`
+      : code
+        ? code
+        : showZonePrefix
+          ? zoneName
+          : name;
   return {
     zoneKey,
     zoneName,
@@ -160,7 +219,8 @@ function zoneSortRank(zoneName: string): number {
 export function buildDeliveryManifest(
   rows: OrderRow[],
   bucketSelection: BucketSelection,
-  pointById: Map<string, MockDeliveryPoint>
+  pointById: DeliveryPointCatalogMap,
+  scope?: DeliveryReconciliationScope
 ): DeliveryManifestZone[] {
   const zoneMap = new Map<
     string,
@@ -177,7 +237,7 @@ export function buildDeliveryManifest(
     const groups = listOrderPaymentGroups(o);
     if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
 
-    const g = resolveDeliveryPointGroup(o, pointById);
+    const g = resolveDeliveryPointGroup(o, pointById, scope);
     let zone = zoneMap.get(g.zoneKey);
     if (!zone) {
       zone = { zoneName: g.zoneName, orderCount: 0, points: new Map() };
@@ -278,7 +338,8 @@ function proofExportLabel(o: OrderDoc): string {
 export function buildDeliveryDetailCsv(
   rows: OrderRow[],
   bucketSelection: BucketSelection,
-  pointById: Map<string, MockDeliveryPoint>
+  pointById: DeliveryPointCatalogMap,
+  scope?: DeliveryReconciliationScope
 ): string {
   const header = [
     '配送点',
@@ -294,8 +355,8 @@ export function buildDeliveryDetailCsv(
   ];
   const outLines = [header.join(',')];
   const sorted = [...rows].sort((a, b) => {
-    const da = resolveDeliveryPointGroup(a.data, pointById).sortKey;
-    const db = resolveDeliveryPointGroup(b.data, pointById).sortKey;
+    const da = resolveDeliveryPointGroup(a.data, pointById, scope).sortKey;
+    const db = resolveDeliveryPointGroup(b.data, pointById, scope).sortKey;
     if (da !== db) return da.localeCompare(db, 'zh-CN');
     const ta = a.data.createdAt?.toMillis?.() ?? 0;
     const tb = b.data.createdAt?.toMillis?.() ?? 0;
@@ -306,7 +367,7 @@ export function buildDeliveryDetailCsv(
     if (o.status === 'cancelled') continue;
     const groups = listOrderPaymentGroups(o);
     if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
-    const g = resolveDeliveryPointGroup(o, pointById);
+    const g = resolveDeliveryPointGroup(o, pointById, scope);
     const dpCell = g.line2 ? `${g.line1} / ${g.line2}` : g.line1;
     const scopedAmt = scopedGroupAmount(groups, bucketSelection);
     const detailLines = linesInSelectedBuckets(groups, bucketSelection);
