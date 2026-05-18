@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ProofDatetimeFilterFields } from '../components/reconciliation/ProofDatetimeFilterFields';
 import { ProductionBundleBreakdownSection } from '../components/reconciliation/ProductionBundleBreakdownSection';
+import { ProductionSummaryStatsBar } from '../components/reconciliation/ProductionSummaryStatsBar';
 import { PageShell } from '../components/PageShell';
 import { ActionButton } from '../components/ui/ActionButton';
 import { EmptyStateCard } from '../components/ui/EmptyStateCard';
@@ -12,6 +13,7 @@ import { listActiveFeituanDeliveryPoints } from '../lib/feituanDeliveryService';
 import { formatMYR } from '../lib/formatMYR';
 import {
   DEFAULT_BUCKET_SELECTION,
+  PRODUCTION_DEFAULT_BUCKET_SELECTION,
   linesInSelectedBuckets,
   listOrderPaymentGroups,
   orderMatchesBucketSelection,
@@ -168,6 +170,8 @@ export default function FeituanReconciliation() {
   const [bucketSelection, setBucketSelection] = useState<BucketSelection>(
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
+  const [productionBucketSelection, setProductionBucketSelection] =
+    useState<BucketSelection>(() => ({ ...PRODUCTION_DEFAULT_BUCKET_SELECTION }));
   const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
   const [viewMode, setViewMode] = useState<ViewMode>('delivery');
 
@@ -267,8 +271,12 @@ export default function FeituanReconciliation() {
 
   const productionTotals = useMemo(
     () =>
-      buildProductionTotals(scopedOrders, bucketSelection, projectsMap),
-    [bucketSelection, projectsMap, scopedOrders]
+      buildProductionTotals(
+        deliveryScopedOrders,
+        productionBucketSelection,
+        projectsMap
+      ),
+    [deliveryScopedOrders, productionBucketSelection, projectsMap]
   );
 
   const profitTotals = useMemo(
@@ -333,12 +341,17 @@ export default function FeituanReconciliation() {
   }, [deliverySlotKey, deliverySlotOptions, searchParams, setSearchParams]);
 
   const bucketFileSuffix = useMemo(() => {
+    const sel =
+      viewMode === 'production' ? productionBucketSelection : bucketSelection;
     const parts: string[] = [];
-    if (bucketSelection.confirmed) parts.push('已确认');
-    if (bucketSelection.pending) parts.push('待确认');
-    if (bucketSelection.unpaid) parts.push('待付款');
+    if (sel.confirmed) parts.push('已确认');
+    if (sel.pending) parts.push('待确认');
+    if (sel.unpaid) parts.push('待付款');
     return parts.join('+') || '无';
-  }, [bucketSelection]);
+  }, [bucketSelection, productionBucketSelection, viewMode]);
+
+  const activeBucketSelection =
+    viewMode === 'production' ? productionBucketSelection : bucketSelection;
 
   const handleCopy = async () => {
     const text =
@@ -393,14 +406,16 @@ export default function FeituanReconciliation() {
       viewMode === 'delivery'
         ? `饭团配送统计-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
         : viewMode === 'production'
-          ? `饭团生产统计-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
+          ? `饭团生产统计-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
           : `饭团财务统计-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   function toggleBucket(k: GroupBucket) {
-    setBucketSelection((prev) => {
+    const setter =
+      viewMode === 'production' ? setProductionBucketSelection : setBucketSelection;
+    setter((prev) => {
       const next = { ...prev, [k]: !prev[k] };
       if (!next.confirmed && !next.pending && !next.unpaid) return prev;
       return next;
@@ -435,7 +450,7 @@ export default function FeituanReconciliation() {
         {viewMode === 'delivery'
           ? '配送统计按配送档汇总清单与明细；须先选择配送档。明细金额仍按支付组（首单 / 加购）统计，可通过「清单包含」筛选。'
           : viewMode === 'production'
-            ? '生产统计按凭证/自动确认时间与项目筛选，清单包含控制计入的支付组。'
+            ? '生产统计按项目与配送档筛选；须先选择配送档。清单包含默认仅「已确认组」，可手动勾选其他支付组。'
             : '财务统计按凭证/自动确认时间与项目筛选，成本按饭团管理员录入的采购成本计算。'}
       </p>
 
@@ -486,7 +501,7 @@ export default function FeituanReconciliation() {
             ))}
           </select>
         </label>
-        {viewMode === 'delivery' ? (
+        {viewMode === 'delivery' || viewMode === 'production' ? (
           <label className="mt-3 block text-sm text-gray-800">
             配送档
             <select
@@ -525,26 +540,7 @@ export default function FeituanReconciliation() {
       </div>
 
       {viewMode === 'production' ? (
-        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-            <div className="text-xs font-medium text-indigo-800">总出品份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-indigo-950">
-              {productionTotals.totalQty}
-            </div>
-          </div>
-          <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-            <div className="text-xs font-medium text-emerald-800">普通商品总份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-950">
-              {productionTotals.normalTotalQty}
-            </div>
-          </div>
-          <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3">
-            <div className="text-xs font-medium text-purple-800">套餐拆解总份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-purple-950">
-              {productionTotals.bundleOptionTotalQty}
-            </div>
-          </div>
-        </div>
+        <ProductionSummaryStatsBar totals={productionTotals} />
       ) : viewMode === 'profit' ? (
         <div className="mb-5 space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -623,7 +619,7 @@ export default function FeituanReconciliation() {
           <button
             key={k}
             type="button"
-            className={viewButtonClass(bucketSelection[k])}
+            className={viewButtonClass(activeBucketSelection[k])}
             onClick={() => toggleBucket(k)}
           >
             {label}
@@ -673,7 +669,7 @@ export default function FeituanReconciliation() {
         </p>
       ) : viewMode === 'production' ? (
         <p className="mb-4 text-xs text-gray-500">
-          生产统计复用当前项目、时间与「清单包含」筛选。普通商品按下单份数累计；套餐按系列中具体单项拆解累计，供厨房备料与出品参考。
+          生产统计按当前项目、配送档与「清单包含」筛选。普通商品按下单份数累计；套餐按系列中具体单项拆解累计，供厨房备料与出品参考。
         </p>
       ) : (
         <p className="mb-4 text-xs text-gray-500">
@@ -691,6 +687,18 @@ export default function FeituanReconciliation() {
         deliveryManifest.length === 0 ? (
         <EmptyStateCard
           title="当前配送档暂无订单"
+          hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
+        />
+      ) : viewMode === 'production' && !deliverySlotKey ? (
+        <EmptyStateCard
+          title="请先选择配送档"
+          hint="在上方选择配送档后，将显示本档出品汇总与普通商品、套餐拆解清单。"
+        />
+      ) : viewMode === 'production' &&
+        productionTotals.normalItems.length === 0 &&
+        productionTotals.bundleToolBreakdowns.length === 0 ? (
+        <EmptyStateCard
+          title="当前配送档暂无出品"
           hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
         />
       ) : viewMode === 'profit' && profitTotals.rows.length === 0 ? (

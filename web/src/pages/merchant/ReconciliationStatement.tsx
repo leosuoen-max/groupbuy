@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ProofDatetimeFilterFields } from '../../components/reconciliation/ProofDatetimeFilterFields';
 import { ProductionBundleBreakdownSection } from '../../components/reconciliation/ProductionBundleBreakdownSection';
+import { ProductionSummaryStatsBar } from '../../components/reconciliation/ProductionSummaryStatsBar';
 import { PageShell } from '../../components/PageShell';
 import { ActionButton } from '../../components/ui/ActionButton';
 import { EmptyStateCard } from '../../components/ui/EmptyStateCard';
@@ -11,6 +12,7 @@ import { useMerchantShopAccess } from '../../hooks/useMerchantShopAccess';
 import { formatMYR } from '../../lib/formatMYR';
 import {
   DEFAULT_BUCKET_SELECTION,
+  PRODUCTION_DEFAULT_BUCKET_SELECTION,
   proofRiskDisplayTone,
   linesInSelectedBuckets,
   listOrderPaymentGroups,
@@ -171,6 +173,8 @@ export default function ReconciliationStatement() {
   const [bucketSelection, setBucketSelection] = useState<BucketSelection>(
     () => ({ ...DEFAULT_BUCKET_SELECTION })
   );
+  const [productionBucketSelection, setProductionBucketSelection] =
+    useState<BucketSelection>(() => ({ ...PRODUCTION_DEFAULT_BUCKET_SELECTION }));
   const [lineMode, setLineMode] = useState<'all' | 'first'>('first');
   const [viewMode, setViewMode] = useState<'delivery' | 'production' | 'profit'>(
     'delivery'
@@ -282,17 +286,19 @@ export default function ReconciliationStatement() {
   );
   const productionTotals = useMemo(
     () =>
-      buildProductionTotals(scopedOrders, bucketSelection, projectDocsMap),
-    [scopedOrders, bucketSelection, projectDocsMap]
+      buildProductionTotals(
+        deliveryScopedOrders,
+        productionBucketSelection,
+        projectDocsMap
+      ),
+    [deliveryScopedOrders, productionBucketSelection, projectDocsMap]
   );
 
-  const projectIdsKey = useMemo(
-    () =>
-      [...new Set(scopedOrders.map((r) => r.data.projectId))]
-        .sort()
-        .join(','),
-    [scopedOrders]
-  );
+  const projectIdsKey = useMemo(() => {
+    const source =
+      viewMode === 'production' ? deliveryScopedOrders : scopedOrders;
+    return [...new Set(source.map((r) => r.data.projectId))].sort().join(',');
+  }, [deliveryScopedOrders, scopedOrders, viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -424,12 +430,17 @@ export default function ReconciliationStatement() {
   };
 
   const bucketFileSuffix = useMemo(() => {
+    const sel =
+      viewMode === 'production' ? productionBucketSelection : bucketSelection;
     const parts: string[] = [];
-    if (bucketSelection.confirmed) parts.push('已确认');
-    if (bucketSelection.pending) parts.push('待确认');
-    if (bucketSelection.unpaid) parts.push('待付款');
+    if (sel.confirmed) parts.push('已确认');
+    if (sel.pending) parts.push('待确认');
+    if (sel.unpaid) parts.push('待付款');
     return parts.join('+') || '无';
-  }, [bucketSelection]);
+  }, [bucketSelection, productionBucketSelection, viewMode]);
+
+  const activeBucketSelection =
+    viewMode === 'production' ? productionBucketSelection : bucketSelection;
 
   const handleExportCsv = () => {
     const csv = '\ufeff' + (
@@ -457,14 +468,16 @@ export default function ReconciliationStatement() {
       viewMode === 'delivery'
         ? `配送统计-${slug}-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
         : viewMode === 'production'
-          ? `生产统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`
+          ? `生产统计-${slug}-${projectFilter || 'all'}-${slotSuffix}-${bucketFileSuffix}.csv`
           : `财务统计-${slug}-${projectFilter || 'all'}-${bucketFileSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   function toggleBucket(k: GroupBucket) {
-    setBucketSelection((prev) => {
+    const setter =
+      viewMode === 'production' ? setProductionBucketSelection : setBucketSelection;
+    setter((prev) => {
       const next = { ...prev, [k]: !prev[k] };
       if (!next.confirmed && !next.pending && !next.unpaid) {
         return prev;
@@ -557,7 +570,7 @@ export default function ReconciliationStatement() {
         {viewMode === 'delivery'
           ? '配送统计按配送档汇总本店清单与明细；须先选择配送档。明细金额仍按支付组统计，可通过「清单包含」筛选。'
           : viewMode === 'production'
-            ? '生产统计按凭证时间与项目筛选本店订单，清单包含控制计入的支付组。'
+            ? '生产统计按项目与配送档筛选本店订单；须先选择配送档。清单包含默认仅「已确认组」，可手动勾选其他支付组。'
             : '财务统计按凭证时间与项目筛选本店订单；成本请在项目编辑中维护采购成本。'}
       </p>
 
@@ -620,7 +633,7 @@ export default function ReconciliationStatement() {
             ))}
           </select>
         </label>
-        {viewMode === 'delivery' ? (
+        {viewMode === 'delivery' || viewMode === 'production' ? (
           <label className="mt-3 block text-sm text-gray-800">
             配送档
             <select
@@ -659,26 +672,7 @@ export default function ReconciliationStatement() {
       </div>
 
       {viewMode === 'production' ? (
-        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-            <div className="text-xs font-medium text-indigo-800">总出品份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-indigo-950">
-              {productionTotals.totalQty}
-            </div>
-          </div>
-          <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-            <div className="text-xs font-medium text-emerald-800">普通商品总份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-950">
-              {productionTotals.normalTotalQty}
-            </div>
-          </div>
-          <div className="rounded-xl border border-purple-100 bg-purple-50 px-4 py-3">
-            <div className="text-xs font-medium text-purple-800">套餐拆解总份数</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-purple-950">
-              {productionTotals.bundleOptionTotalQty}
-            </div>
-          </div>
-        </div>
+        <ProductionSummaryStatsBar totals={productionTotals} />
       ) : viewMode === 'profit' ? (
         <div className="mb-5 space-y-3">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -766,7 +760,7 @@ export default function ReconciliationStatement() {
             key={k}
             type="button"
             className={`rounded-full px-3 py-1 text-xs font-medium ${
-              bucketSelection[k]
+              activeBucketSelection[k]
                 ? 'bg-gray-900 text-white'
                 : 'border border-gray-200 bg-white text-gray-600'
             }`}
@@ -826,7 +820,7 @@ export default function ReconciliationStatement() {
         </p>
       ) : viewMode === 'production' ? (
         <p className="mb-4 text-xs text-gray-500">
-          生产统计复用当前项目、凭证时间与「清单包含」筛选。普通商品按下单份数累计；套餐按系列中具体单项拆解累计，供厨房备料与出品参考。
+          生产统计按当前项目、配送档与「清单包含」筛选。普通商品按下单份数累计；套餐按系列中具体单项拆解累计，供厨房备料与出品参考。
         </p>
       ) : (
         <p className="mb-4 text-xs text-gray-500">
@@ -845,6 +839,18 @@ export default function ReconciliationStatement() {
         deliveryManifest.length === 0 ? (
         <EmptyStateCard
           title="当前配送档暂无订单"
+          hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
+        />
+      ) : viewMode === 'production' && !deliverySlotKey ? (
+        <EmptyStateCard
+          title="请先选择配送档"
+          hint="在上方选择配送档后，将显示本档出品汇总与普通商品、套餐拆解清单。"
+        />
+      ) : viewMode === 'production' &&
+        productionTotals.normalItems.length === 0 &&
+        productionTotals.bundleToolBreakdowns.length === 0 ? (
+        <EmptyStateCard
+          title="当前配送档暂无出品"
           hint="可切换项目或配送档，或勾选更多「清单包含」标签。"
         />
       ) : viewMode === 'profit' && profitTotals.rows.length === 0 ? (

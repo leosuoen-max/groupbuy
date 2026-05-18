@@ -82,6 +82,13 @@ export const DEFAULT_BUCKET_SELECTION: BucketSelection = {
   unpaid: true,
 };
 
+/** 生产统计默认仅计入已确认支付组 */
+export const PRODUCTION_DEFAULT_BUCKET_SELECTION: BucketSelection = {
+  confirmed: true,
+  pending: false,
+  unpaid: false,
+};
+
 export function scopedGroupAmount(
   groups: OrderPaymentGroup[],
   sel: BucketSelection
