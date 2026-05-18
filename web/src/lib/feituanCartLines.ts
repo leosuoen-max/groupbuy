@@ -86,6 +86,51 @@ export type BuiltCartLines = {
   subtotal: number;
 };
 
+/** 同商品 id 数量累加（仅处理 add 中 qty > 0 的项） */
+export function mergeCartDrafts(
+  base: Record<string, number>,
+  add: Record<string, number>
+): Record<string, number> {
+  const out = { ...base };
+  for (const [id, q] of Object.entries(add)) {
+    const n = Number(q);
+    if (n <= 0) continue;
+    out[id] = (out[id] ?? 0) + n;
+  }
+  return out;
+}
+
+function bundleSelectionKey(sel: BundleSelectionDraft): string {
+  return `${sel.bundleToolId}\0${sel.schemeId}\0${JSON.stringify(sel.selectedOptionIdsBySeries)}`;
+}
+
+/** 同套餐+方案+选项合并数量，否则追加 */
+export function mergeBundleSelections(
+  base: BundleSelectionDraft[],
+  add: BundleSelectionDraft[]
+): BundleSelectionDraft[] {
+  const next = base.map((x) => ({
+    ...x,
+    selectedOptionIdsBySeries: { ...x.selectedOptionIdsBySeries },
+  }));
+  for (const incoming of add) {
+    const key = bundleSelectionKey(incoming);
+    const idx = next.findIndex((x) => bundleSelectionKey(x) === key);
+    if (idx < 0) {
+      next.push({
+        ...incoming,
+        selectedOptionIdsBySeries: { ...incoming.selectedOptionIdsBySeries },
+      });
+    } else {
+      next[idx] = {
+        ...next[idx]!,
+        quantity: next[idx]!.quantity + incoming.quantity,
+      };
+    }
+  }
+  return next;
+}
+
 export function buildLinesFromCartDraft(
   project: ProjectDoc,
   cartDraft: Record<string, number>,

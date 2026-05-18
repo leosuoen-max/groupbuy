@@ -26,7 +26,10 @@ import {
 } from '../lib/orderService';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
 import { notifyFeituanCartUpdated } from '../hooks/useFeituanCartCount';
-import { upsertFeituanCartProject } from '../lib/feituanCartStorage';
+import {
+  getFeituanCart,
+  upsertFeituanCartProject,
+} from '../lib/feituanCartStorage';
 import {
   isBundleToolPastScheduledOff,
   isProjectProductSellable,
@@ -474,23 +477,31 @@ export default function FeituanProject({ mode = 'customer' }: Props) {
 
   const addToFeituanCart = () => {
     if (isAdminPreview || !project || !shop || orderLines.length === 0) return;
-    const nextCart = upsertFeituanCartProject({
-      projectId: project.id,
-      projectTitle: project.data.title?.trim() || '未命名项目',
-      shopId: project.data.shopId,
-      shopSlug: shop.data.slug,
-      shopName: shop.data.name?.trim() || '店铺',
-      lines: orderLines,
-      bundleSelections: bundleCart,
-      cartDraft: { ...qty },
-      subtotal: total,
-    });
+    const hadInCart = getFeituanCart().projects.some((p) => p.projectId === project.id);
+    const nextCart = upsertFeituanCartProject(
+      {
+        projectId: project.id,
+        projectTitle: project.data.title?.trim() || '未命名项目',
+        shopId: project.data.shopId,
+        shopSlug: shop.data.slug,
+        shopName: shop.data.name?.trim() || '店铺',
+        lines: orderLines,
+        bundleSelections: bundleCart,
+        cartDraft: { ...qty },
+        subtotal: total,
+      },
+      { project: project.data, now }
+    );
     notifyFeituanCartUpdated();
     setQty({});
     setBundleCart([]);
     setBundleBuilder({});
     setOpenBundleToolId(null);
-    setCartToast(`已加入饭团购物车（共 ${nextCart.projects.length} 个项目）`);
+    setCartToast(
+      hadInCart
+        ? `已合并到饭团购物车（共 ${nextCart.projects.length} 个项目）`
+        : `已加入饭团购物车（共 ${nextCart.projects.length} 个项目）`
+    );
     window.setTimeout(() => setCartToast(null), 2500);
   };
 

@@ -1,3 +1,9 @@
+import {
+  buildLinesFromCartDraft,
+  mergeBundleSelections,
+  mergeCartDrafts,
+} from './feituanCartLines';
+import type { ProjectDoc } from '../types/firestore';
 import type { FeituanCart, FeituanCartProject } from '../types/feituanCart';
 
 export const FEITUAN_CART_STORAGE_KEY = 'feituanCart';
@@ -39,17 +45,41 @@ export function clearFeituanCart(): void {
   localStorage.removeItem(FEITUAN_CART_STORAGE_KEY);
 }
 
-/** 同 projectId 覆盖，不累加 */
+/** 同 projectId 合并加购（商品/套餐数量累加）；无则新增 */
 export function upsertFeituanCartProject(
-  item: Omit<FeituanCartProject, 'addedAt'> & { addedAt?: number }
+  item: Omit<FeituanCartProject, 'addedAt'> & { addedAt?: number },
+  options?: { project?: ProjectDoc; now?: Date }
 ): FeituanCart {
   const cart = getFeituanCart();
+  const existing = cart.projects.find((p) => p.projectId === item.projectId);
+  const cartDraft = mergeCartDrafts(existing?.cartDraft ?? {}, item.cartDraft);
+  const bundleSelections = mergeBundleSelections(
+    existing?.bundleSelections ?? [],
+    item.bundleSelections
+  );
+  let lines = item.lines;
+  let subtotal = item.subtotal;
+  if (options?.project) {
+    const built = buildLinesFromCartDraft(
+      options.project,
+      cartDraft,
+      bundleSelections,
+      options.now ?? new Date()
+    );
+    lines = built.lines;
+    subtotal = built.subtotal;
+  }
+  const merged: FeituanCartProject = {
+    ...item,
+    cartDraft,
+    bundleSelections,
+    lines,
+    subtotal,
+    addedAt: existing?.addedAt ?? item.addedAt ?? Date.now(),
+  };
   const rest = cart.projects.filter((p) => p.projectId !== item.projectId);
   const next: FeituanCart = {
-    projects: [
-      ...rest,
-      { ...item, addedAt: item.addedAt ?? Date.now() } satisfies FeituanCartProject,
-    ],
+    projects: [...rest, merged],
     lastUpdated: Date.now(),
   };
   setFeituanCart(next);

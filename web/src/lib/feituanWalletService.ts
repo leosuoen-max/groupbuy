@@ -986,6 +986,17 @@ export async function applyFeituanWalletPaymentToPaymentRef(params: {
       orders.push({ id: params.orderIds[i]!, data, ref: doc(db, 'orders', params.orderIds[i]!) });
     }
 
+    const projectIds = [...new Set(orders.map((o) => o.data.projectId))];
+    const projectSnaps = await Promise.all(
+      projectIds.map((projectId) => tx.get(doc(db, 'projects', projectId)))
+    );
+    const projectById = new Map<string, ProjectDoc>();
+    for (let i = 0; i < projectIds.length; i++) {
+      const snap = projectSnaps[i]!;
+      if (!snap.exists()) throw new Error('项目不存在');
+      projectById.set(projectIds[i]!, snap.data() as ProjectDoc);
+    }
+
     let totalPay = 0;
     const perOrderPay = new Map<string, number>();
     for (const row of orders) {
@@ -1033,10 +1044,9 @@ export async function applyFeituanWalletPaymentToPaymentRef(params: {
       const payAmount = perOrderPay.get(row.id) ?? 0;
       if (payAmount <= 0) continue;
 
+      const project = projectById.get(row.data.projectId);
+      if (!project) throw new Error('项目不存在');
       const projectRef = doc(db, 'projects', row.data.projectId);
-      const projectSnap = await tx.get(projectRef);
-      if (!projectSnap.exists()) throw new Error('项目不存在');
-      const project = projectSnap.data() as ProjectDoc;
 
       const groupsBefore = buildPaymentGroups(row.data);
       const unpaidGroups = groupsBefore.filter((g) => g.status === 'unpaid');
