@@ -5,7 +5,6 @@ import { formatMYR } from '../../lib/formatMYR';
 import { feituanProjectFloatNavBtnProps } from './feituanFloatNavButton';
 import {
   FeituanBottomTabCartIcon,
-  FeituanHomeShareIcon,
   FeituanNavBackIcon,
   FeituanNavMoreIcon,
 } from './FeituanNavIcons';
@@ -44,14 +43,6 @@ export function FeituanProjectTopBar({
             <FeituanNavBackIcon />
           </Link>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              {...feituanProjectFloatNavBtnProps()}
-              aria-label="分享饭团主页"
-              onClick={onShare}
-            >
-              <FeituanHomeShareIcon size={17} />
-            </button>
             <Link to="/feituan/cart" {...feituanProjectFloatNavBtnProps()} aria-label="购物车">
               <FeituanBottomTabCartIcon size={18} />
               {cartCount > 0 ? (
@@ -71,7 +62,12 @@ export function FeituanProjectTopBar({
           </div>
         </div>
       </div>
-      <FeituanMoreSheet open={moreOpen} onClose={onMoreClose} anchorAboveTabBar={false} />
+      <FeituanMoreSheet
+        open={moreOpen}
+        onClose={onMoreClose}
+        anchorAboveTabBar={false}
+        onShare={onShare}
+      />
     </>
   );
 }

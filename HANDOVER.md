@@ -56,6 +56,7 @@
 | 4 | `docs/08-第一版范围.md` | MVP 做/不做（产品目标） |
 | 5 | `docs/11-需求与实现对照.md` | **路由/数据源与 docs/08 对照（代码事实）** |
 | 5b | `docs/15-实现现状快照.md` | **叙事总览**：饭团/公众号/平台后台、与旧文档关系；细节仍以 `docs/11` + 代码为准 |
+| 5c | `docs/16-饭团配送员.md` | **饭团配送员**（区/点、配送员账号、配送档任务）；**未实现**，分期见该文档 §九 |
 | 6 | `docs/06-数据模型.md` | Firestore 集合与字段 |
 | 7 | `docs/03-顾客端功能.md` | 顾客端需求细节 |
 | 8 | `docs/04-商户后台功能.md` | 商户端需求细节 |
@@ -168,6 +169,8 @@
 | `v1.2.0` | 服务号网页授权基础流程 |
 | `v1.3.0` | 饭团支付组/对账/订单列表、钱包充值核实全流程、首页·项目·订单品牌色统一、`docs/15` 快照 |
 | **`v1.4.0`** | 外链分享 OG（`/share/*`）、饭团聚合落地页、微信 JS-SDK 尝试与文档；见下文 **「七、外链分享与微信」** |
+| **`v1.4.1`** | （若存在）见 Git 标签说明 |
+| **`v1.5.0`** | 饭团购物车/合并付 UI、长期项目配送档、首页马赛克、消息待办角标、订单返回；见下文 **「八、会话 2026-05-18 · v1.5.0」** |
 
 ### v1.4.0 后补丁（2026-05-16）
 
@@ -253,3 +256,110 @@ curl -sS -X POST "https://groupbuy-app-24c46.web.app/api/wechat/js-sdk-signature
 1. **不要**再指望 H5 内三点分享，除非已配 **固定出口 IP** 或接受运维成本。  
 2. WhatsApp/粘贴：改 OG 后递增 **`cv`** 并 deploy **functions + hosting**。  
 3. 若恢复微信弹层提示，先解决 IP，再测 `legacyAppMessageSetStatus` 是否 `success`。
+
+---
+
+## 八、会话 2026-05-18 · v1.5.0（交接摘要）
+
+**Git**：`main` 已 push；标签 **`v1.5.0`**（`54381b4` + `6cd232f`）。  
+**构建**：改动在 `web/`；`npm test -- feituanMessages`、`npm test -- feituanHomeMosaic`；`npm run build`。
+
+### 本会话主要做了什么
+
+#### 1. 购物车 / 合并结算 / 合并付款 / 直下单 UI 统一（`54381b4`）
+
+- 抽取饭团流程公共块：**页头、联系信息、钱包付款、转账付款**。
+- **`FeituanCartCheckout`**、**`FeituanCartPayment`**、**`OrderForm`** 对齐同一套绿色表单与付款区块样式（主题见 `feituanHomeTheme.ts` 的 `fieldLabel`、`formSectionPlain` 等）。
+- **合并付款页**（`FeituanCartPayment`）支持长期饭团项目 **预选/修改配送档**（`RecurringDeliverySlotChooser` + `customerUpdateOrderPreferredDeliverySlot`）。
+- **合并结算页**（`FeituanCartCheckout`）仍可不写 `preferredDeliverySlot`（付款页可改档）；若产品要结算页预选档，需另做。
+- **待付款不进购物车**（产品约定）：待付款走订单域；本轮未改购物车条目筛选逻辑时以现有代码为准。
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/components/feituan/FeituanFlowHeader.tsx` | 饭团填写/付款统一页头 |
+| `web/src/components/feituan/FeituanContactFields.tsx` | 联系信息字段 |
+| `web/src/components/feituan/FeituanWalletPaymentBlock.tsx` | 钱包支付块 |
+| `web/src/components/feituan/FeituanTransferPaymentBlock.tsx` | 转账/截图支付块 |
+| `web/src/lib/feituanHomeTheme.ts` | 表单/区块样式 token |
+| `web/src/pages/FeituanCartCheckout.tsx` | 合并结算 |
+| `web/src/pages/FeituanCartPayment.tsx` | 合并付款 + 配送档 |
+| `web/src/pages/customer/OrderForm.tsx` | 直下单填写（白底表单） |
+| `web/src/lib/orderService.ts` | `customerUpdateOrderPreferredDeliverySlot` 等 |
+
+#### 2. 配送时间 / 长期项目配送档（`54381b4` 及相关）
+
+- **`RecurringDeliverySlotChooser`**：精简为「更改配送时间」小按钮；用于合并付款、直下单确认、订单详情。
+- **`FeituanMyOrders`**：列表卡片底行展示 **配送时间**（与待付状态同行）；长期项目批量拉项目算预计档。
+- 首页/项目卡 **截单·配送** 展示仍在 `FeituanHome` 等（`ProjectTimingBadge`）；与马赛克无关。
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/components/customer/RecurringDeliverySlotChooser.tsx` | 改配送档 UI |
+| `web/src/pages/FeituanMyOrders.tsx` | 我的饭团订单 + 配送文案 |
+| `web/src/lib/recurringDeliverySchedule.ts` | 档期计算（含测试） |
+| `web/src/lib/orderDeliverySlot.ts` | 订单配送档字段辅助 |
+
+#### 3. 订单详情「返回」与来源页（`6cd232f`）
+
+- **`PageShell`** 支持 `historyBack` + `backHref`。
+- **`OrderDetail`**（饭团订单）：`navigate(-1)` 改为按 **`location.state.returnTo`** 返回，避免 `replace` 下单后返回到饭团首页。
+- 各入口跳转订单详情时传入 `returnTo`：`OrderForm` 提交后、`FeituanMyOrders`、`FeituanMessages`、`FeituanWallet`、`FeituanProject` 加购等。
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/components/PageShell.tsx` | 返回行为 |
+| `web/src/pages/customer/OrderDetail.tsx` | 订单详情 + returnTo |
+| `web/src/pages/FeituanProject.tsx` 等 | 传入 `state.returnTo` |
+
+#### 4. 饭团首页项目图自动马赛克（`6cd232f`）
+
+- 按 **不重复图片张数** 自动选版式；**主图** = 采集顺序第一张（图块顺序 → 商品 `sortOrder`），不单独把 `isCoverImage` 提前。
+- **主图不做上下分割**；禁止全宽上下/横条版式；副图侧栏 **不可空位**（3 张副图时末张横贯等）。
+- **相邻卡片版式不同**（种子稳定，改 `FEITUAN_HOME_MOSAIC_VERSION` 可整页换肤）。
+- 主图宽度放置（自动选用）：通栏 / 左半 / 左窄 40% / 左宽 60% / 右宽 60%。
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/lib/feituanHomeMosaic.ts` | 规则、选版、选图（`v5` 种子版本号见文件内常量） |
+| `web/src/lib/feituanHomeMosaic.test.ts` | 单测 |
+| `web/src/components/feituan/FeituanHomeProjectMosaic.tsx` | 渲染 |
+| `web/src/pages/FeituanHome.tsx` | 接入 `buildFeituanHomeMosaicPlans` |
+
+#### 5. 消息 Tab：待办 + 未读 + 橙色标记（`6cd232f`）
+
+- **角标** = **待付款（含尾款）** + **未读通知**（如「待确认」）；**离开消息页**后未读清零，角标只剩待办。
+- **已确认**等不出现在消息列表与角标。
+- 列表：**待付款（N）** 置顶、橙色圆点 + 浅橙底；其下 **订单动态**。
+- 已读状态：`localStorage` key `feituan-messages-seen-notify:v1:{customerKey}`。
+
+| 文件 | 作用 |
+|------|------|
+| `web/src/lib/feituanMessages.ts` | 分类、角标、已读 |
+| `web/src/lib/feituanMessages.test.ts` | 单测 |
+| `web/src/lib/feituanMessageCount.ts` | 兼容导出 |
+| `web/src/hooks/useFeituanMessageCount.ts` | 底部 Tab 数字 |
+| `web/src/pages/FeituanMessages.tsx` | 消息页 UI + 离开页 mark seen |
+
+### 产品讨论未改代码 / 待决
+
+|  topic | 状态 |
+|--------|------|
+| 角标是否 **永远只显示待付款**（待确认永不进数字） | 当前仍为 **待办+未读**；若要只计待付款需改 `computeFeituanTabBadgeFromRows` |
+| 合并结算页写入 `preferredDeliverySlot` | 未做 |
+| 主图宽度 ⅓ / ½ 版式 | 仅讨论，未实现 |
+| 副图最小高度按容器 1/3 | 当前为固定 `min-h-11` |
+
+### 下一任若改消息/首页
+
+1. 先读 **`feituanMessages.ts`**、**`feituanHomeMosaic.ts`** 顶部注释与单测。  
+2. 改角标规则时同步 **`FeituanMessages.tsx`** 分区与 **`useFeituanMessageCount`**。  
+3. 改马赛克规则时 bump **`FEITUAN_HOME_MOSAIC_VERSION`** 并跑 **`feituanHomeMosaic.test.ts`**。  
+4. 部署后强刷饭团首页与消息页验证角标与橙标条数一致。
+
+### 交接用语（可复制）
+
+```
+请读 HANDOVER.md「八、会话 2026-05-18 · v1.5.0」。
+当前 main @ v1.5.0：饭团合并付/直下单 UI、配送档与我的订单配送时间、首页马赛克、消息待办角标、订单 returnTo。
+改消息角标前确认产品要「仅待付款」还是「待付款+未读待确认」。
+```

@@ -9,12 +9,15 @@ type Props = {
   onClose: () => void;
   /** 为 true 时弹层在底部 Tab 栏之上（饭团首页等） */
   anchorAboveTabBar?: boolean;
+  /** 项目页等：在「更多」内提供分享入口 */
+  onShare?: () => void;
 };
 
 export function FeituanMoreSheet({
   open,
   onClose,
   anchorAboveTabBar = true,
+  onShare,
 }: Props) {
   if (!open) return null;
 
@@ -43,6 +46,19 @@ export function FeituanMoreSheet({
           更多
         </p>
         <div className="space-y-2">
+          {onShare ? (
+            <button
+              type="button"
+              onClick={() => {
+                onShare();
+                onClose();
+              }}
+              className="flex w-full items-center justify-center rounded-xl border py-3 text-sm font-semibold active:bg-gray-50"
+              style={{ borderColor: C.primaryBorder, color: C.primary }}
+            >
+              分享
+            </button>
+          ) : null}
           {links.map((item) => (
             <Link
               key={item.to}
