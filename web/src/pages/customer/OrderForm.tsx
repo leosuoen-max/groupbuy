@@ -768,12 +768,9 @@ export default function OrderForm() {
     setDismissedSuggestionIds([]);
   };
 
-  const feituanLabelCls = 'w-14 shrink-0 text-sm text-gray-600';
+  const feituanLabelCls = 'w-12 shrink-0 text-sm text-[#0F8F5F]/80';
   const feituanFieldWrapCls = 'min-w-0 flex-1';
-  const feituanRowInputCls = `block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-[16px] text-gray-900 outline-none ${ft(
-    FEITUAN_TW.inputFocus,
-    'ring-emerald-500/30 focus:border-emerald-500 focus:ring-2'
-  )}`;
+  const feituanRowInputCls = FEITUAN_TW.inputInline;
 
   const renderDeliveryPointPicker = (list: MockDeliveryPoint[]) => (
     <div className="grid grid-cols-2 gap-2">
@@ -897,11 +894,8 @@ export default function OrderForm() {
       {activeStep === 1 && isFeituanOrder ? (
         <div className="space-y-3">
           <h2 className="text-base font-semibold text-gray-900">填写订单</h2>
-          <section
-            className="rounded-2xl border px-3.5 py-3.5 shadow-sm"
-            style={{ borderColor: FEITUAN_HOME.primaryBorder, backgroundColor: FEITUAN_HOME.card }}
-          >
-            <div className="space-y-3">
+          <section className={FEITUAN_TW.formSection}>
+            <div className="space-y-2.5">
               <label className="flex items-center gap-2">
                 <span className={feituanLabelCls}>姓名：</span>
                 <span className={feituanFieldWrapCls}>
@@ -950,7 +944,7 @@ export default function OrderForm() {
                 <span className={`${feituanLabelCls} pt-2.5`}>地址：</span>
                 <span className={`${feituanFieldWrapCls} relative`}>
                   <textarea
-                    className={`${feituanRowInputCls} min-h-[80px] resize-y pr-12`}
+                    className={`${feituanRowInputCls} min-h-[4.5rem] resize-y pr-12`}
                   value={address}
                   onChange={(e) => onFeituanAddressChange(e.target.value)}
                   autoComplete="street-address"
@@ -970,11 +964,8 @@ export default function OrderForm() {
             </div>
           </section>
 
-          <section
-            className="rounded-2xl border px-3.5 py-3.5 shadow-sm"
-            style={{ borderColor: FEITUAN_HOME.primaryBorder, backgroundColor: FEITUAN_HOME.card }}
-          >
-            <p className="mb-2 text-sm font-semibold text-gray-900">配送点</p>
+          <section className={FEITUAN_TW.formSection}>
+            <p className={`mb-2 text-sm font-semibold ${FEITUAN_TW.text}`}>配送点</p>
             {feituanDeliveryConflictVersusLast ? (
               <div className="mb-2 space-y-2">
                 <div
@@ -1593,7 +1584,7 @@ export default function OrderForm() {
               )}
             </p>
             {note.trim() ? <p>备注：{note.trim()}</p> : <p>备注：（无）</p>}
-            <p className="mt-3">
+            <p className="mt-3 flex flex-wrap items-center gap-x-1 gap-y-1">
               <span className="font-medium text-gray-900">
                 {project && isProjectRecurring(project)
                   ? '预计配送：'
@@ -1603,17 +1594,17 @@ export default function OrderForm() {
                 {projectDeliveryLabel}
               </span>
               {project && isProjectRecurring(project) ? (
-                <span className="ml-1 text-xs text-gray-500">（按付款时间确认）</span>
+                <span className="text-xs text-gray-500">（按付款时间确认）</span>
+              ) : null}
+              {project && isProjectRecurring(project) && recurringSlotOptions.length > 0 ? (
+                <RecurringDeliverySlotChooser
+                  project={project}
+                  mode="checkout"
+                  value={selectedRecurringSlot}
+                  onChange={setSelectedRecurringSlot}
+                />
               ) : null}
             </p>
-            {project && isProjectRecurring(project) && recurringSlotOptions.length > 0 ? (
-              <RecurringDeliverySlotChooser
-                project={project}
-                mode="checkout"
-                value={selectedRecurringSlot}
-                onChange={setSelectedRecurringSlot}
-              />
-            ) : null}
             <div className="mt-3 font-medium text-gray-900">配送地址</div>
             <p className="mt-1">方式：{deliveryLabel}</p>
             <p className="mt-1 break-words">地址：{resolvedCustomerAddress || '—'}</p>

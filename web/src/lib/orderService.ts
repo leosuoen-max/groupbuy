@@ -26,7 +26,10 @@ import {
   buildPaymentGroups,
   listCancellableUnpaidPaymentGroups,
 } from './paymentGroups';
-import { deriveDisplayOrderStatus } from './paymentGroupView';
+import {
+  deriveDisplayOrderStatus,
+  sumGroupAmountByStatus,
+} from './paymentGroupView';
 import {
   computeImageFileMd5Hex,
   deleteFileByDownloadUrl,
@@ -1230,6 +1233,66 @@ export async function customerUpdateOrderContact(input: {
   }
 
   await updateDoc(orderRef, patch);
+}
+
+/** 长期项目：待付款订单预选配送档（付款前写入 preferredDeliverySlot） */
+export async function customerUpdateOrderPreferredDeliverySlot(input: {
+  orderFirestoreId: string;
+  projectId: string;
+  orderNumber: string;
+  customerKey: string;
+  targetDate: string;
+  targetPeriod: 'midday' | 'evening';
+}): Promise<void> {
+  const db = getDb();
+  const orderRef = doc(db, 'orders', input.orderFirestoreId);
+  const projectRef = doc(db, 'projects', input.projectId);
+
+  await runTransaction(db, async (tx) => {
+    const [orderSnap, projectSnap] = await Promise.all([
+      tx.get(orderRef),
+      tx.get(projectRef),
+    ]);
+    if (!projectSnap.exists()) throw new Error('项目不存在');
+    if (!orderSnap.exists()) throw new Error('订单不存在');
+
+    const project = projectSnap.data() as ProjectDoc;
+    const order = orderSnap.data() as OrderDoc;
+
+    if (
+      order.projectId !== input.projectId ||
+      order.orderNumber !== input.orderNumber
+    ) {
+      throw new Error('订单信息不匹配');
+    }
+    if (order.customerKey !== input.customerKey) {
+      throw new Error('仅下单本人可修改（请使用同一浏览器）');
+    }
+    if (order.status === 'cancelled') throw new Error('订单已取消');
+    if (!isProjectRecurring(project)) {
+      throw new Error('仅长期项目订单可预选配送时间');
+    }
+    if (hasOrderDeliverySlotLocked(order)) {
+      throw new Error('配送时间已确定，无法更改预选');
+    }
+    const unpaid = sumGroupAmountByStatus(buildPaymentGroups(order), 'unpaid');
+    if (unpaid <= 0.0001) {
+      throw new Error('当前订单无需付款，无法更改预选配送时间');
+    }
+
+    const target = {
+      date: input.targetDate.trim(),
+      period: input.targetPeriod,
+    };
+    if (!isAllowedRecurringPreferredSlot(project, target)) {
+      throw new Error('所选配送时间不可用或该档已截单');
+    }
+
+    tx.update(orderRef, {
+      preferredDeliverySlot: buildOrderDeliverySlotSnapshot(target),
+      updatedAt: serverTimestamp(),
+    });
+  });
 }
 
 /** 长期项目：顾客在订单详情更改配送时间（仅往后、当前档截单前） */

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { FeituanContactFields } from '../components/feituan/FeituanContactFields';
+import { FeituanFlowHeader } from '../components/feituan/FeituanFlowHeader';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { notifyFeituanCartUpdated } from '../hooks/useFeituanCartCount';
 import { OTHER_DELIVERY_ID } from '../data/mockDeliveryPoints';
@@ -18,7 +20,7 @@ import {
   removeFeituanCartProject,
 } from '../lib/feituanCartStorage';
 import { formatMYR } from '../lib/formatMYR';
-import { FEITUAN_HOME, FEITUAN_TW } from '../lib/feituanHomeTheme';
+import { FEITUAN_TW } from '../lib/feituanHomeTheme';
 import { formatEstimatedDeliveryHint, isProjectRecurring } from '../lib/recurringDeliverySchedule';
 import { createOrder, CreateOrderError, listFeituanOrdersForCustomer } from '../lib/orderService';
 import { getProject } from '../lib/projectService';
@@ -277,22 +279,22 @@ export default function FeituanCartCheckout() {
   }
 
   return (
-    <div className="min-h-svh bg-[#f6f7f8] pb-28">
-      <header className="sticky top-0 z-30 border-b bg-white px-4 py-3">
-        <Link to="/feituan/cart" className="text-sm font-medium text-emerald-700">
-          ← 购物车
-        </Link>
-        <h1 className="mt-1 text-lg font-bold text-gray-900">合并结算</h1>
-      </header>
+    <div className={`${FEITUAN_TW.flowPage} pb-28`}>
+      <FeituanFlowHeader
+        backTo="/feituan/cart"
+        backLabel="购物车"
+        title="合并结算"
+        subtitle={`${lines.length} 个项目`}
+      />
 
-      <main className="mx-auto max-w-xl space-y-4 px-4 py-4 text-sm">
+      <main className={FEITUAN_TW.flowMain}>
         {err ? <p className="text-red-600">{err}</p> : null}
         {resultMsg ? (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">{resultMsg}</p>
         ) : null}
 
-        <section className="rounded-xl border border-gray-100 bg-white p-3">
-          <h2 className="mb-2 font-semibold text-gray-900">订单预览</h2>
+        <section className={`rounded-xl border p-3 ${FEITUAN_TW.panelHeader}`}>
+          <h2 className={`mb-2 text-sm font-semibold ${FEITUAN_TW.text}`}>订单预览</h2>
           <ul className="space-y-3">
             {lines.map((row) => (
               <li key={row.cart.projectId} className="border-b border-gray-50 pb-2 last:border-0">
@@ -311,40 +313,30 @@ export default function FeituanCartCheckout() {
           </p>
         </section>
 
-        <section className={`rounded-xl border bg-white p-3 ${FEITUAN_TW.panelLoose}`}>
-          <h2 className="mb-3 font-semibold text-gray-900">联系与配送</h2>
-          <label className="mb-3 block">
-            <span className="text-xs text-gray-600">姓名</span>
-            <input
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label className="mb-3 block">
-            <span className="text-xs text-gray-600">电话</span>
-            <input
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-          </label>
-          <label className="mb-3 block">
-            <span className="text-xs text-gray-600">地址</span>
-            <textarea
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2"
-              rows={2}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
-          </label>
-          <p className="mb-2 text-xs text-gray-600">配送点</p>
-          <div className="space-y-2">
+        <section className={FEITUAN_TW.formSection}>
+          <h2 className={`mb-2 text-sm font-semibold ${FEITUAN_TW.text}`}>
+            联系与配送
+          </h2>
+          <FeituanContactFields
+            name={name}
+            phone={phone}
+            address={address}
+            note={note}
+            onNameChange={setName}
+            onPhoneChange={setPhone}
+            onAddressChange={setAddress}
+            onNoteChange={setNote}
+          >
+            <div className="pt-1">
+              <p className={`mb-1.5 ${FEITUAN_TW.fieldLabel}`}>配送点</p>
+              <div className="space-y-1.5">
             {points.map((p) => (
               <label
                 key={p.id}
-                className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 ${
-                  deliveryId === p.id ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200'
+                className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+                  deliveryId === p.id
+                    ? FEITUAN_TW.selectedSoft
+                    : 'border-[#D8F0E4] bg-white'
                 }`}
               >
                 <input
@@ -352,15 +344,16 @@ export default function FeituanCartCheckout() {
                   name="dp"
                   checked={deliveryId === p.id}
                   onChange={() => setDeliveryId(p.id)}
+                  className="text-[#0F8F5F]"
                 />
-                <span className="text-sm">{p.name}</span>
+                <span className="text-sm text-[#0F8F5F]">{p.name}</span>
               </label>
             ))}
             <label
-              className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 ${
+              className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
                 deliveryId === OTHER_DELIVERY_ID
-                  ? 'border-emerald-400 bg-emerald-50'
-                  : 'border-gray-200'
+                  ? FEITUAN_TW.selectedSoft
+                  : 'border-[#D8F0E4] bg-white'
               }`}
             >
               <input
@@ -368,27 +361,23 @@ export default function FeituanCartCheckout() {
                 name="dp"
                 checked={deliveryId === OTHER_DELIVERY_ID}
                 onChange={() => setDeliveryId(OTHER_DELIVERY_ID)}
+                className="text-[#0F8F5F]"
               />
-              <span className="text-sm">未指定配送点（按地址联系）</span>
+              <span className="text-sm text-[#0F8F5F]">
+                未指定配送点（按地址联系）
+              </span>
             </label>
-          </div>
-          <label className="mt-3 block">
-            <span className="text-xs text-gray-600">备注</span>
-            <input
-              className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-            />
-          </label>
+              </div>
+            </div>
+          </FeituanContactFields>
         </section>
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 border-t bg-white p-4 pb-[calc(12px+env(safe-area-inset-bottom))]">
+      <div className="fixed inset-x-0 bottom-0 border-t border-[#D8F0E4] bg-white p-4 pb-[calc(12px+env(safe-area-inset-bottom))]">
         <button
           type="button"
           disabled={submitting || lines.length === 0}
-          className="mx-auto flex h-12 w-full max-w-xl items-center justify-center rounded-full text-sm font-semibold text-white disabled:bg-gray-300"
-          style={{ backgroundColor: FEITUAN_HOME.primary }}
+          className={`mx-auto flex h-11 w-full max-w-xl items-center justify-center rounded-xl text-sm font-semibold disabled:bg-gray-300 ${FEITUAN_TW.btn}`}
           onClick={() => void handleSubmit()}
         >
           {submitting ? '提交中…' : `提交 ${lines.length} 个项目并付款`}

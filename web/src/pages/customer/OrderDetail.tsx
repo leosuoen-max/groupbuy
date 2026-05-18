@@ -1019,32 +1019,35 @@ export default function OrderDetail() {
         >
           <div className="text-lg font-bold">#{order.orderNumber}</div>
           <p className="mt-1 text-sm">下单时间：{timeStr}</p>
-          <p>配送时间：{formatOrderDeliveryTimeDisplay(order, projectDoc)}</p>
-          {deliveryChangeOptions.length > 0 && projectDoc ? (
-            <RecurringDeliverySlotChooser
-              project={projectDoc}
-              mode="detail"
-              options={deliveryChangeOptions}
-              value={
-                deliveryChangeTarget
-                  ? (() => {
-                      const [date, period] = deliveryChangeTarget.split('|');
-                      if (
-                        !date ||
-                        (period !== 'midday' && period !== 'evening')
-                      ) {
-                        return null;
-                      }
-                      return { date, period };
-                    })()
-                  : deliveryChangeOptions[0] ?? null
-              }
-              onChange={(s) =>
-                setDeliveryChangeTarget(`${s.date}|${s.period}`)
-              }
-              saving={deliveryChangeSaving}
-              message={deliveryChangeMsg}
-              onConfirm={() => {
+          <div className="flex flex-wrap items-start gap-x-1 gap-y-1">
+            <p className="text-sm">
+              配送时间：{formatOrderDeliveryTimeDisplay(order, projectDoc)}
+            </p>
+            {deliveryChangeOptions.length > 0 && projectDoc ? (
+              <RecurringDeliverySlotChooser
+                project={projectDoc}
+                mode="detail"
+                options={deliveryChangeOptions}
+                value={
+                  deliveryChangeTarget
+                    ? (() => {
+                        const [date, period] = deliveryChangeTarget.split('|');
+                        if (
+                          !date ||
+                          (period !== 'midday' && period !== 'evening')
+                        ) {
+                          return null;
+                        }
+                        return { date, period };
+                      })()
+                    : deliveryChangeOptions[0] ?? null
+                }
+                onChange={(s) =>
+                  setDeliveryChangeTarget(`${s.date}|${s.period}`)
+                }
+                saving={deliveryChangeSaving}
+                message={deliveryChangeMsg}
+                onConfirm={() => {
                 if (!order || !orderRow) return;
                 const [date, period] = deliveryChangeTarget.split('|');
                 if (!date || (period !== 'midday' && period !== 'evening')) {
@@ -1077,7 +1080,8 @@ export default function OrderDetail() {
               }}
               onCancel={() => setDeliveryChangeMsg(null)}
             />
-          ) : null}
+            ) : null}
+          </div>
           <p>配送点：{order.deliveryPointSnapshot?.name ?? '未填写'}</p>
           {order.deliveryPointSnapshot?.detail ? (
             <p className="text-xs text-gray-600">{order.deliveryPointSnapshot.detail}</p>

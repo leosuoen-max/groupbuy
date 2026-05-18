@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { RecurringDeliverySlotChooser } from '../components/customer/RecurringDeliverySlotChooser';
+import { FeituanFlowHeader } from '../components/feituan/FeituanFlowHeader';
+import { FeituanTransferPaymentBlock } from '../components/feituan/FeituanTransferPaymentBlock';
+import { FeituanWalletPaymentBlock } from '../components/feituan/FeituanWalletPaymentBlock';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
+import {
+  formatDeliverySlotLabel,
+  formatOrderDeliveryTimeDisplay,
+  type ProjectDeliverySlot,
+} from '../lib/deliverySlot';
 import { formatMYR } from '../lib/formatMYR';
-import { FEITUAN_HOME, FEITUAN_TW } from '../lib/feituanHomeTheme';
+import { FEITUAN_TW } from '../lib/feituanHomeTheme';
+import { hasOrderDeliverySlotLocked } from '../lib/orderDeliverySlot';
 import { buildPaymentGroups } from '../lib/paymentGroups';
 import { sumGroupAmountByStatus } from '../lib/paymentGroupView';
 import {
@@ -13,11 +23,37 @@ import {
   type FeituanWalletCartPaymentPlan,
 } from '../lib/feituanWalletService';
 import {
+  customerUpdateOrderPreferredDeliverySlot,
   customerUploadPaymentScreenshotForPaymentRef,
   listOrdersByPaymentRef,
   type OrderRow,
 } from '../lib/orderService';
-import { formatOrderDeliverySlotLabel } from '../lib/deliverySlot';
+import { getProject } from '../lib/projectService';
+import {
+  estimateSlotIfPaidNow,
+  isProjectRecurring,
+} from '../lib/recurringDeliverySchedule';
+import type { ProjectDoc } from '../types/firestore';
+
+function resolveRecurringPreferredSlot(
+  order: OrderRow['data'],
+  project: ProjectDoc
+): ProjectDeliverySlot | null {
+  const pref = order.preferredDeliverySlot;
+  if (pref?.date && pref?.period) {
+    return { date: pref.date, period: pref.period };
+  }
+  return estimateSlotIfPaidNow(project);
+}
+
+function recurringDeliveryDisplayLabel(
+  slot: ProjectDeliverySlot | null,
+  project: ProjectDoc
+): string {
+  const resolved = slot ?? estimateSlotIfPaidNow(project);
+  if (!resolved) return '—';
+  return formatDeliverySlotLabel(resolved.date, resolved.period);
+}
 
 export default function FeituanCartPayment() {
   const { paymentRef = '' } = useParams<{ paymentRef: string }>();
@@ -27,6 +63,9 @@ export default function FeituanCartPayment() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [orders, setOrders] = useState<OrderRow[]>([]);
+  const [projectsById, setProjectsById] = useState<Record<string, ProjectDoc>>({});
+  const [slotSavingOrderId, setSlotSavingOrderId] = useState<string | null>(null);
+  const [slotErrByOrderId, setSlotErrByOrderId] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [walletPlan, setWalletPlan] = useState<FeituanWalletCartPaymentPlan | null>(null);
@@ -51,6 +90,15 @@ export default function FeituanCartPayment() {
         customerKey,
       });
       setOrders(rows);
+      const projectIds = [...new Set(rows.map((r) => r.data.projectId))];
+      const projectMap: Record<string, ProjectDoc> = {};
+      await Promise.all(
+        projectIds.map(async (id) => {
+          const row = await getProject(id);
+          if (row) projectMap[id] = row.data;
+        })
+      );
+      setProjectsById(projectMap);
       if (!rows.length) setErr('找不到该批次的订单');
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
@@ -138,6 +186,36 @@ export default function FeituanCartPayment() {
     }
   };
 
+  const handlePreferredSlotChange = async (
+    orderRow: OrderRow,
+    slot: ProjectDeliverySlot
+  ) => {
+    setSlotErrByOrderId((prev) => {
+      const next = { ...prev };
+      delete next[orderRow.id];
+      return next;
+    });
+    setSlotSavingOrderId(orderRow.id);
+    try {
+      await customerUpdateOrderPreferredDeliverySlot({
+        orderFirestoreId: orderRow.id,
+        projectId: orderRow.data.projectId,
+        orderNumber: orderRow.data.orderNumber,
+        customerKey,
+        targetDate: slot.date,
+        targetPeriod: slot.period,
+      });
+      await reload();
+    } catch (e) {
+      setSlotErrByOrderId((prev) => ({
+        ...prev,
+        [orderRow.id]: e instanceof Error ? e.message : '保存失败',
+      }));
+    } finally {
+      setSlotSavingOrderId(null);
+    }
+  };
+
   const handleUpload = async (file: File) => {
     const first = orders[0];
     if (!first) return;
@@ -180,16 +258,18 @@ export default function FeituanCartPayment() {
     );
   }
 
-  const primaryQr = paymentMethods[0];
+  const paymentPath = `/feituan/cart-payment/${encodeURIComponent(decodeURIComponent(paymentRef))}`;
 
   return (
-    <div className="min-h-svh bg-[#f6f7f8] pb-12">
-      <header className="border-b bg-white px-4 py-3">
-        <h1 className="text-lg font-bold text-gray-900">合并付款</h1>
-        <p className="text-xs text-gray-500">共 {orders.length} 笔订单</p>
-      </header>
+    <div className={`${FEITUAN_TW.flowPage} pb-12`}>
+      <FeituanFlowHeader
+        backTo="/feituan/cart"
+        backLabel="购物车"
+        title="合并付款"
+        subtitle={`共 ${orders.length} 笔订单`}
+      />
 
-      <main className="mx-auto max-w-xl space-y-4 px-4 py-4 text-sm">
+      <main className={FEITUAN_TW.flowMain}>
         {allConfirmed ? (
           <p className="rounded-lg bg-emerald-50 px-3 py-2 text-emerald-900">
             本批订单已付清。
@@ -217,103 +297,105 @@ export default function FeituanCartPayment() {
           ) : null}
         </section>
 
-        <section className="rounded-xl border border-gray-100 bg-white p-3">
-          <h2 className="mb-2 font-semibold">订单明细</h2>
-          <ul className="space-y-2">
-            {orders.map((row) => (
-              <li key={row.id} className="border-b border-gray-50 pb-2 last:border-0">
-                <p className="font-medium">{row.data.projectTitle}</p>
-                <p className="text-xs text-gray-500">
-                  #{row.data.orderNumber} · 配送 {formatOrderDeliverySlotLabel(row.data)}
-                </p>
-                <p className="text-right tabular-nums">
-                  {formatMYR(row.data.pendingAmount ?? row.data.totalAmount)}
-                </p>
-              </li>
-            ))}
+        <section className={`rounded-xl border p-3 ${FEITUAN_TW.panelHeader}`}>
+          <h2 className={`mb-2 text-sm font-semibold ${FEITUAN_TW.text}`}>订单明细</h2>
+          <ul className="space-y-3">
+            {orders.map((row) => {
+              const project = projectsById[row.data.projectId];
+              const recurring = project ? isProjectRecurring(project) : false;
+              const slotLocked = hasOrderDeliverySlotLocked(row.data);
+              const unpaid =
+                sumGroupAmountByStatus(buildPaymentGroups(row.data), 'unpaid') >
+                0.0001;
+              const showRecurringChooser =
+                recurring && !slotLocked && unpaid && !allConfirmed;
+              const preferredSlot = project
+                ? resolveRecurringPreferredSlot(row.data, project)
+                : null;
+
+              return (
+                <li
+                  key={row.id}
+                  className="border-b border-gray-50 pb-3 last:border-0"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium">{row.data.projectTitle}</p>
+                      <p className="text-xs text-gray-500">
+                        #{row.data.orderNumber}
+                      </p>
+                      {showRecurringChooser && project ? (
+                        <p className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-gray-700">
+                          <span className="font-medium text-gray-800">
+                            预计配送：
+                          </span>
+                          <span className="font-semibold text-emerald-800">
+                            {recurringDeliveryDisplayLabel(
+                              preferredSlot,
+                              project
+                            )}
+                          </span>
+                          <span className="text-gray-500">
+                            （按付款时间确认）
+                          </span>
+                          <RecurringDeliverySlotChooser
+                            project={project}
+                            mode="checkout"
+                            value={preferredSlot}
+                            onChange={(slot) => {
+                              void handlePreferredSlotChange(row, slot);
+                            }}
+                            saving={slotSavingOrderId === row.id}
+                            message={slotErrByOrderId[row.id] ?? null}
+                          />
+                        </p>
+                      ) : (
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          配送{' '}
+                          {formatOrderDeliveryTimeDisplay(row.data, project ?? null)}
+                        </p>
+                      )}
+                    </div>
+                    <p className="shrink-0 tabular-nums font-medium">
+                      {formatMYR(row.data.pendingAmount ?? row.data.totalAmount)}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </section>
 
         {!allConfirmed ? (
           <>
-            <section className={`rounded-xl border p-3 ${FEITUAN_TW.panelLoose}`}>
-              <h2 className="mb-2 font-semibold">饭团钱包</h2>
-              {!user?.phoneNumber ? (
-                <p className="text-xs text-amber-800">
-                  请先在
-                  <Link to="/feituan/account" className="mx-1 underline">
-                    账号中心
-                  </Link>
-                  绑定手机号
-                </p>
-              ) : walletPlan && !walletPlan.ok ? (
-                <p className="text-xs text-amber-800">{walletPlan.message}</p>
-              ) : walletPlan?.ok ? (
-                <p className="text-xs text-gray-600">
-                  余额 {formatMYR(walletPlan.balance)} · 本批需付{' '}
-                  {formatMYR(walletPlan.payAmount)}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                disabled={
-                  walletPaying ||
-                  !walletPlan?.ok ||
-                  !user?.phoneNumber
-                }
-                className="mt-3 h-11 w-full rounded-xl text-sm font-semibold text-white disabled:bg-gray-300"
-                style={{ backgroundColor: FEITUAN_HOME.primary }}
-                onClick={() => void handleWalletPay()}
-              >
-                {walletPaying ? '支付中…' : '饭团钱包一键付清'}
-              </button>
-              {walletPlan && !walletPlan.ok && walletPlan.reason === 'insufficient' ? (
-                <Link
-                  to="/feituan/wallet/topup"
-                  className="mt-2 block text-center text-sm font-medium text-emerald-700 underline"
-                >
-                  去充值
-                </Link>
-              ) : null}
-              {walletMsg ? <p className="mt-2 text-xs">{walletMsg}</p> : null}
-            </section>
-
-            <section className="rounded-xl border border-gray-100 bg-white p-3">
-              <h2 className="mb-2 font-semibold">转账付款</h2>
-              <p className="mb-2 text-xs text-gray-600">
-                余额不足时可转账后上传一张截图，将同步到本批所有订单。
-              </p>
-              {primaryQr ? (
-                <div className="mb-3 flex flex-col items-center">
-                  <img
-                    src={primaryQr.qrCodeUrl}
-                    alt=""
-                    className="h-40 w-40 rounded-lg border object-contain"
-                  />
-                  <p className="mt-1 text-xs text-gray-600">{primaryQr.name}</p>
-                </div>
-              ) : null}
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void handleUpload(f);
-                  e.target.value = '';
-                }}
-              />
-              <button
-                type="button"
-                disabled={uploading}
-                className="h-11 w-full rounded-xl border border-gray-200 bg-white text-sm font-semibold text-gray-800 disabled:opacity-50"
-                onClick={() => fileRef.current?.click()}
-              >
-                {uploading ? '上传中…' : '上传付款截图'}
-              </button>
-              {uploadErr ? <p className="mt-2 text-xs text-red-600">{uploadErr}</p> : null}
-            </section>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleUpload(f);
+                e.target.value = '';
+              }}
+            />
+            <FeituanWalletPaymentBlock
+              authLoading={authLoading}
+              hasPhone={Boolean(user?.phoneNumber)}
+              plan={walletPlan}
+              paying={walletPaying}
+              message={walletMsg}
+              onPay={() => void handleWalletPay()}
+              accountReturnTo={paymentPath}
+              payButtonLabel="饭团钱包一键付清"
+            />
+            <FeituanTransferPaymentBlock
+              methods={paymentMethods}
+              uploading={uploading}
+              uploadErr={uploadErr}
+              onPickFile={() => fileRef.current?.click()}
+              hint="余额不足时可转账后上传一张截图，将同步到本批所有订单。"
+            />
           </>
         ) : null}
       </main>

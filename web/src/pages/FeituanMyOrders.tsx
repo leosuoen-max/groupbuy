@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { FeituanHomeBottomNav } from '../components/feituan/FeituanHomeBottomNav';
 import { PageShell } from '../components/PageShell';
@@ -7,15 +7,17 @@ import { notifyFeituanMessagesUpdated } from '../hooks/useFeituanMessageCount';
 import { useAuthUser } from '../hooks/useAuthUser';
 import { useWechatNotifySession } from '../hooks/useWechatNotifySession';
 import { getOrCreateCustomerKey } from '../lib/customerIdentity';
+import { formatOrderDeliveryTimeDisplay } from '../lib/deliverySlot';
 import { toLoadErrorMessage } from '../lib/firebaseErrorMessage';
 import { formatMYR } from '../lib/formatMYR';
 import { buildPaymentGroups } from '../lib/paymentGroups';
 import { deriveDisplayOrderStatus, sumGroupAmountByStatus } from '../lib/paymentGroupView';
 import { orderHasPaymentScreenshots } from '../lib/paymentScreenshotHelpers';
 import { listFeituanOrdersForCustomer, type OrderRow } from '../lib/orderService';
+import { getProject } from '../lib/projectService';
 import { getWechatNotifyOAuthStateId } from '../lib/wechatService';
 import { FEITUAN_TW } from '../lib/feituanHomeTheme';
-import type { OrderDoc, OrderStatus } from '../types/firestore';
+import type { OrderDoc, OrderStatus, ProjectDoc } from '../types/firestore';
 
 function summarizeLines(o: OrderDoc): string {
   return o.lines.map((l) => `${l.name}×${l.quantity}`).join(' + ');
@@ -86,12 +88,47 @@ function uploadHint(o: OrderDoc): { text: string; className: string } | null {
   return null;
 }
 
+function orderListDeliveryLabel(
+  order: OrderDoc,
+  project: ProjectDoc | undefined
+): string {
+  const text = formatOrderDeliveryTimeDisplay(order, project ?? null);
+  if (!text || text === '—') return '';
+  return text.replace(/（按付款时间确认）$/, '');
+}
+
 export default function FeituanMyOrders() {
   useWechatNotifySession();
   const { user, loading: authLoading } = useAuthUser();
   const [rows, setRows] = useState<OrderRow[]>([]);
+  const [projectsById, setProjectsById] = useState<Record<string, ProjectDoc>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const projectIdsKey = useMemo(
+    () => [...new Set(rows.map((r) => r.data.projectId))].sort().join(','),
+    [rows]
+  );
+
+  useEffect(() => {
+    if (!projectIdsKey) {
+      setProjectsById({});
+      return;
+    }
+    const ids = projectIdsKey.split(',');
+    let cancelled = false;
+    void Promise.all(ids.map((id) => getProject(id))).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, ProjectDoc> = {};
+      results.forEach((row, i) => {
+        if (row) map[ids[i]!] = row.data;
+      });
+      setProjectsById(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectIdsKey]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -169,6 +206,13 @@ export default function FeituanMyOrders() {
               const unpaidAmount = sumGroupAmountByStatus(groups, 'unpaid');
               const styles = statusCard[st] ?? statusCard.unpaid;
               const upload = uploadHint(o);
+              const deliveryLabel = orderListDeliveryLabel(
+                o,
+                projectsById[o.projectId]
+              );
+              const showPaymentFooter =
+                (confirmedAmount > 0 || unpaidAmount > 0) &&
+                o.status !== 'cancelled';
               return (
                 <li key={id} className={cardClasses(st)}>
                   <div className="flex items-start justify-between gap-2">
@@ -194,10 +238,19 @@ export default function FeituanMyOrders() {
                       <p className="mt-1 text-sm font-medium text-gray-900">
                         总计 {formatMYR(o.totalAmount)}
                       </p>
-                      {(confirmedAmount > 0 || unpaidAmount > 0) && o.status !== 'cancelled' ? (
-                        <p className="mt-0.5 text-[11px] text-gray-600">
-                          已付 {formatMYR(confirmedAmount)} · 待付 {formatMYR(unpaidAmount)}
-                        </p>
+                      {showPaymentFooter || deliveryLabel ? (
+                        <div className="mt-0.5 flex items-baseline justify-between gap-2 text-[11px] leading-tight">
+                          <span className="min-w-0 truncate text-gray-600">
+                            {showPaymentFooter
+                              ? `已付 ${formatMYR(confirmedAmount)} · 待付 ${formatMYR(unpaidAmount)}`
+                              : null}
+                          </span>
+                          {deliveryLabel ? (
+                            <span className="max-w-[58%] shrink-0 truncate text-right text-gray-500">
+                              配送 {deliveryLabel}
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                     </div>
                     <Link
