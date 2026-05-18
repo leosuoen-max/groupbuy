@@ -56,6 +56,29 @@ export type DeliveryManifestZone = {
   points: DeliveryManifestPoint[];
 };
 
+/** 配送清单汇总（由 buildDeliveryManifest 结果推导，父页面负责订单口径） */
+export type DeliveryManifestSummary = {
+  totalOrderCount: number;
+  zoneCount: number;
+  pointCount: number;
+};
+
+export function summarizeDeliveryManifest(
+  zones: DeliveryManifestZone[]
+): DeliveryManifestSummary {
+  let totalOrderCount = 0;
+  let pointCount = 0;
+  for (const z of zones) {
+    totalOrderCount += z.orderCount;
+    pointCount += z.points.length;
+  }
+  return {
+    totalOrderCount,
+    zoneCount: zones.length,
+    pointCount,
+  };
+}
+
 export function formatDeliverySlotParamKey(
   date: string,
   period: DeliverySlotPeriod

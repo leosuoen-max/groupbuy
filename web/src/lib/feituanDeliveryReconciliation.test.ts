@@ -4,6 +4,7 @@ import {
   formatDeliverySlotParamKey,
   orderMatchesDeliverySlotKey,
   resolveDeliveryPointGroup,
+  summarizeDeliveryManifest,
 } from './feituanDeliveryReconciliation';
 import { DEFAULT_BUCKET_SELECTION } from './reconciliationGroups';
 import type { OrderDoc } from '../types/firestore';
@@ -104,5 +105,10 @@ describe('feituanDeliveryReconciliation', () => {
     expect(zones[0]!.zoneName).toBe('A 区');
     expect(zones[0]!.orderCount).toBe(1);
     expect(zones[0]!.points[0]!.orderCount).toBe(1);
+    expect(summarizeDeliveryManifest(zones)).toEqual({
+      totalOrderCount: 1,
+      zoneCount: 1,
+      pointCount: 1,
+    });
   });
 });

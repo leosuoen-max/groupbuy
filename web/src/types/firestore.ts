@@ -704,6 +704,12 @@ export type OrderDoc = {
     period: 'midday' | 'evening';
     label: string;
   };
+  /** 长期项目：顾客下单时预选配送档，首次付款后写入 deliverySlot */
+  preferredDeliverySlot?: {
+    date: string;
+    period: 'midday' | 'evening';
+    label: string;
+  };
   /** 饭团购物车合并付款批次号 */
   paymentRef?: string;
   /** 同批次订单总数（合并付 UI） */

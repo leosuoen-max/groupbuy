@@ -1,6 +1,7 @@
 import type { Timestamp } from 'firebase/firestore';
 import type { OrderDoc, ProjectDoc } from '../types/firestore';
 import {
+  formatRecurringDeliveryPendingLabel,
   getRecurringSchedule,
   isProjectRecurring,
   validateRecurringSchedule,
@@ -276,6 +277,29 @@ export function formatOrderDeliverySlotLabel(
   if (s.label?.trim()) return s.label.trim();
   if (s.date && s.period) return formatDeliverySlotLabel(s.date, s.period);
   return '—';
+}
+
+/** 顾客端订单：已锁定档 / 预选档 / 长期项目预计档 */
+export function formatOrderDeliveryTimeDisplay(
+  order: Pick<OrderDoc, 'deliverySlot' | 'preferredDeliverySlot'>,
+  project?: Pick<
+    ProjectDoc,
+    'projectKind' | 'recurringSchedule'
+  > | null
+): string {
+  if (order.deliverySlot?.date && order.deliverySlot?.period) {
+    return formatOrderDeliverySlotLabel(order);
+  }
+  const pref = order.preferredDeliverySlot;
+  if (pref?.date && pref?.period) {
+    const label =
+      pref.label?.trim() || formatDeliverySlotLabel(pref.date, pref.period);
+    return `${label}（按付款时间确认）`;
+  }
+  if (project && isProjectRecurring(project)) {
+    return formatRecurringDeliveryPendingLabel(project);
+  }
+  return formatOrderDeliverySlotLabel(order);
 }
 
 export function closesAtToDate(closesAt: Timestamp | undefined): Date | null {

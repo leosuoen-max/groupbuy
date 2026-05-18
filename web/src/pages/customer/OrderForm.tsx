@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { RecurringDeliverySlotChooser } from '../../components/customer/RecurringDeliverySlotChooser';
 import { PageShell } from '../../components/PageShell';
 import { useAuthUser } from '../../hooks/useAuthUser';
 import { OTHER_DELIVERY_ID } from '../../data/mockDeliveryPoints';
@@ -15,10 +16,15 @@ import {
   listFeituanOrdersForCustomer,
   listOrdersByCustomer,
 } from '../../lib/orderService';
-import { resolveProjectDeliveryLabel } from '../../lib/deliverySlot';
 import {
-  formatEstimatedDeliveryHint,
+  formatDeliverySlotLabel,
+  resolveProjectDeliveryLabel,
+  type ProjectDeliverySlot,
+} from '../../lib/deliverySlot';
+import {
+  formatRecurringDeliveryPendingLabel,
   isProjectRecurring,
+  listRecurringCheckoutDeliveryOptions,
 } from '../../lib/recurringDeliverySchedule';
 import { suggestDeliveryPointsFromAddress } from '../../lib/deliveryPointMatch';
 import { getProject } from '../../lib/projectService';
@@ -167,6 +173,8 @@ export default function OrderForm() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitHint, setSubmitHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedRecurringSlot, setSelectedRecurringSlot] =
+    useState<ProjectDeliverySlot | null>(null);
 
   const [booting, setBooting] = useState(true);
   const [bootErr, setBootErr] = useState<string | null>(null);
@@ -375,13 +383,47 @@ export default function OrderForm() {
   }, [project, booting, bootErr, projectId, points, isFeituanOrder, user?.phoneNumber, user?.uid]);
 
   const resolvedProjectTitle = project?.title?.trim() || projectTitleState;
+  const recurringSlotOptions = useMemo(
+    () =>
+      project && isProjectRecurring(project)
+        ? listRecurringCheckoutDeliveryOptions(project)
+        : [],
+    [project]
+  );
+
+  useEffect(() => {
+    if (recurringSlotOptions.length === 0) {
+      queueMicrotask(() => setSelectedRecurringSlot(null));
+      return;
+    }
+    queueMicrotask(() => {
+      setSelectedRecurringSlot((prev) => {
+        if (
+          prev &&
+          recurringSlotOptions.some(
+            (s) => s.date === prev.date && s.period === prev.period
+          )
+        ) {
+          return prev;
+        }
+        return recurringSlotOptions[0] ?? null;
+      });
+    });
+  }, [recurringSlotOptions]);
+
   const projectDeliveryLabel = useMemo(() => {
     if (!project) return '—';
     if (isProjectRecurring(project)) {
-      return formatEstimatedDeliveryHint(project);
+      if (selectedRecurringSlot) {
+        return formatDeliverySlotLabel(
+          selectedRecurringSlot.date,
+          selectedRecurringSlot.period
+        );
+      }
+      return formatRecurringDeliveryPendingLabel(project);
     }
     return resolveProjectDeliveryLabel(project) || '—';
-  }, [project]);
+  }, [project, selectedRecurringSlot]);
   const recurringConsumerNotice = useMemo(() => {
     if (!project || !isProjectRecurring(project)) return '';
     return project.recurringSchedule?.consumerNoticeText?.trim() ?? '';
@@ -624,6 +666,9 @@ export default function OrderForm() {
         isManualMatch,
         lines,
         bundleSelections,
+        ...(project && isProjectRecurring(project) && selectedRecurringSlot
+          ? { preferredDeliverySlot: selectedRecurringSlot }
+          : {}),
       });
       void sendOrderSubmittedWechatNotification({ orderId, customerKey }).catch(() => {
         /* 微信通知失败不影响下单 */
@@ -1551,13 +1596,24 @@ export default function OrderForm() {
             <p className="mt-3">
               <span className="font-medium text-gray-900">
                 {project && isProjectRecurring(project)
-                  ? '预计配送（按付款时间）：'
+                  ? '预计配送：'
                   : '配送时间：'}
               </span>
               <span className={ft('font-semibold text-emerald-800', 'font-medium')}>
                 {projectDeliveryLabel}
               </span>
+              {project && isProjectRecurring(project) ? (
+                <span className="ml-1 text-xs text-gray-500">（按付款时间确认）</span>
+              ) : null}
             </p>
+            {project && isProjectRecurring(project) && recurringSlotOptions.length > 0 ? (
+              <RecurringDeliverySlotChooser
+                project={project}
+                mode="checkout"
+                value={selectedRecurringSlot}
+                onChange={setSelectedRecurringSlot}
+              />
+            ) : null}
             <div className="mt-3 font-medium text-gray-900">配送地址</div>
             <p className="mt-1">方式：{deliveryLabel}</p>
             <p className="mt-1 break-words">地址：{resolvedCustomerAddress || '—'}</p>

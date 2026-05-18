@@ -10,6 +10,7 @@ import {
 } from './deliverySlot';
 import {
   getRecurringSchedule,
+  isAllowedRecurringPreferredSlot,
   isProjectRecurring,
   resolveSlotFromPaymentTime,
 } from './recurringDeliverySchedule';
@@ -23,11 +24,22 @@ export function hasOrderDeliverySlotLocked(
 /** 首次付款动作：计算并返回配送档快照（长期项目） */
 export function resolveAndBuildDeliverySlotSnapshot(
   project: ProjectDoc,
+  order: Pick<OrderDoc, 'preferredDeliverySlot'>,
   paymentAt: Date
 ): { date: string; period: 'midday' | 'evening'; label: string } | null {
   if (!isProjectRecurring(project)) return null;
   const schedule = getRecurringSchedule(project);
   if (!schedule) return null;
+  const pref = order.preferredDeliverySlot;
+  if (pref?.date && pref?.period) {
+    const preferred: ProjectDeliverySlot = {
+      date: pref.date,
+      period: pref.period,
+    };
+    if (isAllowedRecurringPreferredSlot(project, preferred, paymentAt)) {
+      return buildOrderDeliverySlotSnapshot(preferred);
+    }
+  }
   const slot = resolveSlotFromPaymentTime(paymentAt, schedule);
   if (!slot) return null;
   return buildOrderDeliverySlotSnapshot(slot);
@@ -46,7 +58,7 @@ export async function lockOrderDeliverySlotIfNeeded(
       period: order.deliverySlot!.period,
     };
   }
-  const snapshot = resolveAndBuildDeliverySlotSnapshot(project, paymentAt);
+  const snapshot = resolveAndBuildDeliverySlotSnapshot(project, order, paymentAt);
   if (!snapshot) {
     throw new Error('当前时间已超过项目截单，无法完成付款');
   }

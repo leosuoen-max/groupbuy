@@ -224,6 +224,44 @@ export function listSlotsAfter(
   return all.filter((s) => compareDeliverySlots(s, current) > 0);
 }
 
+/** 当前时刻下该档截单时间尚未到达的配送档（更改配送时间 / 下单预选共用） */
+export function listSelectableDeliverySlots(
+  schedule: RecurringDeliveryScheduleDoc,
+  now: Date = new Date()
+): ProjectDeliverySlot[] {
+  const nowMs = now.getTime();
+  const closes = computeClosesAtDate(schedule);
+  if (closes && nowMs >= closes.getTime()) return [];
+
+  return enumerateDeliverySlots(schedule).filter((slot) => {
+    const cutoff = getCutoffInstantForSlot(slot, schedule);
+    if (!cutoff) return false;
+    return nowMs < cutoff.getTime();
+  });
+}
+
+/** 长期项目：当前时刻下截单未过的全部配送档 */
+export function listRecurringCheckoutDeliveryOptions(
+  project: Pick<ProjectDoc, 'projectKind' | 'recurringSchedule'>,
+  now: Date = new Date()
+): ProjectDeliverySlot[] {
+  const schedule = getRecurringSchedule(project);
+  if (!schedule) return [];
+  return listSelectableDeliverySlots(schedule, now);
+}
+
+export function isAllowedRecurringPreferredSlot(
+  project: Pick<ProjectDoc, 'projectKind' | 'recurringSchedule'>,
+  slot: ProjectDeliverySlot,
+  now: Date = new Date()
+): boolean {
+  const schedule = getRecurringSchedule(project);
+  if (!schedule) return false;
+  return listSelectableDeliverySlots(schedule, now).some(
+    (s) => s.date === slot.date && s.period === slot.period
+  );
+}
+
 export function isProjectRecurring(
   project: Pick<ProjectDoc, 'projectKind'>
 ): boolean {
@@ -298,9 +336,19 @@ export function estimateSlotIfPaidNow(
 export function formatEstimatedDeliveryHint(
   project: Pick<ProjectDoc, 'projectKind' | 'recurringSchedule'>
 ): string {
-  const slot = estimateSlotIfPaidNow(project);
-  if (!slot) return '按付款时间分派配送时间';
-  return `${formatDeliverySlotLabel(slot.date, slot.period)}（按付款时间分派）`;
+  return formatRecurringDeliveryPendingLabel(project);
+}
+
+/** 未付款锁定配送档前：预计档 +（按付款时间确认） */
+export function formatRecurringDeliveryPendingLabel(
+  project: Pick<ProjectDoc, 'projectKind' | 'recurringSchedule'>,
+  now: Date = new Date()
+): string {
+  const schedule = getRecurringSchedule(project);
+  if (!schedule) return '（按付款时间确认）';
+  const slot = resolveSlotFromPaymentTime(now, schedule);
+  if (!slot) return '（按付款时间确认）';
+  return `${formatDeliverySlotLabel(slot.date, slot.period)}（按付款时间确认）`;
 }
 
 export function getOrderSlotCutoffInstant(

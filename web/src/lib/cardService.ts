@@ -1803,6 +1803,7 @@ export async function applyCardPaymentToOrder(params: {
     if (isProjectRecurring(projectPre) && !hasOrderDeliverySlotLocked(order)) {
       const snapshot = resolveAndBuildDeliverySlotSnapshot(
         projectPre,
+        order,
         now.toDate()
       );
       if (!snapshot) {

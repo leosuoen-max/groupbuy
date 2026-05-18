@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RecurringDeliveryScheduleDoc } from '../types/firestore';
 import {
   buildPaymentWindows,
+  listSelectableDeliverySlots,
   resolveSlotFromPaymentTime,
 } from './recurringDeliverySchedule';
 
@@ -83,5 +84,29 @@ describe('buildPaymentWindows', () => {
     expect(windows).toHaveLength(2);
     expect(windows[0]!.slot.period).toBe('midday');
     expect(windows[1]!.slot.period).toBe('evening');
+  });
+});
+
+describe('listSelectableDeliverySlots', () => {
+  const schedule = baseSchedule();
+
+  it('includes all slots whose cutoff has not passed', () => {
+    const at930 = new Date(2026, 4, 16, 9, 30, 0);
+    expect(listSelectableDeliverySlots(schedule, at930)).toEqual([
+      { date: '2026-05-16', period: 'midday' },
+      { date: '2026-05-16', period: 'evening' },
+    ]);
+  });
+
+  it('excludes slots after their cutoff time', () => {
+    const at1400 = new Date(2026, 4, 16, 14, 0, 0);
+    expect(listSelectableDeliverySlots(schedule, at1400)).toEqual([
+      { date: '2026-05-16', period: 'evening' },
+    ]);
+  });
+
+  it('returns empty after project closes', () => {
+    const at1600 = new Date(2026, 4, 16, 16, 0, 0);
+    expect(listSelectableDeliverySlots(schedule, at1600)).toEqual([]);
   });
 });

@@ -803,6 +803,7 @@ export async function applyFeituanWalletPaymentToOrder(params: {
     if (isProjectRecurring(project) && !hasOrderDeliverySlotLocked(order)) {
       const snapshot = resolveAndBuildDeliverySlotSnapshot(
         project,
+        order,
         now.toDate()
       );
       if (!snapshot) {
@@ -1096,7 +1097,11 @@ export async function applyFeituanWalletPaymentToPaymentRef(params: {
 
       let deliverySlotPatch: { deliverySlot?: OrderDoc['deliverySlot'] } = {};
       if (isProjectRecurring(project) && !hasOrderDeliverySlotLocked(row.data)) {
-        const snapshot = resolveAndBuildDeliverySlotSnapshot(project, now.toDate());
+        const snapshot = resolveAndBuildDeliverySlotSnapshot(
+          project,
+          row.data,
+          now.toDate()
+        );
         if (!snapshot) {
           throw new Error('当前时间已超过项目截单，无法完成付款');
         }

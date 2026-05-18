@@ -5,6 +5,7 @@ import {
   listOrderPaymentGroups,
   orderMatchesBucketSelection,
   type BucketSelection,
+  type GroupBucket,
 } from './reconciliationGroups';
 
 /** bundle:toolId:schemeId:idx */
@@ -106,11 +107,15 @@ export type ProfitAggRow = {
   discountReduction: number;
 };
 
+export type ProfitBucketGroupAmounts = Record<GroupBucket, number>;
+
 export type ProfitTotals = {
   rows: ProfitAggRow[];
   totalSales: number;
   totalCost: number;
   grossProfit: number;
+  /** 项目+时间范围内各付款组金额（不受「清单包含」勾选影响） */
+  bucketGroupAmounts: ProfitBucketGroupAmounts;
   earlyBirdReduction: number;
   specialReduction: number;
   discountReductionTotal: number;
@@ -119,6 +124,19 @@ export type ProfitTotals = {
   /** 明细行中未填写采购成本的计数（按行×数量仍计入销售额，成本按 0） */
   missingCostLineCount: number;
 };
+
+export function formatProfitReconciliationScopeCaption(input: {
+  projectLabel: string;
+  proofStart: string;
+  proofEnd: string;
+  orderScopeLabel: string;
+}): string {
+  const timeLabel =
+    input.proofStart.trim() || input.proofEnd.trim()
+      ? `${input.proofStart.trim() || '起始不限'} ~ ${input.proofEnd.trim() || '截止不限'}`
+      : '全部凭证时间';
+  return `${timeLabel} · ${input.projectLabel} · ${input.orderScopeLabel}(RM)`;
+}
 
 /**
  * 按对账单相同筛选：付款组桶 + 订单行 subtotal。
@@ -145,12 +163,20 @@ export function buildProfitTotals(
   let specialReduction = 0;
   let missingProjectCount = 0;
   let missingCostLineCount = 0;
+  const bucketGroupAmounts: ProfitBucketGroupAmounts = {
+    confirmed: 0,
+    pending: 0,
+    unpaid: 0,
+  };
   const projectMenuIndexes = buildProjectMenuIndexes(projectsById);
 
   for (const row of rows) {
     const o = row.data;
     if (o.status === 'cancelled') continue;
     const groups = listOrderPaymentGroups(o);
+    for (const g of groups) {
+      bucketGroupAmounts[g.bucket] += g.amount;
+    }
     if (!orderMatchesBucketSelection(groups, bucketSelection)) continue;
 
     const projectIndex = projectMenuIndexes.get(o.projectId);
@@ -236,6 +262,7 @@ export function buildProfitTotals(
     totalSales,
     totalCost,
     grossProfit: totalSales - totalCost,
+    bucketGroupAmounts,
     earlyBirdReduction,
     specialReduction,
     discountReductionTotal: earlyBirdReduction + specialReduction,

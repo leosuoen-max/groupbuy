@@ -44,6 +44,7 @@ import {
   buildOrderDeliverySlotSnapshot,
   hasProjectDeliverySlotConfigured,
   resolveProjectDeliverySlot,
+  type ProjectDeliverySlot,
 } from './deliverySlot';
 import {
   hasOrderDeliverySlotLocked,
@@ -54,8 +55,9 @@ import {
   canChangeDeliverySlot,
   computeClosesAtDate,
   getRecurringSchedule,
+  isAllowedRecurringPreferredSlot,
   isProjectRecurring,
-  listSlotsAfter,
+  listSelectableDeliverySlots,
 } from './recurringDeliverySchedule';
 import type { BundleSelectionDraft, OrderLine } from '../types/orderDraft';
 import type {
@@ -104,6 +106,8 @@ export type CreateOrderInput = {
   bundleSelections?: BundleSelectionDraft[];
   paymentRef?: string;
   paymentBatchSize?: number;
+  /** 长期项目：顾客预选配送档（首次付款写入 deliverySlot） */
+  preferredDeliverySlot?: ProjectDeliverySlot;
 };
 
 type CreateOrderErrorCode =
@@ -470,6 +474,14 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
     if (!recurring && !oneTimeSlot) {
       throw new CreateOrderError('DELIVERY_SLOT_NOT_CONFIGURED');
     }
+    let preferredSnapshot: OrderDoc['preferredDeliverySlot'] | undefined;
+    if (recurring && input.preferredDeliverySlot) {
+      const slot = input.preferredDeliverySlot;
+      if (!isAllowedRecurringPreferredSlot(project, slot)) {
+        throw new Error('所选配送时间不可用，请重新选择');
+      }
+      preferredSnapshot = buildOrderDeliverySlotSnapshot(slot);
+    }
 
     const orderPayload: Omit<OrderDoc, 'createdAt' | 'updatedAt'> = {
       orderNumber,
@@ -508,6 +520,7 @@ export async function createOrder(input: CreateOrderInput): Promise<{ orderId: s
       ...(oneTimeSlot
         ? { deliverySlot: buildOrderDeliverySlotSnapshot(oneTimeSlot) }
         : {}),
+      ...(preferredSnapshot ? { preferredDeliverySlot: preferredSnapshot } : {}),
       ...(input.paymentRef?.trim()
         ? { paymentRef: input.paymentRef.trim() }
         : {}),
@@ -1278,13 +1291,13 @@ export async function customerUpdateOrderDeliverySlot(input: {
       date: input.targetDate.trim(),
       period: input.targetPeriod,
     };
-    const allowed = listSlotsAfter(current, schedule);
+    const allowed = listSelectableDeliverySlots(schedule);
     if (
       !allowed.some(
         (s) => s.date === target.date && s.period === target.period
       )
     ) {
-      throw new Error('仅能改到更晚的配送档');
+      throw new Error('所选配送时间不可用或该档已截单');
     }
 
     tx.update(orderRef, {

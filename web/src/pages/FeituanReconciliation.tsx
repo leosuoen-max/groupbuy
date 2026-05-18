@@ -2,6 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ProofDatetimeFilterFields } from '../components/reconciliation/ProofDatetimeFilterFields';
 import { ProductionBundleBreakdownSection } from '../components/reconciliation/ProductionBundleBreakdownSection';
+import { DeliverySummaryStatsBar } from '../components/reconciliation/DeliverySummaryStatsBar';
+import { ProfitSummaryStatsBar } from '../components/reconciliation/ProfitSummaryStatsBar';
 import { ProductionSummaryStatsBar } from '../components/reconciliation/ProductionSummaryStatsBar';
 import { PageShell } from '../components/PageShell';
 import { ActionButton } from '../components/ui/ActionButton';
@@ -28,6 +30,7 @@ import {
   buildDeliveryManifest,
   buildDeliveryManifestCopyText,
   buildDeliveryManifestCsv,
+  summarizeDeliveryManifest,
   buildFeituanDeliveryPointMap,
   listDeliverySlotOptionsFromOrders,
   orderMatchesDeliverySlotKey,
@@ -43,6 +46,7 @@ import {
   buildProfitCopyText,
   buildProfitCsv,
   buildProfitTotals,
+  formatProfitReconciliationScopeCaption,
 } from '../lib/reconciliationProfit';
 import { listOrderCardPaymentApplications } from '../lib/orderCardPaymentApplications';
 import { listOrderFeituanWalletPaymentApplications } from '../lib/orderFeituanWalletApplications';
@@ -267,6 +271,11 @@ export default function FeituanReconciliation() {
   const deliveryManifest = useMemo(
     () => buildDeliveryManifest(deliveryScopedOrders, bucketSelection, feituanPointById),
     [bucketSelection, deliveryScopedOrders, feituanPointById]
+  );
+
+  const deliveryManifestSummary = useMemo(
+    () => summarizeDeliveryManifest(deliveryManifest),
+    [deliveryManifest]
   );
 
   const productionTotals = useMemo(
@@ -539,72 +548,41 @@ export default function FeituanReconciliation() {
         )}
       </div>
 
+      {viewMode === 'delivery' && deliverySlotKey ? (
+        <DeliverySummaryStatsBar
+          summary={deliveryManifestSummary}
+          scopeCaption={`${selectedSlotLabel} · ${projectLabel} · 全平台订单`}
+        />
+      ) : null}
+
       {viewMode === 'production' ? (
-        <ProductionSummaryStatsBar totals={productionTotals} />
+        <ProductionSummaryStatsBar
+          totals={productionTotals}
+          scopeCaption={`${selectedSlotLabel || '未选配送档'} · ${projectLabel} · 全平台订单`}
+        />
       ) : viewMode === 'profit' ? (
-        <div className="mb-5 space-y-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-              <div className="text-xs font-medium text-emerald-800">销售额</div>
-              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-emerald-950">
-                {formatMYR(profitTotals.totalSales)}
-              </div>
-            </div>
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-              <div className="text-xs font-medium text-amber-900">采购成本</div>
-              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-amber-950">
-                {formatMYR(profitTotals.totalCost)}
-              </div>
-            </div>
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-              <div className="text-xs font-medium text-indigo-800">毛利</div>
-              <div className="mt-auto whitespace-nowrap pt-1 text-xl font-bold tabular-nums text-indigo-950">
-                {formatMYR(profitTotals.grossProfit)}
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-rose-100 bg-rose-50 px-4 py-3">
-              <div className="text-xs font-medium text-rose-900">早鸟让价合计</div>
-              <div className="mt-1 whitespace-nowrap text-lg font-bold tabular-nums text-rose-950">
-                {formatMYR(profitTotals.earlyBirdReduction)}
-              </div>
-              <p className="mt-auto pt-2 text-[11px] leading-snug text-rose-900/80">
-                相对当前菜单标价 × 份数（限时截止）
-              </p>
-            </div>
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
-              <div className="text-xs font-medium text-orange-900">特惠让价合计</div>
-              <div className="mt-1 whitespace-nowrap text-lg font-bold tabular-nums text-orange-950">
-                {formatMYR(profitTotals.specialReduction)}
-              </div>
-              <p className="mt-auto pt-2 text-[11px] leading-snug text-orange-900/80">
-                相对当前菜单标价 × 份数（无截止）
-              </p>
-            </div>
-            <div className="flex min-h-[5.5rem] flex-col rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-              <div className="text-xs font-medium text-gray-800">优惠让价总计</div>
-              <div className="mt-auto whitespace-nowrap pt-1 text-lg font-bold tabular-nums text-gray-900">
-                {formatMYR(profitTotals.discountReductionTotal)}
-              </div>
-            </div>
-          </div>
-          <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600">
-            财务统计复用上方「筛选项目」「凭证/自动确认时间」与「清单包含」所选支付组。
-            成本按饭团管理员确认的项目商品/套餐方案采购成本计算；未填则该行成本按 0。
-          </p>
+        <>
+          <ProfitSummaryStatsBar
+            totals={profitTotals}
+            scopeCaption={formatProfitReconciliationScopeCaption({
+              projectLabel,
+              proofStart,
+              proofEnd,
+              orderScopeLabel: '全平台订单',
+            })}
+          />
           {profitTotals.missingProjectCount > 0 ? (
-            <p className="text-xs text-amber-800">
+            <p className="mb-2 text-xs text-amber-800">
               有 {profitTotals.missingProjectCount} 笔订单未能加载项目菜单（无法拆分成本/让价）。
             </p>
           ) : null}
           {profitTotals.missingCostLineCount > 0 ? (
-            <p className="text-xs text-amber-800">
+            <p className="mb-4 text-xs text-amber-800">
               有 {profitTotals.missingCostLineCount}{' '}
               条明细未配置采购成本（已计入销售额，成本按 0）。
             </p>
           ) : null}
-        </div>
+        </>
       ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
